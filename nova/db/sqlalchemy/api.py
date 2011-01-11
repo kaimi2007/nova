@@ -19,7 +19,6 @@
 Implementation of SQLAlchemy backend.
 """
 
-import random
 import warnings
 
 from nova import db
@@ -41,7 +40,7 @@ FLAGS = flags.FLAGS
 def is_admin_context(context):
     """Indicates if the request context is an administrator."""
     if not context:
-        warnings.warn('Use of empty request context is deprecated',
+        warnings.warn(_('Use of empty request context is deprecated'),
                       DeprecationWarning)
         raise Exception('die')
     return context.is_admin
@@ -130,7 +129,19 @@ def service_get(context, service_id, session=None):
                      first()
 
     if not result:
-        raise exception.NotFound('No service for id %s' % service_id)
+        raise exception.NotFound(_('No service for id %s') % service_id)
+
+    return result
+
+
+@require_admin_context
+def service_get_all(context, session=None):
+    if not session:
+        session = get_session()
+
+    result = session.query(models.Service).\
+                     filter_by(deleted=can_read_deleted(context)).\
+                     all()
 
     return result
 
@@ -227,7 +238,7 @@ def service_get_by_args(context, host, binary):
                      filter_by(deleted=can_read_deleted(context)).\
                      first()
     if not result:
-        raise exception.NotFound('No service for %s, %s' % (host, binary))
+        raise exception.NotFound(_('No service for %s, %s') % (host, binary))
 
     return result
 
@@ -236,6 +247,8 @@ def service_get_by_args(context, host, binary):
 def service_create(context, values):
     service_ref = models.Service()
     service_ref.update(values)
+    if not FLAGS.enable_new_services:
+        service_ref.disabled = True
     service_ref.save()
     return service_ref
 
@@ -247,6 +260,84 @@ def service_update(context, service_id, values):
         service_ref = service_get(context, service_id, session=session)
         service_ref.update(values)
         service_ref.save(session=session)
+
+
+###################
+
+
+@require_admin_context
+def certificate_get(context, certificate_id, session=None):
+    if not session:
+        session = get_session()
+
+    result = session.query(models.Certificate).\
+                     filter_by(id=certificate_id).\
+                     filter_by(deleted=can_read_deleted(context)).\
+                     first()
+
+    if not result:
+        raise exception.NotFound('No certificate for id %s' % certificate_id)
+
+    return result
+
+
+@require_admin_context
+def certificate_create(context, values):
+    certificate_ref = models.Certificate()
+    for (key, value) in values.iteritems():
+        certificate_ref[key] = value
+    certificate_ref.save()
+    return certificate_ref
+
+
+@require_admin_context
+def certificate_destroy(context, certificate_id):
+    session = get_session()
+    with session.begin():
+        certificate_ref = certificate_get(context,
+                                          certificate_id,
+                                          session=session)
+        certificate_ref.delete(session=session)
+
+
+@require_admin_context
+def certificate_get_all_by_project(context, project_id):
+    session = get_session()
+    return session.query(models.Certificate).\
+                   filter_by(project_id=project_id).\
+                   filter_by(deleted=False).\
+                   all()
+
+
+@require_admin_context
+def certificate_get_all_by_user(context, user_id):
+    session = get_session()
+    return session.query(models.Certificate).\
+                   filter_by(user_id=user_id).\
+                   filter_by(deleted=False).\
+                   all()
+
+
+@require_admin_context
+def certificate_get_all_by_user_and_project(_context, user_id, project_id):
+    session = get_session()
+    return session.query(models.Certificate).\
+                   filter_by(user_id=user_id).\
+                   filter_by(project_id=project_id).\
+                   filter_by(deleted=False).\
+                   all()
+
+
+@require_admin_context
+def certificate_update(context, certificate_id, values):
+    session = get_session()
+    with session.begin():
+        certificate_ref = certificate_get(context,
+                                          certificate_id,
+                                          session=session)
+        for (key, value) in values.iteritems():
+            certificate_ref[key] = value
+        certificate_ref.save(session=session)
 
 
 ###################
@@ -385,6 +476,7 @@ def floating_ip_get_by_address(context, address, session=None):
         session = get_session()
 
     result = session.query(models.FloatingIp).\
+                   options(joinedload_all('fixed_ip.network')).\
                      filter_by(address=address).\
                      filter_by(deleted=can_read_deleted(context)).\
                      first()
@@ -491,7 +583,7 @@ def fixed_ip_get_by_address(context, address, session=None):
                      options(joinedload('instance')).\
                      first()
     if not result:
-        raise exception.NotFound('No floating ip for address %s' % address)
+        raise exception.NotFound(_('No floating ip for address %s') % address)
 
     if is_user_context(context):
         authorize_project_context(context, result.instance.project_id)
@@ -525,28 +617,18 @@ def fixed_ip_update(context, address, values):
 ###################
 
 
-#TODO(gundlach): instance_create and volume_create are nearly identical
-#and should be refactored.  I expect there are other copy-and-paste
-#functions between the two of them as well.
 @require_context
 def instance_create(context, values):
     """Create a new Instance record in the database.
 
     context - request context object
     values - dict containing column values.
-             'internal_id' is auto-generated and should not be specified.
     """
     instance_ref = models.Instance()
     instance_ref.update(values)
 
     session = get_session()
     with session.begin():
-        while instance_ref.internal_id == None:
-            # Instances have integer internal ids.
-            internal_id = random.randint(0, 2 ** 31 - 1)
-            if not instance_internal_id_exists(context, internal_id,
-                                               session=session):
-                instance_ref.internal_id = internal_id
         instance_ref.save(session=session)
     return instance_ref
 
@@ -579,19 +661,23 @@ def instance_get(context, instance_id, session=None):
 
     if is_admin_context(context):
         result = session.query(models.Instance).\
-                         options(joinedload('security_groups')).\
+                         options(joinedload_all('fixed_ip.floating_ips')).\
+                         options(joinedload_all('security_groups.rules')).\
+                         options(joinedload('volumes')).\
                          filter_by(id=instance_id).\
                          filter_by(deleted=can_read_deleted(context)).\
                          first()
     elif is_user_context(context):
         result = session.query(models.Instance).\
-                         options(joinedload('security_groups')).\
+                         options(joinedload_all('fixed_ip.floating_ips')).\
+                         options(joinedload_all('security_groups.rules')).\
+                         options(joinedload('volumes')).\
                          filter_by(project_id=context.project_id).\
                          filter_by(id=instance_id).\
                          filter_by(deleted=False).\
                          first()
     if not result:
-        raise exception.NotFound('No instance for id %s' % instance_id)
+        raise exception.NotFound(_('No instance for id %s') % instance_id)
 
     return result
 
@@ -651,36 +737,39 @@ def instance_get_all_by_reservation(context, reservation_id):
                        all()
 
 
+@require_admin_context
+def instance_get_project_vpn(context, project_id):
+    session = get_session()
+    return session.query(models.Instance).\
+                   options(joinedload_all('fixed_ip.floating_ips')).\
+                   options(joinedload('security_groups')).\
+                   filter_by(project_id=project_id).\
+                   filter_by(image_id=FLAGS.vpn_image_id).\
+                   filter_by(deleted=can_read_deleted(context)).\
+                   first()
+
+
 @require_context
-def instance_get_by_internal_id(context, internal_id):
+def instance_get_by_id(context, instance_id):
     session = get_session()
 
     if is_admin_context(context):
         result = session.query(models.Instance).\
                          options(joinedload('security_groups')).\
-                         filter_by(internal_id=internal_id).\
+                         filter_by(id=instance_id).\
                          filter_by(deleted=can_read_deleted(context)).\
                          first()
     elif is_user_context(context):
         result = session.query(models.Instance).\
                          options(joinedload('security_groups')).\
                          filter_by(project_id=context.project_id).\
-                         filter_by(internal_id=internal_id).\
+                         filter_by(id=instance_id).\
                          filter_by(deleted=False).\
                          first()
     if not result:
-        raise exception.NotFound('Instance %s not found' % (internal_id))
+        raise exception.NotFound(_('Instance %s not found') % (instance_id))
 
     return result
-
-
-@require_context
-def instance_internal_id_exists(context, internal_id, session=None):
-    if not session:
-        session = get_session()
-    return session.query(exists().\
-                         where(models.Instance.internal_id == internal_id)).\
-                   one()[0]
 
 
 @require_context
@@ -732,6 +821,7 @@ def instance_update(context, instance_id, values):
         instance_ref = instance_get(context, instance_id, session=session)
         instance_ref.update(values)
         instance_ref.save(session=session)
+        return instance_ref
 
 
 def instance_add_security_group(context, instance_id, security_group_id):
@@ -744,6 +834,27 @@ def instance_add_security_group(context, instance_id, security_group_id):
                                                 session=session)
         instance_ref.security_groups += [security_group_ref]
         instance_ref.save(session=session)
+
+
+@require_context
+def instance_action_create(context, values):
+    """Create an instance action from the values dictionary."""
+    action_ref = models.InstanceActions()
+    action_ref.update(values)
+
+    session = get_session()
+    with session.begin():
+        action_ref.save(session=session)
+    return action_ref
+
+
+@require_admin_context
+def instance_get_actions(context, instance_id):
+    """Return the actions associated to the given instance id"""
+    session = get_session()
+    return session.query(models.InstanceActions).\
+        filter_by(instance_id=instance_id).\
+        all()
 
 
 ###################
@@ -789,7 +900,7 @@ def key_pair_get(context, user_id, name, session=None):
                      filter_by(deleted=can_read_deleted(context)).\
                      first()
     if not result:
-        raise exception.NotFound('no keypair for user %s, name %s' %
+        raise exception.NotFound(_('no keypair for user %s, name %s') %
                                  (user_id, name))
     return result
 
@@ -904,7 +1015,7 @@ def network_get(context, network_id, session=None):
                          filter_by(deleted=False).\
                          first()
     if not result:
-        raise exception.NotFound('No network for id %s' % network_id)
+        raise exception.NotFound(_('No network for id %s') % network_id)
 
     return result
 
@@ -912,6 +1023,8 @@ def network_get(context, network_id, session=None):
 # NOTE(vish): pylint complains because of the long method name, but
 #             it fits with the names of the rest of the methods
 # pylint: disable-msg=C0103
+
+
 @require_admin_context
 def network_get_associated_fixed_ips(context, network_id):
     session = get_session()
@@ -932,7 +1045,7 @@ def network_get_by_bridge(context, bridge):
                  first()
 
     if not result:
-        raise exception.NotFound('No network for bridge %s' % bridge)
+        raise exception.NotFound(_('No network for bridge %s') % bridge)
     return result
 
 
@@ -946,7 +1059,7 @@ def network_get_by_instance(_context, instance_id):
                  filter_by(deleted=False).\
                  first()
     if not rv:
-        raise exception.NotFound('No network for instance %s' % instance_id)
+        raise exception.NotFound(_('No network for instance %s') % instance_id)
     return rv
 
 
@@ -960,7 +1073,7 @@ def network_set_host(context, network_id, host_id):
                               with_lockmode('update').\
                               first()
         if not network_ref:
-            raise exception.NotFound('No network for id %s' % network_id)
+            raise exception.NotFound(_('No network for id %s') % network_id)
 
         # NOTE(vish): if with_lockmode isn't supported, as in sqlite,
         #             then this has concurrency issues
@@ -984,24 +1097,26 @@ def network_update(context, network_id, values):
 
 
 @require_context
-def project_get_network(context, project_id):
+def project_get_network(context, project_id, associate=True):
     session = get_session()
-    rv = session.query(models.Network).\
-                 filter_by(project_id=project_id).\
-                 filter_by(deleted=False).\
-                 first()
-    if not rv:
+    result = session.query(models.Network).\
+                     filter_by(project_id=project_id).\
+                     filter_by(deleted=False).\
+                     first()
+    if not result:
+        if not associate:
+            return None
         try:
             return network_associate(context, project_id)
         except IntegrityError:
             # NOTE(vish): We hit this if there is a race and two
             #             processes are attempting to allocate the
             #             network at the same time
-            rv = session.query(models.Network).\
-                         filter_by(project_id=project_id).\
-                         filter_by(deleted=False).\
-                         first()
-    return rv
+            result = session.query(models.Network).\
+                             filter_by(project_id=project_id).\
+                             filter_by(deleted=False).\
+                             first()
+    return result
 
 
 ###################
@@ -1061,21 +1176,24 @@ def iscsi_target_create_safe(context, values):
 ###################
 
 
+@require_admin_context
 def auth_destroy_token(_context, token):
     session = get_session()
     session.delete(token)
 
 
+@require_admin_context
 def auth_get_token(_context, token_hash):
     session = get_session()
     tk = session.query(models.AuthToken).\
                   filter_by(token_hash=token_hash).\
                   first()
     if not tk:
-        raise exception.NotFound('Token %s does not exist' % token_hash)
+        raise exception.NotFound(_('Token %s does not exist') % token_hash)
     return tk
 
 
+@require_admin_context
 def auth_create_token(_context, token):
     tk = models.AuthToken()
     tk.update(token)
@@ -1096,7 +1214,7 @@ def quota_get(context, project_id, session=None):
                      filter_by(deleted=can_read_deleted(context)).\
                      first()
     if not result:
-        raise exception.NotFound('No quota for project_id %s' % project_id)
+        raise exception.NotFound(_('No quota for project_id %s') % project_id)
 
     return result
 
@@ -1186,10 +1304,6 @@ def volume_create(context, values):
 
     session = get_session()
     with session.begin():
-        while volume_ref.ec2_id == None:
-            ec2_id = utils.generate_uid('vol')
-            if not volume_ec2_id_exists(context, ec2_id, session=session):
-                volume_ref.ec2_id = ec2_id
         volume_ref.save(session=session)
     return volume_ref
 
@@ -1251,7 +1365,7 @@ def volume_get(context, volume_id, session=None):
                          filter_by(deleted=False).\
                          first()
     if not result:
-        raise exception.NotFound('No volume for id %s' % volume_id)
+        raise exception.NotFound(_('No volume for id %s') % volume_id)
 
     return result
 
@@ -1287,41 +1401,6 @@ def volume_get_all_by_project(context, project_id):
                    all()
 
 
-@require_context
-def volume_get_by_ec2_id(context, ec2_id):
-    session = get_session()
-    result = None
-
-    if is_admin_context(context):
-        result = session.query(models.Volume).\
-                         filter_by(ec2_id=ec2_id).\
-                         filter_by(deleted=can_read_deleted(context)).\
-                         first()
-    elif is_user_context(context):
-        result = session.query(models.Volume).\
-                         filter_by(project_id=context.project_id).\
-                         filter_by(ec2_id=ec2_id).\
-                         filter_by(deleted=False).\
-                         first()
-    else:
-        raise exception.NotAuthorized()
-
-    if not result:
-        raise exception.NotFound('Volume %s not found' % ec2_id)
-
-    return result
-
-
-@require_context
-def volume_ec2_id_exists(context, ec2_id, session=None):
-    if not session:
-        session = get_session()
-
-    return session.query(exists().\
-                   where(models.Volume.id == ec2_id)).\
-                   one()[0]
-
-
 @require_admin_context
 def volume_get_instance(context, volume_id):
     session = get_session()
@@ -1331,7 +1410,7 @@ def volume_get_instance(context, volume_id):
                      options(joinedload('instance')).\
                      first()
     if not result:
-        raise exception.NotFound('Volume %s not found' % ec2_id)
+        raise exception.NotFound(_('Volume %s not found') % ec2_id)
 
     return result.instance
 
@@ -1343,7 +1422,7 @@ def volume_get_shelf_and_blade(context, volume_id):
                      filter_by(volume_id=volume_id).\
                      first()
     if not result:
-        raise exception.NotFound('No export device found for volume %s' %
+        raise exception.NotFound(_('No export device found for volume %s') %
                                  volume_id)
 
     return (result.shelf_id, result.blade_id)
@@ -1356,7 +1435,7 @@ def volume_get_iscsi_target_num(context, volume_id):
                      filter_by(volume_id=volume_id).\
                      first()
     if not result:
-        raise exception.NotFound('No target id found for volume %s' %
+        raise exception.NotFound(_('No target id found for volume %s') %
                                  volume_id)
 
     return result.target_num
@@ -1401,7 +1480,7 @@ def security_group_get(context, security_group_id, session=None):
                          options(joinedload_all('rules')).\
                          first()
     if not result:
-        raise exception.NotFound("No secuity group with id %s" %
+        raise exception.NotFound(_("No security group with id %s") %
                                  security_group_id)
     return result
 
@@ -1418,7 +1497,7 @@ def security_group_get_by_name(context, project_id, group_name):
                         first()
     if not result:
         raise exception.NotFound(
-            'No security group named %s for project: %s' \
+            _('No security group named %s for project: %s')
              % (group_name, project_id))
     return result
 
@@ -1506,8 +1585,46 @@ def security_group_rule_get(context, security_group_rule_id, session=None):
                          filter_by(id=security_group_rule_id).\
                          first()
     if not result:
-        raise exception.NotFound("No secuity group rule with id %s" %
+        raise exception.NotFound(_("No secuity group rule with id %s") %
                                  security_group_rule_id)
+    return result
+
+
+@require_context
+def security_group_rule_get_by_security_group(context, security_group_id,
+                                              session=None):
+    if not session:
+        session = get_session()
+    if is_admin_context(context):
+        result = session.query(models.SecurityGroupIngressRule).\
+                         filter_by(deleted=can_read_deleted(context)).\
+                         filter_by(parent_group_id=security_group_id).\
+                         all()
+    else:
+        # TODO(vish): Join to group and check for project_id
+        result = session.query(models.SecurityGroupIngressRule).\
+                         filter_by(deleted=False).\
+                         filter_by(parent_group_id=security_group_id).\
+                         all()
+    return result
+
+
+@require_context
+def security_group_rule_get_by_security_group_grantee(context,
+                                                      security_group_id,
+                                                      session=None):
+    if not session:
+        session = get_session()
+    if is_admin_context(context):
+        result = session.query(models.SecurityGroupIngressRule).\
+                         filter_by(deleted=can_read_deleted(context)).\
+                         filter_by(group_id=security_group_id).\
+                         all()
+    else:
+        result = session.query(models.SecurityGroupIngressRule).\
+                         filter_by(deleted=False).\
+                         filter_by(group_id=security_group_id).\
+                         all()
     return result
 
 
@@ -1542,7 +1659,7 @@ def user_get(context, id, session=None):
                      first()
 
     if not result:
-        raise exception.NotFound('No user for id %s' % id)
+        raise exception.NotFound(_('No user for id %s') % id)
 
     return result
 
@@ -1558,7 +1675,7 @@ def user_get_by_access_key(context, access_key, session=None):
                    first()
 
     if not result:
-        raise exception.NotFound('No user for access key %s' % access_key)
+        raise exception.NotFound(_('No user for access key %s') % access_key)
 
     return result
 
@@ -1620,7 +1737,7 @@ def project_get(context, id, session=None):
                      first()
 
     if not result:
-        raise exception.NotFound("No project with id %s" % id)
+        raise exception.NotFound(_("No project with id %s") % id)
 
     return result
 
@@ -1746,3 +1863,111 @@ def host_get_networks(context, host):
                        filter_by(deleted=False).\
                        filter_by(host=host).\
                        all()
+
+
+##################
+
+
+def console_pool_create(context, values):
+    pool = models.ConsolePool()
+    pool.update(values)
+    pool.save()
+    return pool
+
+
+def console_pool_get(context, pool_id):
+    session = get_session()
+    result = session.query(models.ConsolePool).\
+                     filter_by(deleted=False).\
+                     filter_by(id=pool_id).\
+                     first()
+    if not result:
+        raise exception.NotFound(_("No console pool with id %(pool_id)s") %
+                                 {'pool_id': pool_id})
+
+    return result
+
+
+def console_pool_get_by_host_type(context, compute_host, host,
+                                  console_type):
+    session = get_session()
+    result = session.query(models.ConsolePool).\
+                   filter_by(host=host).\
+                   filter_by(console_type=console_type).\
+                   filter_by(compute_host=compute_host).\
+                   filter_by(deleted=False).\
+                   options(joinedload('consoles')).\
+                   first()
+    if not result:
+        raise exception.NotFound(_('No console pool of type %(type)s '
+                                   'for compute host %(compute_host)s '
+                                   'on proxy host %(host)s') %
+                                   {'type': console_type,
+                                    'compute_host': compute_host,
+                                    'host': host})
+    return result
+
+
+def console_pool_get_all_by_host_type(context, host, console_type):
+    session = get_session()
+    return session.query(models.ConsolePool).\
+                   filter_by(host=host).\
+                   filter_by(console_type=console_type).\
+                   filter_by(deleted=False).\
+                   options(joinedload('consoles')).\
+                   all()
+
+
+def console_create(context, values):
+    console = models.Console()
+    console.update(values)
+    console.save()
+    return console
+
+
+def console_delete(context, console_id):
+    session = get_session()
+    with session.begin():
+        # consoles are meant to be transient. (mdragon)
+        session.execute('delete from consoles '
+                        'where id=:id', {'id': console_id})
+
+
+def console_get_by_pool_instance(context, pool_id, instance_id):
+    session = get_session()
+    result = session.query(models.Console).\
+                   filter_by(pool_id=pool_id).\
+                   filter_by(instance_id=instance_id).\
+                   options(joinedload('pool')).\
+                   first()
+    if not result:
+        raise exception.NotFound(_('No console for instance %(instance_id)s '
+                                 'in pool %(pool_id)s') %
+                                 {'instance_id': instance_id,
+                                  'pool_id': pool_id})
+    return result
+
+
+def console_get_all_by_instance(context, instance_id):
+    session = get_session()
+    results = session.query(models.Console).\
+                   filter_by(instance_id=instance_id).\
+                   options(joinedload('pool')).\
+                   all()
+    return results
+
+
+def console_get(context, console_id, instance_id=None):
+    session = get_session()
+    query = session.query(models.Console).\
+                    filter_by(id=console_id)
+    if instance_id:
+        query = query.filter_by(instance_id=instance_id)
+    result = query.options(joinedload('pool')).first()
+    if not result:
+        idesc = (_("on instance %s") % instance_id)  if instance_id else ""
+        raise exception.NotFound(_("No console with id %(console_id)s"
+                                   " %(instance)s") %
+                                  {'instance': idesc,
+                                  'console_id': console_id})
+    return result

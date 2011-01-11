@@ -20,15 +20,16 @@ Starting point for routing EC2 requests.
 
 """
 
-import logging
+import datetime
 import routes
 import webob
 import webob.dec
 import webob.exc
 
-from nova import exception
 from nova import context
+from nova import exception
 from nova import flags
+from nova import log as logging
 from nova import wsgi
 from nova.api.ec2 import apirequest
 from nova.api.ec2 import admin
@@ -37,16 +38,113 @@ from nova.auth import manager
 
 
 FLAGS = flags.FLAGS
-_log = logging.getLogger("api")
-_log.setLevel(logging.DEBUG)
+LOG = logging.getLogger("nova.api")
+flags.DEFINE_boolean('use_forwarded_for', False,
+                     'Treat X-Forwarded-For as the canonical remote address. '
+                     'Only enable this if you have a sanitizing proxy.')
+flags.DEFINE_boolean('use_lockout', False,
+                     'Whether or not to use lockout middleware.')
+flags.DEFINE_integer('lockout_attempts', 5,
+                     'Number of failed auths before lockout.')
+flags.DEFINE_integer('lockout_minutes', 15,
+                     'Number of minutes to lockout if triggered.')
+flags.DEFINE_integer('lockout_window', 15,
+                     'Number of minutes for lockout window.')
+flags.DEFINE_list('lockout_memcached_servers', None,
+                  'Memcached servers or None for in process cache.')
 
 
 class API(wsgi.Middleware):
-
     """Routing for all EC2 API requests."""
 
     def __init__(self):
         self.application = Authenticate(Router(Authorizer(Executor())))
+        if FLAGS.use_lockout:
+            self.application = Lockout(self.application)
+
+    @webob.dec.wsgify
+    def __call__(self, req):
+        rv = req.get_response(self.application)
+        self.log_request_completion(rv, req)
+        return rv
+
+    def log_request_completion(self, response, request):
+        controller = request.environ.get('ec2.controller', None)
+        if controller:
+            controller = controller.__class__.__name__
+        action = request.environ.get('ec2.action', None)
+        ctxt = request.environ.get('ec2.context', None)
+        seconds = 'X'
+        microseconds = 'X'
+        if ctxt:
+            delta = datetime.datetime.utcnow() - \
+                    ctxt.timestamp
+            seconds = delta.seconds
+            microseconds = delta.microseconds
+        LOG.info(
+            "%s.%ss %s %s %s %s:%s %s [%s] %s %s",
+            seconds,
+            microseconds,
+            request.remote_addr,
+            request.method,
+            request.path_info,
+            controller,
+            action,
+            response.status_int,
+            request.user_agent,
+            request.content_type,
+            response.content_type,
+            context=ctxt)
+
+
+class Lockout(wsgi.Middleware):
+    """Lockout for x minutes on y failed auths in a z minute period.
+
+    x = lockout_timeout flag
+    y = lockout_window flag
+    z = lockout_attempts flag
+
+    Uses memcached if lockout_memcached_servers flag is set, otherwise it
+    uses a very simple in-proccess cache. Due to the simplicity of
+    the implementation, the timeout window is started with the first
+    failed request, so it will block if there are x failed logins within
+    that period.
+
+    There is a possible race condition where simultaneous requests could
+    sneak in before the lockout hits, but this is extremely rare and would
+    only result in a couple of extra failed attempts."""
+
+    def __init__(self, application):
+        """middleware can use fake for testing."""
+        if FLAGS.lockout_memcached_servers:
+            import memcache
+        else:
+            from nova import fakememcache as memcache
+        self.mc = memcache.Client(FLAGS.lockout_memcached_servers,
+                                  debug=0)
+        super(Lockout, self).__init__(application)
+
+    @webob.dec.wsgify
+    def __call__(self, req):
+        access_key = str(req.params['AWSAccessKeyId'])
+        failures_key = "authfailures-%s" % access_key
+        failures = int(self.mc.get(failures_key) or 0)
+        if failures >= FLAGS.lockout_attempts:
+            detail = _("Too many failed authentications.")
+            raise webob.exc.HTTPForbidden(detail=detail)
+        res = req.get_response(self.application)
+        if res.status_int == 403:
+            failures = self.mc.incr(failures_key)
+            if failures is None:
+                # NOTE(vish): To use incr, failures has to be a string.
+                self.mc.set(failures_key, '1', time=FLAGS.lockout_window * 60)
+            elif failures >= FLAGS.lockout_attempts:
+                LOG.warn(_('Access key %s has had %d failed authentications'
+                           ' and will be locked out for %d minutes.'),
+                         access_key, failures, FLAGS.lockout_minutes)
+                self.mc.set(failures_key, str(failures),
+                            time=FLAGS.lockout_minutes * 60)
+        return res
 
 
 class Authenticate(wsgi.Middleware):
@@ -76,15 +174,21 @@ class Authenticate(wsgi.Middleware):
                     req.method,
                     req.host,
                     req.path)
-        except exception.Error, ex:
-            logging.debug("Authentication Failure: %s" % ex)
+        # Be explicit for what exceptions are 403, the rest bubble as 500
+        except (exception.NotFound, exception.NotAuthorized) as ex:
+            LOG.audit(_("Authentication Failure: %s"), str(ex))
             raise webob.exc.HTTPForbidden()
 
         # Authenticated!
+        remote_address = req.remote_addr
+        if FLAGS.use_forwarded_for:
+            remote_address = req.headers.get('X-Forwarded-For', remote_address)
         ctxt = context.RequestContext(user=user,
                                       project=project,
-                                      remote_address=req.remote_addr)
+                                      remote_address=remote_address)
         req.environ['ec2.context'] = ctxt
+        LOG.audit(_('Authenticated Request For %s:%s)'), user.name,
+                  project.name, context=req.environ['ec2.context'])
         return self.application
 
 
@@ -120,9 +224,9 @@ class Router(wsgi.Middleware):
         except:
             raise webob.exc.HTTPBadRequest()
 
-        _log.debug('action: %s' % action)
+        LOG.debug(_('action: %s'), action)
         for key, value in args.items():
-            _log.debug('arg: %s\t\tval: %s' % (key, value))
+            LOG.debug(_('arg: %s\t\tval: %s'), key, value)
 
         # Success!
         req.environ['ec2.controller'] = controller
@@ -194,6 +298,9 @@ class Authorizer(wsgi.Middleware):
         if self._matches_any_role(context, allowed_roles):
             return self.application
         else:
+            LOG.audit(_("Unauthorized request for controller=%s "
+                        "and action=%s"), controller_name, action,
+                      context=context)
             raise webob.exc.HTTPUnauthorized()
 
     def _matches_any_role(self, context, roles):
@@ -225,27 +332,88 @@ class Executor(wsgi.Application):
         args = req.environ['ec2.action_args']
 
         api_request = apirequest.APIRequest(controller, action)
+        result = None
         try:
             result = api_request.send(context, **args)
-            req.headers['Content-Type'] = 'text/xml'
-            return result
+        except exception.NotFound as ex:
+            LOG.info(_('NotFound raised: %s'), str(ex),  context=context)
+            return self._error(req, context, type(ex).__name__, str(ex))
         except exception.ApiError as ex:
-
+            LOG.exception(_('ApiError raised: %s'), str(ex), context=context)
             if ex.code:
-                return self._error(req, ex.code, ex.message)
+                return self._error(req, context, ex.code, str(ex))
             else:
-                return self._error(req, type(ex).__name__, ex.message)
-        # TODO(vish): do something more useful with unknown exceptions
+                return self._error(req, context, type(ex).__name__, str(ex))
         except Exception as ex:
-            return self._error(req, type(ex).__name__, str(ex))
+            extra = {'environment': req.environ}
+            LOG.exception(_('Unexpected error raised: %s'), str(ex),
+                          extra=extra, context=context)
+            return self._error(req,
+                               context,
+                               'UnknownError',
+                               _('An unknown error has occurred. '
+                               'Please try your request again.'))
+        else:
+            resp = webob.Response()
+            resp.status = 200
+            resp.headers['Content-Type'] = 'text/xml'
+            resp.body = str(result)
+            return resp
 
-    def _error(self, req, code, message):
-        logging.error("%s: %s", code, message)
+    def _error(self, req, context, code, message):
+        LOG.error("%s: %s", code, message, context=context)
         resp = webob.Response()
         resp.status = 400
         resp.headers['Content-Type'] = 'text/xml'
         resp.body = str('<?xml version="1.0"?>\n'
-                     '<Response><Errors><Error><Code>%s</Code>'
-                     '<Message>%s</Message></Error></Errors>'
-                     '<RequestID>?</RequestID></Response>' % (code, message))
+                         '<Response><Errors><Error><Code>%s</Code>'
+                         '<Message>%s</Message></Error></Errors>'
+                         '<RequestID>%s</RequestID></Response>' %
+                         (code, message, context.request_id))
         return resp
+
+
+class Versions(wsgi.Application):
+
+    @webob.dec.wsgify
+    def __call__(self, req):
+        """Respond to a request for all EC2 versions."""
+        # available api versions
+        versions = [
+            '1.0',
+            '2007-01-19',
+            '2007-03-01',
+            '2007-08-29',
+            '2007-10-10',
+            '2007-12-15',
+            '2008-02-01',
+            '2008-09-01',
+            '2009-04-04',
+        ]
+        return ''.join('%s\n' % v for v in versions)
+
+
+def authenticate_factory(global_args, **local_args):
+    def authenticator(app):
+        return Authenticate(app)
+    return authenticator
+
+
+def router_factory(global_args, **local_args):
+    def router(app):
+        return Router(app)
+    return router
+
+
+def authorizer_factory(global_args, **local_args):
+    def authorizer(app):
+        return Authorizer(app)
+    return authorizer
+
+
+def executor_factory(global_args, **local_args):
+    return Executor()
+
+
+def versions_factory(global_args, **local_args):
+    return Versions()

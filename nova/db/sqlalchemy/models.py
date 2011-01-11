@@ -151,14 +151,26 @@ class Service(BASE, NovaBase):
     disabled = Column(Boolean, default=False)
 
 
+class Certificate(BASE, NovaBase):
+    """Represents a an x509 certificate"""
+    __tablename__ = 'certificates'
+    id = Column(Integer, primary_key=True)
+
+    user_id = Column(String(255))
+    project_id = Column(String(255))
+    file_name = Column(String(255))
+
+
 class Instance(BASE, NovaBase):
     """Represents a guest vm."""
     __tablename__ = 'instances'
-    id = Column(Integer, primary_key=True)
-    internal_id = Column(Integer, unique=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    @property
+    def name(self):
+        return "instance-%08x" % self.id
 
     admin_pass = Column(String(255))
-
     user_id = Column(String(255))
     project_id = Column(String(255))
 
@@ -169,10 +181,6 @@ class Instance(BASE, NovaBase):
     @property
     def project(self):
         return auth.manager.AuthManager().get_project(self.project_id)
-
-    @property
-    def name(self):
-        return "instance-%d" % self.internal_id
 
     image_id = Column(String(255))
     kernel_id = Column(String(255))
@@ -210,9 +218,13 @@ class Instance(BASE, NovaBase):
     launched_at = Column(DateTime)
     terminated_at = Column(DateTime)
 
+    availability_zone = Column(String(255))
+
     # User editable field for display in user-facing UIs
     display_name = Column(String(255))
     display_description = Column(String(255))
+
+    locked = Column(Boolean)
 
     # TODO(vish): see Ewan's email about state improvements, probably
     #             should be in a driver base class or some such
@@ -226,11 +238,24 @@ class Instance(BASE, NovaBase):
     #                     'shutdown', 'shutoff', 'crashed'])
 
 
+class InstanceActions(BASE, NovaBase):
+    """Represents a guest VM's actions and results"""
+    __tablename__ = "instance_actions"
+    id = Column(Integer, primary_key=True)
+    instance_id = Column(Integer, ForeignKey('instances.id'))
+
+    action = Column(String(255))
+    error = Column(Text)
+
+
 class Volume(BASE, NovaBase):
     """Represents a block storage device that can be attached to a vm."""
     __tablename__ = 'volumes'
-    id = Column(Integer, primary_key=True)
-    ec2_id = Column(String(12), unique=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    @property
+    def name(self):
+        return "volume-%08x" % self.id
 
     user_id = Column(String(255))
     project_id = Column(String(255))
@@ -255,10 +280,6 @@ class Volume(BASE, NovaBase):
 
     display_name = Column(String(255))
     display_description = Column(String(255))
-
-    @property
-    def name(self):
-        return self.ec2_id
 
 
 class Quota(BASE, NovaBase):
@@ -417,7 +438,7 @@ class AuthToken(BASE, NovaBase):
     """
     __tablename__ = 'auth_tokens'
     token_hash = Column(String(255), primary_key=True)
-    user_id = Column(Integer)
+    user_id = Column(String(255))
     server_manageent_url = Column(String(255))
     storage_url = Column(String(255))
     cdn_management_url = Column(String(255))
@@ -519,17 +540,44 @@ class FloatingIp(BASE, NovaBase):
     host = Column(String(255))  # , ForeignKey('hosts.id'))
 
 
+class ConsolePool(BASE, NovaBase):
+    """Represents pool of consoles on the same physical node."""
+    __tablename__ = 'console_pools'
+    id = Column(Integer, primary_key=True)
+    address = Column(String(255))
+    username = Column(String(255))
+    password = Column(String(255))
+    console_type = Column(String(255))
+    public_hostname = Column(String(255))
+    host = Column(String(255))
+    compute_host = Column(String(255))
+
+
+class Console(BASE, NovaBase):
+    """Represents a console session for an instance."""
+    __tablename__ = 'consoles'
+    id = Column(Integer, primary_key=True)
+    instance_name = Column(String(255))
+    instance_id = Column(Integer)
+    password = Column(String(255))
+    port = Column(Integer, nullable=True)
+    pool_id = Column(Integer, ForeignKey('console_pools.id'))
+    pool = relationship(ConsolePool, backref=backref('consoles'))
+
+
 def register_models():
     """Register Models and create metadata.
 
     Called from nova.db.sqlalchemy.__init__ as part of loading the driver,
-    it will never need to be called explicitly elsewhere.
+    it will never need to be called explicitly elsewhere unless the
+    connection is lost and needs to be reestablished.
     """
     from sqlalchemy import create_engine
-    models = (Service, Instance, Volume, ExportDevice, IscsiTarget, FixedIp,
-              FloatingIp, Network, SecurityGroup,
-              SecurityGroupIngressRule, SecurityGroupInstanceAssociation,
-              AuthToken, User, Project)  # , Image, Host
+    models = (Service, Instance, InstanceActions,
+              Volume, ExportDevice, IscsiTarget, FixedIp, FloatingIp,
+              Network, SecurityGroup, SecurityGroupIngressRule,
+              SecurityGroupInstanceAssociation, AuthToken, User,
+              Project, Certificate, ConsolePool, Console)  # , Image, Host
     engine = create_engine(FLAGS.sql_connection, echo=False)
     for model in models:
         model.metadata.create_all(engine)

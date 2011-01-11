@@ -27,6 +27,9 @@ The underlying driver is loaded as a :class:`LazyPluggable`.
 
 :sql_connection:  string specifying the sqlalchemy connection to use, like:
                   `sqlite:///var/lib/nova/nova.sqlite`.
+
+:enable_new_services:  when adding a new service to the database, is it in the
+                       pool of available hardware (Default: True)
 """
 
 from nova import exception
@@ -37,6 +40,8 @@ from nova import utils
 FLAGS = flags.FLAGS
 flags.DEFINE_string('db_backend', 'sqlalchemy',
                     'The backend to use for db')
+flags.DEFINE_boolean('enable_new_services', True,
+                     'Services to be added to the available pool on create')
 
 
 IMPL = utils.LazyPluggable(FLAGS['db_backend'],
@@ -74,6 +79,11 @@ def service_destroy(context, instance_id):
 def service_get(context, service_id):
     """Get an service or raise if it does not exist."""
     return IMPL.service_get(context, service_id)
+
+
+def service_get_all(context):
+    """Get a list of all services on any machine on any topic of any type"""
+    return IMPL.service_get_all(context)
 
 
 def service_get_all_by_topic(context, topic):
@@ -125,6 +135,45 @@ def service_update(context, service_id, values):
 
     """
     return IMPL.service_update(context, service_id, values)
+
+
+###################
+
+
+def certificate_create(context, values):
+    """Create a certificate from the values dictionary."""
+    return IMPL.certificate_create(context, values)
+
+
+def certificate_destroy(context, certificate_id):
+    """Destroy the certificate or raise if it does not exist."""
+    return IMPL.certificate_destroy(context, certificate_id)
+
+
+def certificate_get_all_by_project(context, project_id):
+    """Get all certificates for a project."""
+    return IMPL.certificate_get_all_by_project(context, project_id)
+
+
+def certificate_get_all_by_user(context, user_id):
+    """Get all certificates for a user."""
+    return IMPL.certificate_get_all_by_user(context, user_id)
+
+
+def certificate_get_all_by_user_and_project(context, user_id, project_id):
+    """Get all certificates for a user and project."""
+    return IMPL.certificate_get_all_by_user_and_project(context,
+                                                        user_id,
+                                                        project_id)
+
+
+def certificate_update(context, certificate_id, values):
+    """Set the given properties on an certificate and update it.
+
+    Raises NotFound if service does not exist.
+
+    """
+    return IMPL.service_update(context, certificate_id, values)
 
 
 ###################
@@ -304,9 +353,14 @@ def instance_get_floating_address(context, instance_id):
     return IMPL.instance_get_floating_address(context, instance_id)
 
 
-def instance_get_by_internal_id(context, internal_id):
-    """Get an instance by internal id."""
-    return IMPL.instance_get_by_internal_id(context, internal_id)
+def instance_get_project_vpn(context, project_id):
+    """Get a vpn instance by project or return None."""
+    return IMPL.instance_get_project_vpn(context, project_id)
+
+
+def instance_get_by_id(context, instance_id):
+    """Get an instance by id."""
+    return IMPL.instance_get_by_id(context, instance_id)
 
 
 def instance_is_vpn(context, instance_id):
@@ -332,6 +386,16 @@ def instance_add_security_group(context, instance_id, security_group_id):
     """Associate the given security group with the given instance."""
     return IMPL.instance_add_security_group(context, instance_id,
                                             security_group_id)
+
+
+def instance_action_create(context, values):
+    """Create an instance action from the values dictionary."""
+    return IMPL.instance_action_create(context, values)
+
+
+def instance_get_actions(context, instance_id):
+    """Get instance actions by instance id."""
+    return IMPL.instance_get_actions(context, instance_id)
 
 
 ###################
@@ -468,12 +532,14 @@ def network_update(context, network_id, values):
 ###################
 
 
-def project_get_network(context, project_id):
+def project_get_network(context, project_id, associate=True):
     """Return the network associated with the project.
 
-    Raises NotFound if no such network can be found.
+    If associate is true, it will attempt to associate a new
+    network if one is not found, otherwise it returns None.
 
     """
+
     return IMPL.project_get_network(context, project_id)
 
 
@@ -658,7 +724,7 @@ def security_group_get_all(context):
 
 
 def security_group_get(context, security_group_id):
-    """Get security group by its internal id."""
+    """Get security group by its id."""
     return IMPL.security_group_get(context, security_group_id)
 
 
@@ -709,6 +775,13 @@ def security_group_rule_get_by_security_group(context, security_group_id):
     """Get all rules for a a given security group."""
     return IMPL.security_group_rule_get_by_security_group(context,
                                                           security_group_id)
+
+
+def security_group_rule_get_by_security_group_grantee(context,
+                                                      security_group_id):
+    """Get all rules that grant access to the given security group."""
+    return IMPL.security_group_rule_get_by_security_group_grantee(context,
+                                                             security_group_id)
 
 
 def security_group_rule_destroy(context, security_group_rule_id):
@@ -833,3 +906,57 @@ def host_get_networks(context, host):
 
     """
     return IMPL.host_get_networks(context, host)
+
+
+##################
+
+
+def console_pool_create(context, values):
+    """Create console pool."""
+    return IMPL.console_pool_create(context, values)
+
+
+def console_pool_get(context, pool_id):
+    """Get a console pool."""
+    return IMPL.console_pool_get(context, pool_id)
+
+
+def console_pool_get_by_host_type(context, compute_host, proxy_host,
+                                  console_type):
+    """Fetch a console pool for a given proxy host, compute host, and type."""
+    return IMPL.console_pool_get_by_host_type(context,
+                                              compute_host,
+                                              proxy_host,
+                                              console_type)
+
+
+def console_pool_get_all_by_host_type(context, host, console_type):
+    """Fetch all pools for given proxy host and type."""
+    return IMPL.console_pool_get_all_by_host_type(context,
+                                                  host,
+                                                  console_type)
+
+
+def console_create(context, values):
+    """Create a console."""
+    return IMPL.console_create(context, values)
+
+
+def console_delete(context, console_id):
+    """Delete a console."""
+    return IMPL.console_delete(context, console_id)
+
+
+def console_get_by_pool_instance(context, pool_id, instance_id):
+    """Get console entry for a given instance and pool."""
+    return IMPL.console_get_by_pool_instance(context, pool_id, instance_id)
+
+
+def console_get_all_by_instance(context, instance_id):
+    """Get consoles for a given instance."""
+    return IMPL.console_get_all_by_instance(context, instance_id)
+
+
+def console_get(context, console_id, instance_id=None):
+    """Get a specific console (possibly on a given instance)."""
+    return IMPL.console_get(context, console_id, instance_id)

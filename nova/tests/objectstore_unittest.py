@@ -23,7 +23,6 @@ Unittets for S3 objectstore clone.
 import boto
 import glob
 import hashlib
-import logging
 import os
 import shutil
 import tempfile
@@ -54,7 +53,7 @@ os.makedirs(os.path.join(OSS_TEMPDIR, 'images'))
 os.makedirs(os.path.join(OSS_TEMPDIR, 'buckets'))
 
 
-class ObjectStoreTestCase(test.TrialTestCase):
+class ObjectStoreTestCase(test.TestCase):
     """Test objectstore API directly."""
 
     def setUp(self):
@@ -63,7 +62,6 @@ class ObjectStoreTestCase(test.TrialTestCase):
         self.flags(buckets_path=os.path.join(OSS_TEMPDIR, 'buckets'),
                    images_path=os.path.join(OSS_TEMPDIR, 'images'),
                    ca_path=os.path.join(os.path.dirname(__file__), 'CA'))
-        logging.getLogger().setLevel(logging.DEBUG)
 
         self.auth_manager = manager.AuthManager()
         self.auth_manager.create_user('user1')
@@ -191,7 +189,7 @@ class TestSite(server.Site):
     protocol = TestHTTPChannel
 
 
-class S3APITestCase(test.TrialTestCase):
+class S3APITestCase(test.TestCase):
     """Test objectstore through S3 API."""
 
     def setUp(self):

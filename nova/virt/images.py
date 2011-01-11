@@ -22,11 +22,15 @@ Handling of VM disk images.
 """
 
 import os.path
+import shutil
+import sys
 import time
+import urllib2
 import urlparse
 
 from nova import flags
-from nova import process
+from nova import log as logging
+from nova import utils
 from nova.auth import manager
 from nova.auth import signer
 from nova.objectstore import image
@@ -35,6 +39,8 @@ from nova.objectstore import image
 FLAGS = flags.FLAGS
 flags.DEFINE_bool('use_s3', True,
                   'whether to get images from s3 or use local copy')
+
+LOG = logging.getLogger('nova.virt.images')
 
 
 def fetch(image, path, user, project):
@@ -45,12 +51,31 @@ def fetch(image, path, user, project):
     return f(image, path, user, project)
 
 
+def _fetch_image_no_curl(url, path, headers):
+    request = urllib2.Request(url)
+    for (k, v) in headers.iteritems():
+        request.add_header(k, v)
+
+    def urlretrieve(urlfile, fpath):
+        chunk = 1 * 1024 * 1024
+        f = open(fpath, "wb")
+        while 1:
+            data = urlfile.read(chunk)
+            if not data:
+                break
+            f.write(data)
+
+    urlopened = urllib2.urlopen(request)
+    urlretrieve(urlopened, path)
+    LOG.debug(_("Finished retreving %s -- placed in %s"), url, path)
+
+
 def _fetch_s3_image(image, path, user, project):
     url = image_url(image)
 
     # This should probably move somewhere else, like e.g. a download_as
     # method on User objects and at the same time get rewritten to use
-    # twisted web client.
+    # a web client.
     headers = {}
     headers['Date'] = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime())
 
@@ -61,17 +86,24 @@ def _fetch_s3_image(image, path, user, project):
                                                                      url_path)
     headers['Authorization'] = 'AWS %s:%s' % (access, signature)
 
-    cmd = ['/usr/bin/curl', '--fail', '--silent', url]
-    for (k, v) in headers.iteritems():
-        cmd += ['-H', '%s: %s' % (k, v)]
+    if sys.platform.startswith('win'):
+        return _fetch_image_no_curl(url, path, headers)
+    else:
+        cmd = ['/usr/bin/curl', '--fail', '--silent', url]
+        for (k, v) in headers.iteritems():
+            cmd += ['-H', '\'%s: %s\'' % (k, v)]
 
-    cmd += ['-o', path]
-    return process.SharedPool().execute(executable=cmd[0], args=cmd[1:])
+        cmd += ['-o', path]
+        cmd_out = ' '.join(cmd)
+        return utils.execute(cmd_out)
 
 
 def _fetch_local_image(image, path, user, project):
-    source = _image_path('%s/image' % image)
-    return process.simple_execute('cp %s %s' % (source, path))
+    source = _image_path(os.path.join(image, 'image'))
+    if sys.platform.startswith('win'):
+        return shutil.copy(source, path)
+    else:
+        return utils.execute('cp %s %s' % (source, path))
 
 
 def _image_path(path):

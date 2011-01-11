@@ -159,6 +159,7 @@ class StrWrapper(object):
                 return str(val)
         raise KeyError(name)
 
+
 FLAGS = FlagValues()
 gflags.FLAGS = FLAGS
 gflags.DEFINE_flag(gflags.HelpFlag(), FLAGS)
@@ -183,6 +184,12 @@ DEFINE_list = _wrapper(gflags.DEFINE_list)
 DEFINE_spaceseplist = _wrapper(gflags.DEFINE_spaceseplist)
 DEFINE_multistring = _wrapper(gflags.DEFINE_multistring)
 DEFINE_multi_int = _wrapper(gflags.DEFINE_multi_int)
+DEFINE_flag = _wrapper(gflags.DEFINE_flag)
+
+
+HelpFlag = gflags.HelpFlag
+HelpshortFlag = gflags.HelpshortFlag
+HelpXMLFlag = gflags.HelpXMLFlag
 
 
 def DECLARE(name, module_string, flag_values=FLAGS):
@@ -193,19 +200,36 @@ def DECLARE(name, module_string, flag_values=FLAGS):
                 "%s not defined by %s" % (name, module_string))
 
 
+def _get_my_ip():
+    """Returns the actual ip of the local machine."""
+    try:
+        csock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        csock.connect(('8.8.8.8', 80))
+        (addr, port) = csock.getsockname()
+        csock.close()
+        return addr
+    except socket.gaierror as ex:
+        return "127.0.0.1"
+
+
 # __GLOBAL FLAGS ONLY__
 # Define any app-specific flags in their own files, docs at:
-# http://code.google.com/p/python-gflags/source/browse/trunk/gflags.py#39
-
+# http://code.google.com/p/python-gflags/source/browse/trunk/gflags.py#a9
+DEFINE_string('my_ip', _get_my_ip(), 'host ip address')
 DEFINE_list('region_list',
             [],
             'list of region=url pairs separated by commas')
 DEFINE_string('connection_type', 'libvirt', 'libvirt, xenapi or fake')
 DEFINE_string('aws_access_key_id', 'admin', 'AWS Access ID')
 DEFINE_string('aws_secret_access_key', 'admin', 'AWS Access Key')
+DEFINE_integer('glance_port', 9292, 'glance port')
+DEFINE_string('glance_host', '$my_ip', 'glance host')
 DEFINE_integer('s3_port', 3333, 's3 port')
-DEFINE_string('s3_host', '127.0.0.1', 's3 host')
+DEFINE_string('s3_host', '$my_ip', 's3 host (for infrastructure)')
+DEFINE_string('s3_dmz', '$my_ip', 's3 dmz ip (for instances)')
 DEFINE_string('compute_topic', 'compute', 'the topic compute nodes listen on')
+DEFINE_string('console_topic', 'console',
+              'the topic console proxy nodes listen on')
 DEFINE_string('scheduler_topic', 'scheduler',
               'the topic scheduler nodes listen on')
 DEFINE_string('volume_topic', 'volume', 'the topic volume nodes listen on')
@@ -223,22 +247,25 @@ DEFINE_string('rabbit_virtual_host', '/', 'rabbit virtual host')
 DEFINE_integer('rabbit_retry_interval', 10, 'rabbit connection retry interval')
 DEFINE_integer('rabbit_max_retries', 12, 'rabbit connection attempts')
 DEFINE_string('control_exchange', 'nova', 'the main exchange to connect to')
-DEFINE_string('ec2_url', 'http://127.0.0.1:8773/services/Cloud',
-              'Url to ec2 api server')
+DEFINE_string('ec2_prefix', 'http', 'prefix for ec2')
+DEFINE_string('cc_host', '$my_ip', 'ip of api server')
+DEFINE_string('cc_dmz', '$my_ip', 'internal ip of api server')
+DEFINE_integer('cc_port', 8773, 'cloud controller port')
+DEFINE_string('ec2_suffix', '/services/Cloud', 'suffix for ec2')
 
+DEFINE_string('default_project', 'openstack', 'default project for openstack')
 DEFINE_string('default_image', 'ami-11111',
               'default image to use, testing only')
-DEFINE_string('default_kernel', 'aki-11111',
-              'default kernel to use, testing only')
-DEFINE_string('default_ramdisk', 'ari-11111',
-              'default ramdisk to use, testing only')
 DEFINE_string('default_instance_type', 'm1.small',
               'default instance type to use, testing only')
+DEFINE_string('null_kernel', 'nokernel',
+              'kernel image that indicates not to use a kernel,'
+              ' but to use a raw disk image instead')
 
-DEFINE_string('vpn_image_id', 'ami-CLOUDPIPE', 'AMI for cloudpipe vpn server')
+DEFINE_string('vpn_image_id', 'ami-cloudpipe', 'AMI for cloudpipe vpn server')
 DEFINE_string('vpn_key_suffix',
-              '-key',
-              'Suffix to add to project name for vpn key')
+              '-vpn',
+              'Suffix to add to project name for vpn key and secgroups')
 
 DEFINE_integer('auth_token_ttl', 3600, 'Seconds for auth tokens to linger')
 
@@ -248,9 +275,16 @@ DEFINE_string('state_path', os.path.join(os.path.dirname(__file__), '../'),
 DEFINE_string('sql_connection',
               'sqlite:///$state_path/nova.sqlite',
               'connection string for sql database')
+DEFINE_string('sql_idle_timeout',
+              '3600',
+              'timeout for idle sql database connections')
+DEFINE_integer('sql_max_retries', 12, 'sql connection attempts')
+DEFINE_integer('sql_retry_interval', 10, 'sql connection retry interval')
 
 DEFINE_string('compute_manager', 'nova.compute.manager.ComputeManager',
               'Manager for compute')
+DEFINE_string('console_manager', 'nova.console.manager.ConsoleProxyManager',
+              'Manager for console proxy')
 DEFINE_string('network_manager', 'nova.network.manager.VlanManager',
               'Manager for network')
 DEFINE_string('volume_manager', 'nova.volume.manager.VolumeManager',
@@ -259,7 +293,7 @@ DEFINE_string('scheduler_manager', 'nova.scheduler.manager.SchedulerManager',
               'Manager for scheduler')
 
 # The service to use for image search and retrieval
-DEFINE_string('image_service', 'nova.image.local.LocalImageService',
+DEFINE_string('image_service', 'nova.image.s3.S3ImageService',
               'The service to use for retrieving and searching for images.')
 
 DEFINE_string('host', socket.gethostname(),
