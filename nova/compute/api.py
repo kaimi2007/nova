@@ -127,9 +127,11 @@ class API(base.Base):
             logging.debug("RLK - instance_arch %s", instance_arch)
             image_name = image.get('imageId', None)
             if (instance_arch == 'm1' and image_arch != 'x86_64'):
-                raise exception.Error(_("InstanceType (%s) can't launch \
-                        image (%s) with an architecture of (%s)")
-                        % (instance_type, image_name, image_arch))
+                image_arch = 'x86_64'
+# BFS force for test
+#                raise exception.Error(_("InstanceType (%s) can't launch \
+#                        image (%s) with an architecture of (%s)")
+#                        % (instance_type, image_name, image_arch))
             elif (instance_arch == 'tp' and image_arch != 'tilera'):
                 raise exception.Error(_("InstanceType (%s) can't launch \
                         image (%s) with an architecture of (%s)")
