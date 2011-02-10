@@ -808,7 +808,6 @@ class CloudController(object):
             security_group=kwargs.get('security_group'),
             availability_zone=kwargs.get('placement', {}).get(
                                   'AvailabilityZone'),
-            generate_hostname=id_to_ec2_id,
             arch=kwargs.get('arch', {}).get(
                                   'arch'))
         return self._format_run_instances(context,
