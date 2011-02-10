@@ -240,3 +240,4 @@ def upgrade(migrate_engine):
     networks.create_column(networks_cidr_v6)
     networks.create_column(networks_ra_server)
     services.create_column(services_availability_zone)
+    services.create_column(services_arch)

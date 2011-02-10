@@ -111,7 +111,6 @@ class Service(BASE, NovaBase):
     report_count = Column(Integer, nullable=False, default=0)
     disabled = Column(Boolean, default=False)
     availability_zone = Column(String(255), default='nova')
-    """ RLK - compute architecture """
     arch = Column(String(255), default='x86_64')  
 
 
