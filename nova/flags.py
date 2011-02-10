@@ -312,3 +312,6 @@ DEFINE_string('host', socket.gethostname(),
 
 DEFINE_string('node_availability_zone', 'nova',
               'availability zone of this node')
+#RLK
+DEFINE_string('compute_arch', 'x86_64',
+              'architecture for instance')
