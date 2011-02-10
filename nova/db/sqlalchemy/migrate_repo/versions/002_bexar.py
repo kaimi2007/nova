@@ -184,6 +184,11 @@ instances_availability_zone = Column(
                unicode_error=None, _warn_on_bytestring=False))
 
 
+instances_arch = Column(
+        'arch',
+        String(length=255, convert_unicode=False, assert_unicode=None,
+               unicode_error=None, _warn_on_bytestring=False))
+
 instances_locked = Column('locked',
                 Boolean(create_constraint=True, name=None))
 
@@ -205,6 +210,11 @@ services_availability_zone = Column(
                unicode_error=None, _warn_on_bytestring=False))
 
 
+services_arch = Column(
+        'arch',
+        String(length=255, convert_unicode=False, assert_unicode=None,
+               unicode_error=None, _warn_on_bytestring=False))
+
 def upgrade(migrate_engine):
     # Upgrade operations go here. Don't create your own engine;
     # bind migrate_engine to your metadata
@@ -225,6 +235,7 @@ def upgrade(migrate_engine):
                                             _warn_on_bytestring=False))
 
     instances.create_column(instances_availability_zone)
+    instances.create_column(instances_arch)
     instances.create_column(instances_locked)
     networks.create_column(networks_cidr_v6)
     networks.create_column(networks_ra_server)
