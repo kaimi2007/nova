@@ -33,9 +33,9 @@ from nova import utils
 LOG = logging.getLogger('nova.scheduler.manager')
 FLAGS = flags.FLAGS
 flags.DEFINE_string('scheduler_driver',
-                    'nova.scheduler.chance.ChanceScheduler',
+                    'nova.scheduler.arch.ArchitectureScheduler',
                     'Driver to use for the scheduler')
-
+#                    'nova.scheduler.chance.ChanceScheduler',
 
 class SchedulerManager(manager.Manager):
     """Chooses a host to run instances on."""
@@ -54,6 +54,8 @@ class SchedulerManager(manager.Manager):
 
         Falls back to schedule(context, topic) if method doesn't exist.
         """
+        LOG.debug(_("####\tRLK - driver - %s. method - %s. topic - %s. args - %s, kwargs - %s."), self.driver, method, topic, args, kwargs)
+        LOG.debug(_("##\tRLK - kwargs.get('arch') - %s"), kwargs.get('arch'))
         driver_method = 'schedule_%s' % method
         elevated = context.elevated()
         try:
