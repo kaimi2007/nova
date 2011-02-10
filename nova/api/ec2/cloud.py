@@ -138,6 +138,12 @@ class CloudController(object):
             return services[0]['availability_zone']
         return 'unknown zone'
 
+    def _get_arch_by_host(self, context, host):
+        services = db.service_get_all_by_host(context, host)
+        if len(services) > 0:
+            return services[0]['arch']
+        return 'unknown arch'
+
     def get_metadata(self, address):
         ctxt = context.get_admin_context()
         instance_ref = self.compute_api.get_all(ctxt, fixed_ip=address)
@@ -152,6 +158,8 @@ class CloudController(object):
         hostname = instance_ref['hostname']
         host = instance_ref['host']
         availability_zone = self._get_availability_zone_by_host(ctxt, host)
+        #RLK
+        arch = self._get_arch_by_host(ctxt, host)
         floating_ip = db.instance_get_floating_address(ctxt,
                                                        instance_ref['id'])
         ec2_id = id_to_ec2_id(instance_ref['id'])
@@ -175,6 +183,7 @@ class CloudController(object):
                 'local-ipv4': address,
                 'kernel-id': instance_ref['kernel_id'],
                 'placement': {'availability-zone': availability_zone},
+                'arch': {'arch': arch},
                 'public-hostname': hostname,
                 'public-ipv4': floating_ip or '',
                 'public-keys': keys,
@@ -713,6 +722,9 @@ class CloudController(object):
             host = instance['host']
             zone = self._get_availability_zone_by_host(context, host)
             i['placement'] = {'availabilityZone': zone}
+            #RLK
+            arch = self._get_arch_by_host(context, host)
+            i['arch'] = {'arch': arch}
             if instance['reservation_id'] not in reservations:
                 r = {}
                 r['reservationId'] = instance['reservation_id']
@@ -778,7 +790,7 @@ class CloudController(object):
         LOG.audit(_("Disassociate address %s"), public_ip, context=context)
         self.network_api.disassociate_floating_ip(context, public_ip)
         return {'disassociateResponse': ["Address disassociated."]}
-
+#RLK
     def run_instances(self, context, **kwargs):
         max_count = int(kwargs.get('max_count', 1))
         instances = self.compute_api.create(context,
@@ -795,7 +807,10 @@ class CloudController(object):
             user_data=kwargs.get('user_data'),
             security_group=kwargs.get('security_group'),
             availability_zone=kwargs.get('placement', {}).get(
-                                  'AvailabilityZone'))
+                                  'AvailabilityZone'),
+            generate_hostname=id_to_ec2_id,
+            arch=kwargs.get('arch', {}).get(
+                                  'arch'))
         return self._format_run_instances(context,
                                           instances[0]['reservation_id'])
 
