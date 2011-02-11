@@ -129,21 +129,23 @@ class API(base.Base):
             if (instance_arch == 'm1' and image_arch != 'x86_64'):
                 image_arch = 'x86_64'
 # BFS force for test
-#                raise exception.Error(_("InstanceType (%s) can't launch \
-#                        image (%s) with an architecture of (%s)")
-#                        % (instance_type, image_name, image_arch))
+#                raise exception.Error(_("InstanceType %(type)s can't launch \
+#                        image %(name)s with an architecture of %(arch)s")
+#                        % {'type':instance_type, 'name':image_name, 'arch':image_arch})
             elif (instance_arch == 'tp' and image_arch != 'tilera'):
-                raise exception.Error(_("InstanceType (%s) can't launch \
-                        image (%s) with an architecture of (%s)")
-                        % (instance_type, image_name, image_arch))
+                raise exception.Error(_("InstanceType %(type)s can't launch \
+                        image %(name)s with an architecture of %(arch)s")
+                        % {'type':instance_type, 'name':image_name, 'arch':image_arch})
             elif (instance_arch == 'g1' and image_arch != 'gpu'):
-                raise exception.Error(_("InstanceType (%s) can't launch \
-                        image (%s) with an architecture of (%s)")
-                        % (instance_type, image_name, image_arch))
+
+                raise exception.Error(_("InstanceType %(type)s can't launch \
+                        image %(name)s with an architecture of %(arch)s")
+                        % {'type':instance_type, 'name':image_name, 'arch':image_arch})
             elif (instance_arch == 'sh1' and image_arch != 'uv'):
-                raise exception.Error(_("InstanceType (%s) can't launch \
-                        image (%s) with an architecture of (%s)")
-                        % (instance_type, image_name, image_arch))
+                raise exception.Error(_("InstanceType %(type)s can't launch \
+                        image %(name)s with an architecture of %(arch)s")
+                        % {'type':instance_type, 'name':image_name, 'arch':image_arch})
+
 
         if security_group is None:
             security_group = ['default']
