@@ -134,7 +134,8 @@ class ServiceTestCase(test.TestCase):
                           'binary': binary,
                           'topic': topic,
                           'report_count': 0,
-                          'availability_zone': 'nova'}
+                          'availability_zone': 'nova',
+                          'arch':'x86_64'}
         service_ref = {'host': host,
                        'binary': binary,
                        'report_count': 0,
