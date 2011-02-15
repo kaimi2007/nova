@@ -26,22 +26,22 @@ from nova import exception
 
 FLAGS = flags.FLAGS
 INSTANCE_TYPES = {
-    'm1.tiny': dict(memory_mb=512, vcpus=1, local_gb=0, flavorid=1),
-    'm1.small': dict(memory_mb=2048, vcpus=1, local_gb=20, flavorid=2),
-    'm1.medium': dict(memory_mb=4096, vcpus=2, local_gb=40, flavorid=3),
-    'm1.large': dict(memory_mb=8192, vcpus=4, local_gb=80, flavorid=4),
-    'm1.xlarge': dict(memory_mb=16384, vcpus=8, local_gb=160, flavorid=5),
+    'm1.tiny': dict(memory_mb=512, vcpus=1, local_gb=0, cpu_arch='i386', flavorid=1),
+    'm1.small': dict(memory_mb=2048, vcpus=1, local_gb=20, cpu_arch='i386', flavorid=2),
+    'm1.medium': dict(memory_mb=4096, vcpus=2, local_gb=40, cpu_arch='i386', flavorid=3),
+    'm1.large': dict(memory_mb=8192, vcpus=4, local_gb=80, cpu_arch='x86_64',flavorid=4),
+    'm1.xlarge': dict(memory_mb=16384, vcpus=8, local_gb=160, cpu_arch='x86_64', flavorid=5),
      # Tilera
-    'tp.8x8': dict(memory_mb=16384, vcpus=64, local_gb=500, flavorid=6),
+    'tp.8x8': dict(memory_mb=16384, vcpus=64, local_gb=500,  cpu_arch='tilera', flavorid=6),
      # x86+GPU
-    'g1.small': dict(memory_mb=5120, vcpus=2, local_gb=225, flavorid=7),
-    'g1.medium': dict(memory_mb=10240, vcpus=4, local_gb=450, flavorid=8),
-    'g1.large': dict(memory_mb=20480, vcpus=8, local_gb=900, flavorid=9),
+    'g1.small': dict(memory_mb=5120, vcpus=2, local_gb=225, cpu_arch='x86_64', gpu_arch='fermi', gcpus=448, flavorid=7),
+    'g1.medium': dict(memory_mb=10240, vcpus=4, local_gb=450, cpu_arch='x86_64', gpu_arch='fermi', gcpus=448, flavorid=8),
+    'g1.large': dict(memory_mb=20480, vcpus=8, local_gb=900,  cpu_arch='x86_64', gpu_arch='fermi', gcpus=448, flavorid=9),
     # Shared-memory (SGI UV)
-    'sh1.large': dict(memory_mb=65024, vcpus=16, local_gb=62, flavorid=10),
-    'sh1.xlarge': dict(memory_mb=130048, vcpus=32, local_gb=125, flavorid=11),
-    'sh1.2xlarge': dict(memory_mb=260096, vcpus=64, local_gb=250, flavorid=12),
-    'sh1.4xlarge': dict(memory_mb=520192, vcpus=128, local_gb=500, flavorid=13)
+    'sh1.large': dict(memory_mb=65024, vcpus=16, local_gb=62,  cpu_arch='x86_64', flavorid=10),
+    'sh1.xlarge': dict(memory_mb=130048, vcpus=32, local_gb=125,  cpu_arch='x86_64', flavorid=11),
+    'sh1.2xlarge': dict(memory_mb=260096, vcpus=64, local_gb=250,  cpu_arch='x86_64', flavorid=12),
+    'sh1.4xlarge': dict(memory_mb=520192, vcpus=128, local_gb=500,  cpu_arch='x86_64', flavorid=13)
     }
 
 

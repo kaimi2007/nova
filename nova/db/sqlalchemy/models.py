@@ -111,8 +111,14 @@ class Service(BASE, NovaBase):
     report_count = Column(Integer, nullable=False, default=0)
     disabled = Column(Boolean, default=False)
     availability_zone = Column(String(255), default='nova')
-    arch = Column(String(255), default='x86_64')  
 
+class ComputeService(BASE, NovaBase):
+    """Represents additional information about running compute services on a host."""
+
+    __tablename__ = 'compute_services'
+    id = Column(Integer, ForeignKey('services.id'))
+    cpu_arch = Column(String(255), default='x86_64')
+    
 
 class Certificate(BASE, NovaBase):
     """Represents a an x509 certificate"""
@@ -547,7 +553,7 @@ def register_models():
     connection is lost and needs to be reestablished.
     """
     from sqlalchemy import create_engine
-    models = (Service, Instance, InstanceActions,
+    models = (Service, ComputeService, Instance, InstanceActions,
               Volume, ExportDevice, IscsiTarget, FixedIp, FloatingIp,
               Network, SecurityGroup, SecurityGroupIngressRule,
               SecurityGroupInstanceAssociation, AuthToken, User,

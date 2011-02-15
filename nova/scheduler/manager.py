@@ -55,7 +55,7 @@ class SchedulerManager(manager.Manager):
         Falls back to schedule(context, topic) if method doesn't exist.
         """
 #        LOG.debug(_("####\tRLK - driver - %(driver)s. method - %(method)s. topic - %(topic)s. args - %(args)s, kwargs - %(kwargs)s."), {'driver':self.driver, 'method':method, 'topic':topic, 'args':args, 'kwargs':kwargs})
-        LOG.debug(_("##\tRLK - kwargs.get('arch') - %s"), kwargs.get('arch'))
+#        LOG.debug(_("##\tRLK - kwargs.get('arch') - %s"), kwargs.get('arch'))
         driver_method = 'schedule_%s' % method
         elevated = context.elevated()
         try:

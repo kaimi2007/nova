@@ -50,7 +50,7 @@ def db_version():
                           'key_pairs', 'networks', 'projects', 'quotas',
                           'security_group_instance_association',
                           'security_group_rules', 'security_groups',
-                          'services',
+                          'services', 'compute_services',
                           'users', 'user_project_association',
                           'user_project_role_association',
                           'user_role_association',
