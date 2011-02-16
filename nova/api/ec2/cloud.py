@@ -158,6 +158,8 @@ class CloudController(object):
         hostname = instance_ref['hostname']
         host = instance_ref['host']
         availability_zone = self._get_availability_zone_by_host(ctxt, host)
+        #RLK
+        arch = self._get_arch_by_host(ctxt, host)
         floating_ip = db.instance_get_floating_address(ctxt,
                                                        instance_ref['id'])
         ec2_id = id_to_ec2_id(instance_ref['id'])
