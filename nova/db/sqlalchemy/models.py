@@ -116,9 +116,14 @@ class ComputeService(BASE, NovaBase):
     """Represents additional information about running compute services on a host."""
 
     __tablename__ = 'compute_services'
-    id = Column(Integer, ForeignKey('services.id'))
-    cpu_arch = Column(String(255), default='x86_64')
-    
+    id = Column(Integer, primary_key=True) # foreign key services.id
+    memory_mb = Column(Integer, nullable=False) # total physical memory for instances
+    local_gb =  Column(Integer, nullable=False) # total physical disk for instances
+    vcpus = Column(Integer, nullable=False) # number of cores for instances
+    cpu_arch  = Column(String(255), default='x86_64') # host processor architecture
+    cpu_extended = Column(String(255), default='') # host extended processor information (geometry, capabilities)
+    gpu_arch  = Column(String(255), default=''); # gpu architecture
+    gcpus = Column(Integer, default=0) # number of gpu cores
 
 class Certificate(BASE, NovaBase):
     """Represents a an x509 certificate"""
@@ -177,6 +182,10 @@ class Instance(BASE, NovaBase):
     host = Column(String(255))  # , ForeignKey('hosts.id'))
 
     instance_type = Column(String(255))
+    cpu_arch  = Column(String(255), default='x86_64') # instance processor architecture
+    cpu_extended = Column(String(255), default='') # extended processor information (geometry, capabilities)
+    gpu_arch  = Column(String(255), default=''); # instance gpu architecture
+    gcpus = Column(Integer, default=0) # instance number of gpu cores
 
     user_data = Column(Text)
 
@@ -188,9 +197,6 @@ class Instance(BASE, NovaBase):
     terminated_at = Column(DateTime)
 
     availability_zone = Column(String(255))
-
-    #RLK
-    arch = Column(String(255))
 
     # User editable field for display in user-facing UIs
     display_name = Column(String(255))

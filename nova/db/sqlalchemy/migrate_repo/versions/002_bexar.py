@@ -151,6 +151,14 @@ iscsi_targets = Table('iscsi_targets', meta,
                nullable=True),
         )
 
+compute_services = Table('compute_services', meta, 
+                         Column('memory_mb', Integer()),
+                         Column('local_gb', Integer()),
+                         Column('vcpus', Integer()),
+                         Column('cpu_arch', String(255)),
+                         Column('cpu_extended', String(255)),
+                         Column('gpu_arch', String(255)),
+                         Column('gcpus', Integer()))
 
 #
 # Tables to alter
@@ -183,12 +191,6 @@ instances_availability_zone = Column(
         String(length=255, convert_unicode=False, assert_unicode=None,
                unicode_error=None, _warn_on_bytestring=False))
 
-
-instances_arch = Column(
-        'arch',
-        String(length=255, convert_unicode=False, assert_unicode=None,
-               unicode_error=None, _warn_on_bytestring=False))
-
 instances_locked = Column('locked',
                 Boolean(create_constraint=True, name=None))
 
@@ -209,18 +211,17 @@ services_availability_zone = Column(
         String(length=255, convert_unicode=False, assert_unicode=None,
                unicode_error=None, _warn_on_bytestring=False))
 
+instances_cpu_arch = Column('cpu_arch', String(255))
+instances_cpu_extended = Column('cpu_extended', String(255))
+instances_gpu_arch = Column('gpu_arch', String(255))
+instances_gcpus = Column('gcpus', Integer())
 
-services_arch = Column(
-        'arch',
-        String(length=255, convert_unicode=False, assert_unicode=None,
-               unicode_error=None, _warn_on_bytestring=False))
 
 def upgrade(migrate_engine):
     # Upgrade operations go here. Don't create your own engine;
     # bind migrate_engine to your metadata
     meta.bind = migrate_engine
-    for table in (certificates, consoles, console_pools, instance_actions,
-                  iscsi_targets):
+    for table in (certificates, consoles, console_pools, instance_actions, compute_services, iscsi_targets):
         try:
             table.create()
         except Exception:
@@ -234,10 +235,12 @@ def upgrade(migrate_engine):
                                             unicode_error=None,
                                             _warn_on_bytestring=False))
 
+    instances.create_column(instances_cpu_arch)
+    instances.create_column(instances_cpu_extended)
+    instances.create_column(instances_gpu_arch)
+    instances.create_column(instances_gcpus)
     instances.create_column(instances_availability_zone)
-    instances.create_column(instances_arch)
     instances.create_column(instances_locked)
     networks.create_column(networks_cidr_v6)
     networks.create_column(networks_ra_server)
     services.create_column(services_availability_zone)
-    services.create_column(services_arch)

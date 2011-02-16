@@ -118,33 +118,35 @@ class API(base.Base):
                 self.image_service.show(context, kernel_id)
             if ramdisk_id:
                 self.image_service.show(context, ramdisk_id)
-            if arch is None:
-                image_arch = image.get('architecture', None)
-                logging.debug("RLK - image_arch %s", image_arch)
-            logging.debug("RLK - instance_type %s", instance_type)
+
+            # if arch is None:
+            #     image_arch = image.get('architecture', None)
+            #     logging.debug("RLK - image_arch %s", image_arch)
+
+            # logging.debug("RLK - instance_type %s", instance_type)
 #RLK - check image_arch w/ instance type arch here!
-            (instance_arch, instance_size) = instance_type.split('.')
-            logging.debug("RLK - instance_arch %s", instance_arch)
-            image_name = image.get('imageId', None)
-            if (instance_arch == 'm1' and image_arch != 'x86_64'):
-                image_arch = 'x86_64'
+            # (instance_arch, instance_size) = instance_type.split('.')
+            # logging.debug("RLK - instance_arch %s", instance_arch)
+            # image_name = image.get('imageId', None)
+            # if (instance_arch == 'm1' and image_arch != 'x86_64'):
+            #     image_arch = 'x86_64'
 # BFS force for test
 #                raise exception.Error(_("InstanceType %(type)s can't launch \
 #                        image %(name)s with an architecture of %(arch)s")
 #                        % {'type':instance_type, 'name':image_name, 'arch':image_arch})
-            elif (instance_arch == 'tp' and image_arch != 'tilera'):
-                raise exception.Error(_("InstanceType %(type)s can't launch \
-                        image %(name)s with an architecture of %(arch)s")
-                        % {'type':instance_type, 'name':image_name, 'arch':image_arch})
-            elif (instance_arch == 'g1' and image_arch != 'gpu'):
+            # elif (instance_arch == 'tp' and image_arch != 'tilera'):
+            #     raise exception.Error(_("InstanceType %(type)s can't launch \
+            #             image %(name)s with an architecture of %(arch)s")
+            #             % {'type':instance_type, 'name':image_name, 'arch':image_arch})
+            # elif (instance_arch == 'g1' and image_arch != 'gpu'):
 
-                raise exception.Error(_("InstanceType %(type)s can't launch \
-                        image %(name)s with an architecture of %(arch)s")
-                        % {'type':instance_type, 'name':image_name, 'arch':image_arch})
-            elif (instance_arch == 'sh1' and image_arch != 'uv'):
-                raise exception.Error(_("InstanceType %(type)s can't launch \
-                        image %(name)s with an architecture of %(arch)s")
-                        % {'type':instance_type, 'name':image_name, 'arch':image_arch})
+            #     raise exception.Error(_("InstanceType %(type)s can't launch \
+            #             image %(name)s with an architecture of %(arch)s")
+            #             % {'type':instance_type, 'name':image_name, 'arch':image_arch})
+            # elif (instance_arch == 'sh1' and image_arch != 'uv'):
+            #     raise exception.Error(_("InstanceType %(type)s can't launch \
+            #             image %(name)s with an architecture of %(arch)s")
+            #             % {'type':instance_type, 'name':image_name, 'arch':image_arch})
 
 
         if security_group is None:
@@ -177,15 +179,18 @@ class API(base.Base):
             'memory_mb': type_data['memory_mb'],
             'vcpus': type_data['vcpus'],
             'local_gb': type_data['local_gb'],
+            'cpu_arch' : type_data.get('cpu_arch'),
+            'cpu_extended' : type_data.get('cpu_extended'),
+            'gpu_arch' : type_data.get('gpu_arch'),
+            'gcpus': type_data.get('gcpus'),
             'display_name': display_name,
             'display_description': display_description,
             'user_data': user_data or '',
             'key_name': key_name,
             'key_data': key_data,
             'locked': False,
-            'availability_zone': availability_zone,
-            'arch': image_arch}
-#RLK
+            'availability_zone': availability_zone}
+
         elevated = context.elevated()
         instances = []
         LOG.debug(_("Going to run %s instances..."), num_instances)
@@ -222,8 +227,7 @@ class API(base.Base):
                      {"method": "run_instance",
                       "args": {"topic": FLAGS.compute_topic,
                                "instance_id": instance_id,
-                               "availability_zone": availability_zone,
-                               "arch": image_arch}})
+                               "availability_zone": availability_zone}})
 
         for group_id in security_groups:
             self.trigger_security_group_members_refresh(elevated, group_id)

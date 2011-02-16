@@ -120,7 +120,7 @@ class Service(object):
                                          'binary': self.binary,
                                          'topic': self.topic,
                                          'report_count': 0,
-                                         'availability_zone': zone)
+                                         'availability_zone': zone})
         self.service_id = service_ref['id']
 
     def __getattr__(self, key):
