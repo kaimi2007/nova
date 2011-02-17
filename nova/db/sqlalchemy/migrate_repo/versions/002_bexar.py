@@ -151,7 +151,7 @@ iscsi_targets = Table('iscsi_targets', meta,
                nullable=True),
         )
 
-compute_services = Table('compute_services', meta, 
+compute_services = Table('compute_services', meta,
                          Column('memory_mb', Integer()),
                          Column('local_gb', Integer()),
                          Column('vcpus', Integer()),
@@ -222,8 +222,8 @@ def upgrade(migrate_engine):
     # bind migrate_engine to your metadata
     meta.bind = migrate_engine
 
-    tables = [certificates, console_pools, consoles, instance_actions, compute_services,
-              iscsi_targets]
+    tables = [certificates, console_pools, consoles, instance_actions, 
+              compute_services, iscsi_targets]
 
     for table in tables:
         try:

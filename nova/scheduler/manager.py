@@ -35,7 +35,7 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string('scheduler_driver',
                     'nova.scheduler.arch.ArchitectureScheduler',
                     'Driver to use for the scheduler')
-#                    'nova.scheduler.chance.ChanceScheduler',
+
 
 class SchedulerManager(manager.Manager):
     """Chooses a host to run instances on."""
@@ -51,11 +51,8 @@ class SchedulerManager(manager.Manager):
 
     def _schedule(self, method, context, topic, *args, **kwargs):
         """Tries to call schedule_* method on the driver to retrieve host.
-
         Falls back to schedule(context, topic) if method doesn't exist.
         """
-        LOG.debug(_("####\tRLK - driver - %(driver)s. method - %(method)s. topic - %(topic)s. args - %(args)s, kwargs - %(kwargs)s.") % {'driver':self.driver, 'method':method, 'topic':topic, 'args':args, 'kwargs':kwargs})
-        LOG.debug(_("##\tRLK - kwargs.get('arch') - %s") % kwargs.get('arch'))
         driver_method = 'schedule_%s' % method
         elevated = context.elevated()
         try:

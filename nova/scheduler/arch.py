@@ -60,5 +60,5 @@ class ArchitectureScheduler(driver.Scheduler):
             raise driver.NoValidHost(_("No hosts found with arch %s"
                 % arch))
         LOG.debug(_("##\tRLK - host(s) %(hosts)s available for arch %(arch)s"), 
-                {'hosts':hosts, 'arch':arch})
+                {'hosts': hosts, 'arch': arch})
         return hosts[int(random.random() * len(hosts))]

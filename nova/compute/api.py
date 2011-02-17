@@ -119,36 +119,6 @@ class API(base.Base):
             if ramdisk_id:
                 self.image_service.show(context, ramdisk_id)
 
-            # if arch is None:
-            #     image_arch = image.get('architecture', None)
-            #     logging.debug("RLK - image_arch %s", image_arch)
-
-            # logging.debug("RLK - instance_type %s", instance_type)
-#RLK - check image_arch w/ instance type arch here!
-            # (instance_arch, instance_size) = instance_type.split('.')
-            # logging.debug("RLK - instance_arch %s", instance_arch)
-            # image_name = image.get('imageId', None)
-            # if (instance_arch == 'm1' and image_arch != 'x86_64'):
-            #     image_arch = 'x86_64'
-# BFS force for test
-#                raise exception.Error(_("InstanceType %(type)s can't launch \
-#                        image %(name)s with an architecture of %(arch)s")
-#                        % {'type':instance_type, 'name':image_name, 'arch':image_arch})
-            # elif (instance_arch == 'tp' and image_arch != 'tilera'):
-            #     raise exception.Error(_("InstanceType %(type)s can't launch \
-            #             image %(name)s with an architecture of %(arch)s")
-            #             % {'type':instance_type, 'name':image_name, 'arch':image_arch})
-            # elif (instance_arch == 'g1' and image_arch != 'gpu'):
-
-            #     raise exception.Error(_("InstanceType %(type)s can't launch \
-            #             image %(name)s with an architecture of %(arch)s")
-            #             % {'type':instance_type, 'name':image_name, 'arch':image_arch})
-            # elif (instance_arch == 'sh1' and image_arch != 'uv'):
-            #     raise exception.Error(_("InstanceType %(type)s can't launch \
-            #             image %(name)s with an architecture of %(arch)s")
-            #             % {'type':instance_type, 'name':image_name, 'arch':image_arch})
-
-
         if security_group is None:
             security_group = ['default']
         if not type(security_group) is list:
@@ -179,9 +149,9 @@ class API(base.Base):
             'memory_mb': type_data['memory_mb'],
             'vcpus': type_data['vcpus'],
             'local_gb': type_data['local_gb'],
-            'cpu_arch' : type_data.get('cpu_arch'),
-            'cpu_extended' : type_data.get('cpu_extended'),
-            'gpu_arch' : type_data.get('gpu_arch'),
+            'cpu_arch': type_data.get('cpu_arch'),
+            'cpu_extended': type_data.get('cpu_extended'),
+            'gpu_arch': type_data.get('gpu_arch'),
             'gcpus': type_data.get('gcpus'),
             'display_name': display_name,
             'display_description': display_description,

@@ -792,7 +792,7 @@ class CloudController(object):
         LOG.audit(_("Disassociate address %s"), public_ip, context=context)
         self.network_api.disassociate_floating_ip(context, public_ip)
         return {'disassociateResponse': ["Address disassociated."]}
-#RLK
+
     def run_instances(self, context, **kwargs):
         max_count = int(kwargs.get('max_count', 1))
         instances = self.compute_api.create(context,
@@ -810,8 +810,6 @@ class CloudController(object):
             security_group=kwargs.get('security_group'),
             availability_zone=kwargs.get('placement', {}).get(
                                   'AvailabilityZone'))
-#            arch=kwargs.get('arch', {}).get(
-#                                  'arch'))
         return self._format_run_instances(context,
                                           instances[0]['reservation_id'])
 
