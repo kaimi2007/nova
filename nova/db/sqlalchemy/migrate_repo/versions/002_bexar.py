@@ -158,7 +158,8 @@ compute_services = Table('compute_services', meta,
                          Column('cpu_arch', String(255)),
                          Column('cpu_extended', String(255)),
                          Column('gpu_arch', String(255)),
-                         Column('gcpus', Integer()))
+                         Column('gcpus', Integer()),
+                         Column('net_mbps', Integer()))
 
 #
 # Tables to alter
@@ -215,6 +216,7 @@ instances_cpu_arch = Column('cpu_arch', String(255))
 instances_cpu_extended = Column('cpu_extended', String(255))
 instances_gpu_arch = Column('gpu_arch', String(255))
 instances_gcpus = Column('gcpus', Integer())
+instances_net_mbps = Column('net_mbps', Integer())
 
 
 def upgrade(migrate_engine):
@@ -222,7 +224,7 @@ def upgrade(migrate_engine):
     # bind migrate_engine to your metadata
     meta.bind = migrate_engine
 
-    tables = [certificates, console_pools, consoles, instance_actions, 
+    tables = [certificates, console_pools, consoles, instance_actions,
               compute_services, iscsi_targets]
 
     for table in tables:
@@ -244,6 +246,7 @@ def upgrade(migrate_engine):
     instances.create_column(instances_cpu_extended)
     instances.create_column(instances_gpu_arch)
     instances.create_column(instances_gcpus)
+    instances.create_column(instances_net_mbps)
     instances.create_column(instances_availability_zone)
     instances.create_column(instances_locked)
     networks.create_column(networks_cidr_v6)

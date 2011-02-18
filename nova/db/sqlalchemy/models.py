@@ -117,15 +117,15 @@ class ComputeService(BASE, NovaBase):
     """Represents additional information about compute services."""
 
     __tablename__ = 'compute_services'
-    id = Column(Integer, primary_key=True) 
+    id = Column(Integer, primary_key=True)
     memory_mb = Column(Integer)
-    local_gb =  Column(Integer)
+    local_gb = Column(Integer)
     vcpus = Column(Integer)
-    cpu_arch  = Column(String(255), default='x86_64')
+    cpu_arch = Column(String(255), default='x86_64')
     cpu_extended = Column(String(255), default='')
-    gpu_arch  = Column(String(255), default='')
+    gpu_arch = Column(String(255), default='')
     gcpus = Column(Integer, default=0)
-
+    net_mbps = Column(Integer, default=0)
 
 class Certificate(BASE, NovaBase):
     """Represents a an x509 certificate"""
@@ -188,6 +188,7 @@ class Instance(BASE, NovaBase):
     cpu_extended = Column(String(255), default='')
     gpu_arch = Column(String(255), default='')
     gcpus = Column(Integer, default=0)
+    net_mbps = Column(Integer, default=0)
 
     user_data = Column(Text)
 

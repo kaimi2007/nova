@@ -153,6 +153,7 @@ class API(base.Base):
             'cpu_extended': type_data.get('cpu_extended'),
             'gpu_arch': type_data.get('gpu_arch'),
             'gcpus': type_data.get('gcpus'),
+            'net_mbps': type_data.get('net_mbps'),
             'display_name': display_name,
             'display_description': display_description,
             'user_data': user_data or '',
