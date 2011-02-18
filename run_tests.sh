@@ -71,5 +71,9 @@ then
   fi
 fi
 
-# We don't run pep8 checks on hpc-trunk
-run_tests
+if [ -z "$noseargs" ];
+then
+  run_tests && pep8 --repeat --show-pep8 --show-source --exclude=vcsversion.py bin/* nova setup.py || exit 1
+else
+  run_tests
+fi
