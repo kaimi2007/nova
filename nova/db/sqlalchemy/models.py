@@ -117,7 +117,7 @@ class ComputeService(BASE, NovaBase):
     """Represents additional information about compute services."""
 
     __tablename__ = 'compute_services'
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True)  # FK service.id
     memory_mb = Column(Integer)
     local_gb = Column(Integer)
     vcpus = Column(Integer)

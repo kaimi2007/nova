@@ -36,18 +36,20 @@ INSTANCE_TYPES = {
                      cpu_arch='x86_64', flavorid=4),
     'm1.xlarge': dict(memory_mb=16384, vcpus=8, local_gb=160,
                       cpu_arch='x86_64', flavorid=5),
+
      # Tilera
     'tp.8x8': dict(memory_mb=16384, vcpus=64, local_gb=500,
                    cpu_arch='tilera', flavorid=6),
+
      # x86+GPU
     'g1.small': dict(memory_mb=5120, vcpus=2, local_gb=225,
-                     cpu_arch='x86_64', gpu_arch='fermi', gcpus=448,
+                     cpu_arch='x86_64', gpu_arch='fermi', gcpus=1,
                      net_mbps=1000, flavorid=7),
     'g1.medium': dict(memory_mb=10240, vcpus=4, local_gb=450,
-                      cpu_arch='x86_64', gpu_arch='fermi', gcpus=448,
+                      cpu_arch='x86_64', gpu_arch='fermi', gcpus=2,
                       net_mbps=5000, flavorid=8),
     'g1.large': dict(memory_mb=20480, vcpus=8, local_gb=900,
-                     cpu_arch='x86_64', gpu_arch='fermi', gcpus=448,
+                     cpu_arch='x86_64', gpu_arch='fermi', gcpus=2,
                      net_mbps=10000, flavorid=9),
 
     # Shared-memory (SGI UV)
