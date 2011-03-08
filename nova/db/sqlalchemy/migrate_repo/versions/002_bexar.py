@@ -151,15 +151,6 @@ iscsi_targets = Table('iscsi_targets', meta,
                nullable=True),
         )
 
-compute_services = Table('compute_services', meta,
-                         Column('memory_mb', Integer()),
-                         Column('local_gb', Integer()),
-                         Column('vcpus', Integer()),
-                         Column('cpu_arch', String(255)),
-                         Column('cpu_extended', String(255)),
-                         Column('gpu_arch', String(255)),
-                         Column('gcpus', Integer()),
-                         Column('net_mbps', Integer()))
 
 #
 # Tables to alter
@@ -192,6 +183,7 @@ instances_availability_zone = Column(
         String(length=255, convert_unicode=False, assert_unicode=None,
                unicode_error=None, _warn_on_bytestring=False))
 
+
 instances_locked = Column('locked',
                 Boolean(create_constraint=True, name=None))
 
@@ -212,12 +204,6 @@ services_availability_zone = Column(
         String(length=255, convert_unicode=False, assert_unicode=None,
                unicode_error=None, _warn_on_bytestring=False))
 
-instances_cpu_arch = Column('cpu_arch', String(255))
-instances_cpu_extended = Column('cpu_extended', String(255))
-instances_gpu_arch = Column('gpu_arch', String(255))
-instances_gcpus = Column('gcpus', Integer())
-instances_net_mbps = Column('net_mbps', Integer())
-
 
 def upgrade(migrate_engine):
     # Upgrade operations go here. Don't create your own engine;
@@ -225,8 +211,7 @@ def upgrade(migrate_engine):
     meta.bind = migrate_engine
 
     tables = [certificates, console_pools, consoles, instance_actions,
-              compute_services, iscsi_targets]
-
+              iscsi_targets]
     for table in tables:
         try:
             table.create()
@@ -242,11 +227,6 @@ def upgrade(migrate_engine):
                                             unicode_error=None,
                                             _warn_on_bytestring=False))
 
-    instances.create_column(instances_cpu_arch)
-    instances.create_column(instances_cpu_extended)
-    instances.create_column(instances_gpu_arch)
-    instances.create_column(instances_gcpus)
-    instances.create_column(instances_net_mbps)
     instances.create_column(instances_availability_zone)
     instances.create_column(instances_locked)
     networks.create_column(networks_cidr_v6)

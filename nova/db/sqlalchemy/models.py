@@ -114,17 +114,44 @@ class Service(BASE, NovaBase):
 
 
 class ComputeService(BASE, NovaBase):
-    """Represents additional information about compute services."""
+    """Represents a running compute service on a host."""
 
     __tablename__ = 'compute_services'
-    id = Column(Integer, primary_key=True)  # FK service.id
-    memory_mb = Column(Integer)
-    local_gb = Column(Integer)
-    vcpus = Column(Integer)
+    id = Column(Integer, primary_key=True)
+    service_id = Column(Integer, ForeignKey('services.id'), nullable=True)
+    service = relationship(Service,
+                           backref=backref('compute_service'),
+                           foreign_keys=service_id,
+                           primaryjoin='and_('
+                                'ComputeService.service_id == Service.id,'
+                                'ComputeService.deleted == False)')
+
+    vcpus = Column(Integer, nullable=True)
+    memory_mb = Column(Integer, nullable=True)
+    local_gb = Column(Integer, nullable=True)
+    vcpus_used = Column(Integer, nullable=True)
+    memory_mb_used = Column(Integer, nullable=True)
+    local_gb_used = Column(Integer, nullable=True)
+    hypervisor_type = Column(Text, nullable=True)
+    hypervisor_version = Column(Integer, nullable=True)
+
+    # Note(masumotok): Expected Strings example:
+    #
+    # '{"arch":"x86_64",
+    #   "model":"Nehalem",
+    #   "topology":{"sockets":1, "threads":2, "cores":3},
+    #   "features":["tdtscp", "xtpr"]}'
+    #
+    # Points are "json translatable" and it must have all dictionary keys
+    # above, since it is copied from <cpu> tag of getCapabilities()
+    # (See libvirt.virtConnection).
+    cpu_info = Column(Text, nullable=True)
     cpu_arch = Column(String(255), default='x86_64')
-    cpu_extended = Column(String(255), default='')
-    gpu_arch = Column(String(255), default='')
-    gcpus = Column(Integer, default=0)
+    xpu_arch = Column(String(255), default='')
+    xpu_info = Column(String(255), default='')
+    xpus = Column(Integer, default=0)
+    net_arch = Column(String(255), default='')
+    net_info = Column(String(255), default='')
     net_mbps = Column(Integer, default=0)
 
 
@@ -191,9 +218,12 @@ class Instance(BASE, NovaBase):
 
     instance_type = Column(String(255))
     cpu_arch = Column(String(255), default='x86_64')
-    cpu_extended = Column(String(255), default='')
-    gpu_arch = Column(String(255), default='')
-    gcpus = Column(Integer, default=0)
+    cpu_info = Column(String(255), default='')
+    xpu_arch = Column(String(255), default='')
+    xpu_info = Column(String(255), default='')
+    xpus = Column(Integer, default=0)
+    net_arch = Column(String(255), default='')
+    net_info = Column(String(255), default='')
     net_mbps = Column(Integer, default=0)
 
     user_data = Column(Text)
@@ -247,6 +277,14 @@ class InstanceTypes(BASE, NovaBase):
     swap = Column(Integer, nullable=False, default=0)
     rxtx_quota = Column(Integer, nullable=False, default=0)
     rxtx_cap = Column(Integer, nullable=False, default=0)
+    cpu_arch = Column(String(255), default='x86_64')
+    cpu_info = Column(String(255), default='')
+    xpu_arch = Column(String(255), default='')
+    xpu_info = Column(String(255), default='')
+    xpus = Column(Integer, default=0)
+    net_arch = Column(String(255), default='')
+    net_info = Column(String(255), default='')
+    net_mbps = Column(Integer, default=0)
 
 
 class Volume(BASE, NovaBase):
