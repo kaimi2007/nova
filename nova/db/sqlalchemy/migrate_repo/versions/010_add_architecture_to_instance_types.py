@@ -29,7 +29,9 @@ meta = MetaData()
 # actual definitions of instances or services.
 #
 instance_types = Table('instance_types', meta,
-        Column('id', Integer(),  primary_key=True, nullable=False))
+                       Column('id', Integer(),
+                              primary_key=True, nullable=False),
+                       )
 
 #
 # New Tables
@@ -45,14 +47,52 @@ instance_types = Table('instance_types', meta,
 # Columns to add to existing tables
 #
 
-instance_types_cpu_arch = Column(String(255), default='x86_64')
-instance_types_cpu_info = Column(String(255), default='')
-instance_types_xpu_arch = Column(String(255), default='')
-instance_types_xpu_info = Column(String(255), default='')
-instance_types_xpus = Column(Integer, nullable=false, default=0)
-instance_types_net_arch = Column(String(255), default='')
-instance_types_net_info = Column(String(255), default='')
-instance_types_net_mbps = Column(Integer, nullable=false, default=0)
+instance_types_cpu_arch = Column('cpu_arch',
+                                 String(length=255,
+                                        convert_unicode=False,
+                                        assert_unicode=None,
+                                        unicode_error=None,
+                                        _warn_on_bytestring=False))
+
+instance_types_cpu_info = Column('cpu_info',
+                                 String(length=255,
+                                        convert_unicode=False,
+                                        assert_unicode=None,
+                                        unicode_error=None,
+                                        _warn_on_bytestring=False))
+
+instance_types_xpu_arch = Column('xpu_arch',
+                                 String(length=255,
+                                        convert_unicode=False,
+                                        assert_unicode=None,
+                                        unicode_error=None,
+                                        _warn_on_bytestring=False))
+
+instance_types_xpu_info = Column('xpu_info',
+                                 String(length=255,
+                                        convert_unicode=False,
+                                        assert_unicode=None,
+                                        unicode_error=None,
+                                        _warn_on_bytestring=False))
+
+instance_types_xpus = Column('xpus', Integer())
+
+instance_types_net_arch = Column('net_arch',
+                                 String(length=255,
+                                        convert_unicode=False,
+                                        assert_unicode=None,
+                                        unicode_error=None,
+                                        _warn_on_bytestring=False))
+
+instance_types_net_info = Column('net_info',
+                                 String(length=255,
+                                        convert_unicode=False,
+                                        assert_unicode=None,
+                                        unicode_error=None,
+                                        _warn_on_bytestring=False))
+
+instance_types_net_mbps = Column('net_mbps', Integer())
+
 
 def upgrade(migrate_engine):
     # Upgrade operations go here. Don't create your own engine;
@@ -68,4 +108,3 @@ def upgrade(migrate_engine):
     instance_types.create_column(instance_types_net_arch)
     instance_types.create_column(instance_types_net_info)
     instance_types.create_column(instance_types_net_mbps)
-
