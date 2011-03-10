@@ -356,6 +356,9 @@ DEFINE_string('host', socket.gethostname(),
 
 DEFINE_string('node_availability_zone', 'nova',
               'availability zone of this node')
-#RLK
-DEFINE_string('compute_arch', 'x86_64',
-              'architecture for instance')
+
+DEFINE_string('zone_name', 'nova', 'name of this zone')
+
+DEFINE_string('zone_capabilities', 'kypervisor:xenserver;os:linux',
+              'Key/Value tags which represent capabilities of this zone')
+
