@@ -198,7 +198,6 @@ class API(base.Base):
                             **base_options)
             instance = self.db.instance_create(context, instance)
             instance_id = instance['id']
-
             elevated = context.elevated()
             if not security_groups:
                 security_groups = []

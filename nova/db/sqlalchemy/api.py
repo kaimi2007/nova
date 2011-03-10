@@ -109,8 +109,6 @@ def require_context(f):
     return wrapper
 
 
-###################
-
 @require_admin_context
 def service_destroy(context, service_id):
     session = get_session()
@@ -199,7 +197,6 @@ def service_get_all_compute_by_host(context, host):
 
 
 @require_admin_context
->>>>>>> MERGE-SOURCE
 def _service_get_all_topic_subquery(context, session, topic, subq, label):
     sort_value = getattr(subq.c, label)
     return session.query(models.Service, func.coalesce(sort_value, 0)).\
