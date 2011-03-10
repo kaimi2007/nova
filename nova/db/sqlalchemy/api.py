@@ -192,13 +192,14 @@ def service_get_all_compute_by_host(context, host):
                   all()
 
     if not result:
-        raise exception.NotFound(_("%s does not exist or not "
-                                   "compute node.") % host)
+        raise exception.NotFound(_("%s does not exist or is not "
+                                   "a compute node.") % host)
 
     return result
 
 
 @require_admin_context
+>>>>>>> MERGE-SOURCE
 def _service_get_all_topic_subquery(context, session, topic, subq, label):
     sort_value = getattr(subq.c, label)
     return session.query(models.Service, func.coalesce(sort_value, 0)).\

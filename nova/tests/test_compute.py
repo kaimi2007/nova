@@ -94,14 +94,14 @@ class ComputeTestCase(test.TestCase):
            Use this when any testcase executed later than test_run_terminate
         """
         vol1 = models.Volume()
-        vol1.__setitem__('id', 1)
+        vol1['id'] = 1
         vol2 = models.Volume()
-        vol2.__setitem__('id', 2)
+        vol2['id'] = 2
         instance_ref = models.Instance()
-        instance_ref.__setitem__('id', 1)
-        instance_ref.__setitem__('volumes', [vol1, vol2])
-        instance_ref.__setitem__('hostname', 'i-00000001')
-        instance_ref.__setitem__('host', 'dummy')
+        instance_ref['id'] = 1
+        instance_ref['volumes'] = [vol1, vol2]
+        instance_ref['hostname'] = 'i-00000001'
+        instance_ref['host'] = 'dummy'
         return instance_ref
 
     def test_create_instance_defaults_display_name(self):
@@ -119,9 +119,9 @@ class ComputeTestCase(test.TestCase):
         """Make sure create associates security groups"""
         group = self._create_group()
         instance_ref = models.Instance()
-        instance_ref.__setitem__('id', 1)
-        instance_ref.__setitem__('volumes', [{'id': 1}, {'id': 2}])
-        instance_ref.__setitem__('hostname', 'i-00000001')
+        instance_ref['id'] = 1
+        instance_ref['volumes'] = [{'id': 1}, {'id': 2}]
+        instance_ref['hostname'] = 'i-00000001'
         return instance_ref
 
     def test_create_instance_defaults_display_name(self):
@@ -395,7 +395,7 @@ class ComputeTestCase(test.TestCase):
     def test_pre_live_migration_instance_has_no_volume(self):
         """Confirm log meg when instance doesn't mount any volumes."""
         i_ref = self._get_dummy_instance()
-        i_ref.__setitem__('volumes', [])
+        i_ref['volumes'] = []
         c = context.get_admin_context()
 
         self._setup_other_managers()
@@ -506,7 +506,7 @@ class ComputeTestCase(test.TestCase):
     def test_live_migration_dest_raises_exception_no_volume(self):
         """Same as above test(input pattern is different) """
         i_ref = self._get_dummy_instance()
-        i_ref.__setitem__('volumes', [])
+        i_ref['volumes'] = []
         c = context.get_admin_context()
         topic = db.queue_get_for(c, FLAGS.compute_topic, i_ref['host'])
 
@@ -531,7 +531,7 @@ class ComputeTestCase(test.TestCase):
     def test_live_migration_works_correctly_no_volume(self):
         """Confirm live_migration() works as expected correctly."""
         i_ref = self._get_dummy_instance()
-        i_ref.__setitem__('volumes', [])
+        i_ref['volumes'] = []
         c = context.get_admin_context()
         topic = db.queue_get_for(c, FLAGS.compute_topic, i_ref['host'])
 

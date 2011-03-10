@@ -211,7 +211,8 @@ class AOEDriver(VolumeDriver):
         self._execute("sudo aoe-discover")
         out, err = self._execute("sudo aoe-stat", check_exit_code=False)
         device_path = 'e%(shelf_id)d.%(blade_id)d' % locals()
-        if 0 <= out.find(device_path):
+
+        if out.find(device_path) >= 0:
             return "/dev/etherd/%s" % device_path
         else:
             return
@@ -236,7 +237,7 @@ class AOEDriver(VolumeDriver):
                 break
         if not exported:
             # Instance will be terminated in this case.
-            desc = _("Cannot confirm exported volume id:%(volume_id)s."
+            desc = _("Cannot confirm exported volume id:%(volume_id)s. "
                      "vblade process for e%(shelf_id)s.%(blade_id)s "
                      "isn't running.") % locals()
             raise exception.ProcessExecutionError(out, _err, cmd=cmd,
