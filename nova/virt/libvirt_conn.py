@@ -1075,7 +1075,16 @@ class LibvirtConnection(object):
                'local_gb_used': self.get_local_gb_used(),
                'hypervisor_type': self.get_hypervisor_type(),
                'hypervisor_version': self.get_hypervisor_version(),
-               'cpu_info': self.get_cpu_info()}
+               'cpu_info': self.get_cpu_info(),
+               #RLK
+               'cpu_arch': FLAGS.cpu_arch,
+               'xpu_arch': FLAGS.xpu_arch, 
+               'xpus': FLAGS.xpus, 
+               'xpu_info': FLAGS.xpu_info,  
+               'net_arch': FLAGS.net_arch, 
+               'net_info': FLAGS.net_info,
+               'net_mbps': FLAGS.net_mbps 
+               }
 
         compute_node_ref = service_ref['compute_node']
         if not compute_node_ref:
