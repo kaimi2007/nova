@@ -1078,12 +1078,12 @@ class LibvirtConnection(object):
                'cpu_info': self.get_cpu_info(),
                #RLK
                'cpu_arch': FLAGS.cpu_arch,
-               'xpu_arch': FLAGS.xpu_arch, 
-               'xpus': FLAGS.xpus, 
-               'xpu_info': FLAGS.xpu_info,  
-               'net_arch': FLAGS.net_arch, 
+               'xpu_arch': FLAGS.xpu_arch,
+               'xpus': FLAGS.xpus,
+               'xpu_info': FLAGS.xpu_info,
+               'net_arch': FLAGS.net_arch,
                'net_info': FLAGS.net_info,
-               'net_mbps': FLAGS.net_mbps 
+               'net_mbps': FLAGS.net_mbps
                }
 
         compute_node_ref = service_ref['compute_node']
