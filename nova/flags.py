@@ -258,7 +258,7 @@ DEFINE_string('my_ip', _get_my_ip(), 'host ip address')
 DEFINE_list('region_list',
             [],
             'list of region=fqdn pairs separated by commas')
-DEFINE_string('connection_type', 'libvirt', 'libvirt, xenapi or fake')
+DEFINE_string('connection_type', 'libvirt', 'libvirt, xenapi, fake, or gpu')
 DEFINE_string('aws_access_key_id', 'admin', 'AWS Access ID')
 DEFINE_string('aws_secret_access_key', 'admin', 'AWS Access Key')
 DEFINE_integer('glance_port', 9292, 'glance port')

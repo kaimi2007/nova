@@ -64,16 +64,15 @@ from nova.compute import instance_types
 from nova.compute import power_state
 from nova.virt import disk
 from nova.virt import images
-from nova.virt import libvirt_flags 
 
 libvirt = None
 libxml2 = None
 Template = None
 
-LOG = logging.getLogger('nova.virt.libvirt_conn')
+LOG = logging.getLogger('nova.virt.libvirt_conn_gpu')
 
 FLAGS = flags.FLAGS
-#flags.DECLARE('live_migration_retry_count', 'nova.compute.manager')
+flags.DECLARE('live_migration_retry_count', 'nova.compute.manager')
 # TODO(vish): These flags should probably go into a shared location
 #flags.DEFINE_string('rescue_image_id', 'ami-rescue', 'Rescue ami image')
 #flags.DEFINE_string('rescue_kernel_id', 'aki-rescue', 'Rescue aki image')
