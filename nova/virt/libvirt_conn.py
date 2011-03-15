@@ -363,19 +363,19 @@ class LibvirtConnection(object):
 
     @exception.wrap_exception
     def pause(self, instance, callback):
-        raise exception.APIError("pause not supported for libvirt.")
+        raise exception.ApiError("pause not supported for libvirt.")
 
     @exception.wrap_exception
     def unpause(self, instance, callback):
-        raise exception.APIError("unpause not supported for libvirt.")
+        raise exception.ApiError("unpause not supported for libvirt.")
 
     @exception.wrap_exception
     def suspend(self, instance, callback):
-        raise exception.APIError("suspend not supported for libvirt")
+        raise exception.ApiError("suspend not supported for libvirt")
 
     @exception.wrap_exception
     def resume(self, instance, callback):
-        raise exception.APIError("resume not supported for libvirt")
+        raise exception.ApiError("resume not supported for libvirt")
 
     @exception.wrap_exception
     def rescue(self, instance, callback=None):
@@ -780,7 +780,7 @@ class LibvirtConnection(object):
                 'cpu_time': cpu_time}
 
     def get_diagnostics(self, instance_name):
-        raise exception.APIError(_("diagnostics are not supported "
+        raise exception.ApiError(_("diagnostics are not supported "
                                    "for libvirt"))
 
     def get_disks(self, instance_name):
@@ -1076,7 +1076,16 @@ class LibvirtConnection(object):
                'local_gb_used': self.get_local_gb_used(),
                'hypervisor_type': self.get_hypervisor_type(),
                'hypervisor_version': self.get_hypervisor_version(),
-               'cpu_info': self.get_cpu_info()}
+               'cpu_info': self.get_cpu_info(),
+               #RLK
+               'cpu_arch': FLAGS.cpu_arch,
+               'xpu_arch': FLAGS.xpu_arch,
+               'xpus': FLAGS.xpus,
+               'xpu_info': FLAGS.xpu_info,
+               'net_arch': FLAGS.net_arch,
+               'net_info': FLAGS.net_info,
+               'net_mbps': FLAGS.net_mbps
+               }
 
         compute_node_ref = service_ref['compute_node']
         if not compute_node_ref:

@@ -67,6 +67,21 @@ flags.DEFINE_string('console_host', socket.gethostname(),
 flags.DEFINE_integer('live_migration_retry_count', 30,
                     ("Retry count needed in live_migration."
                      " sleep 1 sec for each count"))
+#RLK
+flags.DEFINE_string('cpu_arch', 'x86_64',
+                    'Architecture the instance runs on')
+flags.DEFINE_string('xpu_arch', 'fermi',
+                    'Architecture of the accelerator instance runs on')
+flags.DEFINE_string('xpu_info', 'default',
+                    'Accelerator info')
+flags.DEFINE_integer('xpus', 1,
+                    'Number of xpus')
+flags.DEFINE_string('net_arch', 'default',
+                    'Architecture of the network')
+flags.DEFINE_integer('net_mbps', 256,
+                    'Network speed')
+flags.DEFINE_string('net_info', 'default',
+                    'Network info')
 
 LOG = logging.getLogger('nova.compute.manager')
 
