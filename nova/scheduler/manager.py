@@ -34,7 +34,7 @@ from nova.scheduler import zone_manager
 LOG = logging.getLogger('nova.scheduler.manager')
 FLAGS = flags.FLAGS
 flags.DEFINE_string('scheduler_driver',
-                    'nova.scheduler.arch.ArchitectureScheduler',
+                    'nova.scheduler.simple.SimpleScheduler',
                     'Driver to use for the scheduler')
 
 
