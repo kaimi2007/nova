@@ -44,6 +44,10 @@ import random
 import subprocess
 import time
 import uuid
+#JP Walters
+import shlex
+import signal
+#END
 from xml.dom import minidom
 
 
@@ -69,6 +73,7 @@ from nova.virt import libvirt_flags
 libvirt = None
 libxml2 = None
 Template = None
+gvirtus_pids = {}
 
 LOG = logging.getLogger('nova.virt.libvirt_conn_gpu')
 
@@ -172,6 +177,18 @@ class LibvirtConnection(object):
                 return False
             raise
 
+    #JP Walters: poached this from the one defined below that's used
+    #by the ajax term.  I left the ajax term stuff in place to avoid
+    #unwanted side effects
+    def get_pty_for_instance(self, instance_name):
+        virt_dom = self._conn.lookupByName(instance_name)
+        xml = virt_dom.XMLDesc(0)
+        dom = minidom.parseString(xml)
+        for serial in dom.getElementsByTagName('serial'):
+            if serial.getAttribute('type') == 'pty':
+                source = serial.getElementsByTagName('source')[0]
+                return source.getAttribute('path')
+
     def get_uri(self):
         if FLAGS.libvirt_type == 'uml':
             uri = FLAGS.libvirt_uri or 'uml:///system'
@@ -196,6 +213,7 @@ class LibvirtConnection(object):
                 for x in self._conn.listDomainsID()]
 
     def destroy(self, instance, cleanup=True):
+        global gvirtus_pids
         try:
             virt_dom = self._conn.lookupByName(instance['name'])
             virt_dom.destroy()
@@ -206,6 +224,21 @@ class LibvirtConnection(object):
         # We'll save this for when we do shutdown,
         # instead of destroy - but destroy returns immediately
         timer = utils.LoopingCall(f=None)
+
+        print 'Terminating gvirtus'
+        #JP Walters: retrieve the pid from the hash table
+        local_pid = gvirtus_pids[instance['name']]
+        #JP Walters: send that pid (gvirtus) a SIGTERM.
+        #gvirtus has been modified to catch SIGTERM and
+        #shut down gracefully
+        os.kill(local_pid, signal.SIGINT)
+        #JP Walters: this just ensures that we fully clean up the process.
+        #it avoids zombies
+        os.waitpid(local_pid, 0)
+        #JP Walters: remove the instance:pid mapping from the hash table
+        #to keep the hash table size manageable.
+        del gvirtus_pids[instance['name']]
+        print 'gvirtus dead'
 
         while True:
             try:
@@ -297,6 +330,9 @@ class LibvirtConnection(object):
 
     @exception.wrap_exception
     def reboot(self, instance):
+    #JP Walters: we need to re-instantiate gvirtus, so we need
+    #access to the hash table
+        global gvirtus_pids
         self.destroy(instance, False)
         xml = self.to_xml(instance)
         self._conn.createXML(xml, 0)
@@ -316,6 +352,15 @@ class LibvirtConnection(object):
                                       instance['id'],
                                       power_state.SHUTDOWN)
                 timer.stop()
+        #JP Walters: again, find the tty and kick off a gvirtus-backend
+        tty = self.get_pty_for_instance(instance['name'])
+        command_line = '/usr/local/gvirtus/sbin/gvirtus-backend \
+                        /usr/local/gvirtus/etc/gvirtus.properties 0 %s' % (tty)
+
+        args = shlex.split(str(command_line))
+        print args
+        gvirtus_driver = subprocess.Popen(args)
+        gvirtus_pids[instance['name']] = gvirtus_driver.pid
 
         timer.f = _wait_for_reboot
         return timer.start(interval=0.5, now=True)
@@ -374,6 +419,9 @@ class LibvirtConnection(object):
 
     @exception.wrap_exception
     def spawn(self, instance):
+#Added by JP Walters, gvirtus_pids is a hash table
+#that maps instances to gvirtus_pids
+        global gvirtus_pids
         xml = self.to_xml(instance)
         db.instance_set_state(context.get_admin_context(),
                               instance['id'],
@@ -405,6 +453,21 @@ class LibvirtConnection(object):
                 timer.stop()
 
         timer.f = _wait_for_boot
+    #JP Walters: get the tty that's started.  We'll use this
+    #for our initial gvirtus_driver communication.  Note that
+    #this prevents the use of the ajax terminal since we're
+    #borrowing the tty.
+        tty = self.get_pty_for_instance(instance['name'])
+        command_line = '/usr/local/gvirtus/sbin/gvirtus-backend \
+                        /usr/local/gvirtus/etc/gvirtus.properties 0 %s' % (tty)
+
+        args = shlex.split(str(command_line))
+        print args
+    #JP Walters: kick off gvirtus
+        gvirtus_driver = subprocess.Popen(args)
+    #JP Walters: record the pid in the hash table
+        gvirtus_pids[instance['name']] = gvirtus_driver.pid
+
         return timer.start(interval=0.5, now=True)
 
     def _flush_xen_console(self, virsh_output):
@@ -1035,7 +1098,16 @@ class LibvirtConnection(object):
                'local_gb_used': self.get_local_gb_used(),
                'hypervisor_type': self.get_hypervisor_type(),
                'hypervisor_version': self.get_hypervisor_version(),
-               'cpu_info': self.get_cpu_info()}
+               'cpu_info': self.get_cpu_info(),
+               #RLK
+               'cpu_arch': FLAGS.cpu_arch,
+               'xpu_arch': FLAGS.xpu_arch,
+               'xpus': FLAGS.xpus,
+               'xpu_info': FLAGS.xpu_info,
+               'net_arch': FLAGS.net_arch,
+               'net_info': FLAGS.net_info,
+               'net_mbps': FLAGS.net_mbps
+               }
 
         compute_node_ref = service_ref['compute_node']
         if not compute_node_ref:

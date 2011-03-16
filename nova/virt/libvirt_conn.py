@@ -1037,9 +1037,9 @@ class LibvirtConnection(object):
                'cpu_info': self.get_cpu_info(),
                #RLK
                'cpu_arch': FLAGS.cpu_arch,
-               'xpu_arch': FLAGS.xpu_arch,
-               'xpus': FLAGS.xpus,
-               'xpu_info': FLAGS.xpu_info,
+               'xpu_arch': 'None',
+               'xpus': 0,
+               'xpu_info': 'None',
                'net_arch': FLAGS.net_arch,
                'net_info': FLAGS.net_info,
                'net_mbps': FLAGS.net_mbps
