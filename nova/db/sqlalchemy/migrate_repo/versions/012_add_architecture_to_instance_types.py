@@ -109,6 +109,102 @@ instance_types_net_info = Column('net_info',
 instance_types_net_mbps = Column('net_mbps', Integer())
 
 
+
+# Here are our new defaults for Tilera, Nvidia GPU, and SGI UV
+# TODO, I think we shold have flavor autoincrement!
+
+INSTANCE_TYPES = {
+
+    # x86+GPU
+    # TODO: we need to identify machine readable string for xpu arch
+    'cg1.small': dict(memory_mb=2048, vcpus=1, local_gb=20,
+                      flavorid=100,
+                      cpu_arch="x86_64", xpu_arch="fermi", xpus=1),
+    'cg1.medium': dict(memory_mb=4096, vcpus=2, local_gb=40,
+                       flavorid=101,
+                       cpu_arch="x86_64", xpu_arch="fermi", xpus=1),
+    'cg1.large': dict(memory_mb=8192, vcpus=4, local_gb=80,
+                      flavorid=102,
+                      cpu_arch="x86_64", xpu_arch="gpu", xpus=1,
+                      net_mbps=1000),
+    'cg1.xlarge': dict(memory_mb=16384, vcpus=8, local_gb=160,
+                       flavorid=103,
+                       cpu_arch="x86_64", xpu_arch="gpu", xpus=1,
+                       net_mbps=1000),
+    'cg1.2xlarge': dict(memory_mb=16384, vcpus=8, local_gb=320,
+                        flavorid=104,
+                        cpu_arch="x86_64", xpu_arch="gpu", xpus=2,
+                        net_mbps=1000),
+    'cg1.4xlarge': dict(memory_mb=22000, vcpus=8, local_gb=1690,
+                        flavorid=105,
+                        cpu_arch="x86_64", cpu_info='{"model":"Nehalem"}',
+                        xpu_arch="fermi", xpus=2,
+                        xpu_info='{"model":"Tesla 2050", "gcores":"448"}',
+                        net_arch="ethernet", net_mbps=10000),
+    
+    # Shared-memory (SGI UV)
+    'sh1.small': dict(memory_mb=2048, vcpus=1, local_gb=20,
+                      flavorid=200,
+                      cpu_arch="x86_64",
+                      cpu_info='{"model":"UV"}'),
+    'sh1.medium': dict(memory_mb=4096, vcpus=2, local_gb=40,
+                       flavorid=201,
+                       cpu_arch="x86_64",
+                       cpu_info='{"model":"UV"}'),
+    'sh1.large': dict(memory_mb=8192, vcpus=4, local_gb=80,
+                          flavorid=202,
+                      cpu_arch="x86_64",
+                      cpu_info='{"model":"UV"}'),
+    'sh1.xlarge': dict(memory_mb=16384, vcpus=8, local_gb=160,
+                       flavorid=203,
+                           cpu_arch="x86_64",
+                       cpu_info='{"model":"UV"}'),
+    'sh1.2xlarge': dict(memory_mb=32768, vcpus=16, local_gb=320,
+                        flavorid=204,
+                        cpu_arch="x86_64", cpu_info='{"model":"UV"}'),
+    'sh1.4xlarge': dict(memory_mb=65536, vcpus=32, local_gb=320,
+                        flavorid=205,
+                        cpu_arch="x86_64", cpu_info='{"model":"UV"}'),
+    'sh1.8xlarge': dict(memory_mb=131072, vcpus=64, local_gb=500,
+                        flavorid=206,
+                        cpu_arch="x86_64", cpu_info='{"model":"UV"}'),
+    'sh1.16xlarge': dict(memory_mb=262144, vcpus=128, local_gb=500,
+                         flavorid=207,
+                         cpu_arch="x86_64", cpu_info='{"model":"UV"}'),
+    'sh1.32xlarge': dict(memory_mb=524288, vcpus=256, local_gb=1000,
+                         flavorid=208,
+                         cpu_arch="x86_64",
+                         cpu_info='{"model":"UV"}'),
+    
+    # Tilera (reservation is currently whole board)
+    't64.8x8':  dict(memory_mb=16384, vcpus=1, local_gb=500,
+                     flavorid=301,
+                     cpu_arch="tile64",
+                     cpu_info='{"geometry":"8x8"}'),
+    'tp64.8x8': dict(memory_mb=16384, vcpus=1, local_gb=500,
+                     flavorid=302,
+                     cpu_arch="tilepro64",
+                     cpu_info='{"geometry":"8x8"}'),
+    'tgx.4x4':  dict(memory_mb=16384, vcpus=1, local_gb=500,
+                     flavorid=303,
+                     cpu_arch="tile-gx16",
+                     cpu_info='{"geometry":"4x4"}'),
+    'tgx.6x6':  dict(memory_mb=16384, vcpus=1, local_gb=500,
+                     flavorid=304,
+                     cpu_arch="tile-gx36",
+                     cpu_info='{"geometry":"6x6"}'),
+    'tgx.8x8':  dict(memory_mb=16384, vcpus=1, local_gb=500,
+                     flavorid=305,
+                     cpu_arch="tile-gx64",
+                     cpu_info='{"geometry":"8x8"}'),
+    'tgx.10x10':  dict(memory_mb=16384, vcpus=1, local_gb=500,
+                       flavorid=306,
+                       cpu_arch="tile-gx100",
+                       cpu_info='{"geometry":"10x10"}')
+    }
+
+
+
 def upgrade(migrate_engine):
     # Upgrade operations go here. Don't create your own engine;
     # bind migrate_engine to your metadata
@@ -124,103 +220,9 @@ def upgrade(migrate_engine):
     instance_types.create_column(instance_types_net_info)
     instance_types.create_column(instance_types_net_mbps)
 
-    # Here are our new defaults for Tilera, Nvidia GPU, and SGI UV
-    # TODO, I think we shold have flavor autoincrement!
-
-    INSTANCE_TYPES = {
-
-        # x86+GPU
-        # TODO: we need to identify machine readable string for xpu arch
-        'cg1.small': dict(memory_mb=2048, vcpus=1, local_gb=20,
-                          flavorid=100,
-                          cpu_arch="x86_64", xpu_arch="fermi", xpus=1),
-        'cg1.medium': dict(memory_mb=4096, vcpus=2, local_gb=40,
-                           flavorid=101,
-                           cpu_arch="x86_64", xpu_arch="fermi", xpus=1),
-        'cg1.large': dict(memory_mb=8192, vcpus=4, local_gb=80,
-                          flavorid=102,
-                          cpu_arch="x86_64", xpu_arch="gpu", xpus=1,
-                          net_mbps=1000),
-        'cg1.xlarge': dict(memory_mb=16384, vcpus=8, local_gb=160,
-                           flavorid=103,
-                           cpu_arch="x86_64", xpu_arch="gpu", xpus=1,
-                           net_mbps=1000),
-        'cg1.2xlarge': dict(memory_mb=16384, vcpus=8, local_gb=320,
-                            flavorid=104,
-                            cpu_arch="x86_64", xpu_arch="gpu", xpus=2,
-                            net_mbps=1000),
-        'cg1.4xlarge': dict(memory_mb=22000, vcpus=8, local_gb=1690,
-                            flavorid=105,
-                            cpu_arch="x86_64", cpu_info='{"model":"Nehalem"}',
-                            xpu_arch="fermi", xpus=2,
-                            xpu_info='{"model":"Tesla 2050", "gcores":"448"}',
-                            net_arch="ethernet", net_mbps=10000),
-
-        # Shared-memory (SGI UV)
-        'sh1.small': dict(memory_mb=2048, vcpus=1, local_gb=20,
-                          flavorid=200,
-                          cpu_arch="x86_64",
-                          cpu_info='{"model":"UV"}'),
-        'sh1.medium': dict(memory_mb=4096, vcpus=2, local_gb=40,
-                           flavorid=201,
-                          cpu_arch="x86_64",
-                           cpu_info='{"model":"UV"}'),
-        'sh1.large': dict(memory_mb=8192, vcpus=4, local_gb=80,
-                          flavorid=202,
-                          cpu_arch="x86_64",
-                          cpu_info='{"model":"UV"}'),
-        'sh1.xlarge': dict(memory_mb=16384, vcpus=8, local_gb=160,
-                           flavorid=203,
-                           cpu_arch="x86_64",
-                           cpu_info='{"model":"UV"}'),
-        'sh1.2xlarge': dict(memory_mb=32768, vcpus=16, local_gb=320,
-                            flavorid=204,
-                            cpu_arch="x86_64", cpu_info='{"model":"UV"}'),
-        'sh1.4xlarge': dict(memory_mb=65536, vcpus=32, local_gb=320,
-                            flavorid=205,
-                            cpu_arch="x86_64", cpu_info='{"model":"UV"}'),
-        'sh1.8xlarge': dict(memory_mb=131072, vcpus=64, local_gb=500,
-                            flavorid=206,
-                            cpu_arch="x86_64", cpu_info='{"model":"UV"}'),
-        'sh1.16xlarge': dict(memory_mb=262144, vcpus=128, local_gb=500,
-                             flavorid=207,
-                             cpu_arch="x86_64", cpu_info='{"model":"UV"}'),
-        'sh1.32xlarge': dict(memory_mb=524288, vcpus=256, local_gb=1000,
-                             flavorid=208,
-                             cpu_arch="x86_64",
-                             cpu_info='{"model":"UV"}'),
-
-        # Tilera (reservation is currently whole board)
-        't64.8x8':  dict(memory_mb=16384, vcpus=1, local_gb=500,
-                         flavorid=301,
-                         cpu_arch="tile64",
-                         cpu_info='{"geometry":"8x8"}'),
-        'tp64.8x8': dict(memory_mb=16384, vcpus=1, local_gb=500,
-                         flavorid=302,
-                         cpu_arch="tilepro64",
-                         cpu_info='{"geometry":"8x8"}'),
-        'tgx.4x4':  dict(memory_mb=16384, vcpus=1, local_gb=500,
-                         flavorid=303,
-                         cpu_arch="tile-gx16",
-                         cpu_info='{"geometry":"4x4"}'),
-        'tgx.6x6':  dict(memory_mb=16384, vcpus=1, local_gb=500,
-                         flavorid=304,
-                         cpu_arch="tile-gx36",
-                         cpu_info='{"geometry":"6x6"}'),
-        'tgx.8x8':  dict(memory_mb=16384, vcpus=1, local_gb=500,
-                         flavorid=305,
-                         cpu_arch="tile-gx64",
-                         cpu_info='{"geometry":"8x8"}'),
-        'tgx.10x10':  dict(memory_mb=16384, vcpus=1, local_gb=500,
-                           flavorid=306,
-                           cpu_arch="tile-gx100",
-                           cpu_info='{"geometry":"10x10"}')
-        }
     try:
         i = instance_types.insert()
         for name, values in INSTANCE_TYPES.iteritems():
-            # FIXME(kpepple) should we be seeding created_at / updated_at ?
-            # now = datetime.datatime.utcnow()
             i.execute({'name': name,
                        'memory_mb': values["memory_mb"],
                        'vcpus': values["vcpus"],
@@ -240,3 +242,16 @@ def upgrade(migrate_engine):
         logging.info(repr(instance_types))
         logging.exception('Exception while seeding instance_types table')
         raise
+
+
+def downgrade(migrate_engine):
+    meta.bind = migrate_engine
+
+    instances.drop_column('cpu_arch')
+    instances.drop_column('cpu_info')
+    instances.drop_column('xpu_arch')
+    instances.drop_column('xpu_info')
+    instances.drop_column('xpus')
+    instances.drop_column('net_arch')
+    instances.drop_column('net_info')
+    instances.drop_column('net_mbps')
