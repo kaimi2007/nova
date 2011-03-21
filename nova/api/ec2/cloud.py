@@ -971,7 +971,7 @@ class CloudController(object):
             raise exception.NotFound(_('Image %s not found') % image_id)
         internal_id = image['id']
         del(image['id'])
-        raise Exception(image)
+
         image['properties']['is_public'] = (operation_type == 'add')
         return self.image_service.update(context, internal_id, image)
 
