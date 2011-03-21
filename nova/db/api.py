@@ -165,7 +165,7 @@ def compute_node_get(context, compute_id, session=None):
 #RLK
 def compute_node_get_all(context, disabled=False):
     """Get all services."""
-    return IMPL.service_get_all(context, disabled)
+    return IMPL.compute_node_get_all(context, disabled)
 
 def compute_node_get_by_arch(context, cpu_arch, xpu_arch, session=None):
     """Get a computeNode by cpu_arch and xpu_arch
