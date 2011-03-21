@@ -69,17 +69,17 @@ flags.DEFINE_integer('live_migration_retry_count', 30,
 #RLK
 flags.DEFINE_string('cpu_arch', 'x86_64',
                     'Architecture the instance runs on')
-flags.DEFINE_string('xpu_arch', 'fermi',
+flags.DEFINE_string('xpu_arch', '',
                     'Architecture of the accelerator instance runs on')
-flags.DEFINE_string('xpu_info', 'default',
+flags.DEFINE_string('xpu_info', '',
                     'Accelerator info')
 flags.DEFINE_integer('xpus', 1,
                     'Number of xpus')
-flags.DEFINE_string('net_arch', 'default',
+flags.DEFINE_string('net_arch', '',
                     'Architecture of the network')
 flags.DEFINE_integer('net_mbps', 256,
                     'Network speed')
-flags.DEFINE_string('net_info', 'default',
+flags.DEFINE_string('net_info', '',
                     'Network info')
 
 LOG = logging.getLogger('nova.compute.manager')

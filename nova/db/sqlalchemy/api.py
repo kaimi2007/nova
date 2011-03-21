@@ -322,6 +322,63 @@ def compute_node_get(context, compute_id, session=None):
 
     return result
 
+#RLK
+@require_admin_context
+def compute_node_get_all(context, disabled=False):
+    session = get_session()
+    return session.query(models.ComputeNode).\
+                   filter_by(deleted=can_read_deleted(context)).\
+                   all()
+
+@require_admin_context
+def compute_node_get_by_arch(context, cpu_arch, xpu_arch, session=None):
+    if not session:
+        session = get_session()
+
+                     #add if available=True?
+    result = session.query(models.ComputeNode).\
+                     filter_by(cpu_arch=cpu_arch).\
+                     filter_by(xpu_arch=xpu_arch).\
+                     filter_by(deleted=can_read_deleted(context)).\
+                     first()
+
+    if not result:
+        raise exception.NotFound(_('No computeNode for cpu_arch %s') %
+                cpu_arch)
+
+    return result
+@require_admin_context
+
+def compute_node_get_by_cpu_arch(context, cpu_arch, session=None):
+    if not session:
+        session = get_session()
+
+    result = session.query(models.ComputeNode).\
+                     filter_by(cpu_arch=cpu_arch).\
+                     filter_by(deleted=can_read_deleted(context)).\
+                     first()
+
+    if not result:
+        raise exception.NotFound(_('No computeNode for cpu_arch %s') %
+                cpu_arch)
+
+    return result
+
+@require_admin_context
+def compute_node_get_by_xpu_arch(context, xpu_arch, session=None):
+    if not session:
+        session = get_session()
+
+    result = session.query(models.ComputeNode).\
+                     filter_by(xpu_arch=xpu_arch).\
+                     filter_by(deleted=can_read_deleted(context)).\
+                     first()
+
+    if not result:
+        raise exception.NotFound(_('No computeNode for xpu_arch %s') %
+                xpu_arch)
+
+    return result
 
 @require_admin_context
 def compute_node_create(context, values):
@@ -876,6 +933,39 @@ def instance_get_all_by_host(context, host):
                    options(joinedload('security_groups')).\
                    options(joinedload_all('fixed_ip.network')).\
                    filter_by(host=host).\
+                   filter_by(deleted=can_read_deleted(context)).\
+                   all()
+#RLK
+@require_admin_context
+def instance_get_all_by_instance_id(context, instance_id):
+    session = get_session()
+    return session.query(models.Instance).\
+                   options(joinedload_all('fixed_ip.floating_ips')).\
+                   options(joinedload('security_groups')).\
+                   options(joinedload_all('fixed_ip.network')).\
+                   filter_by(id=instance_id).\
+                   filter_by(deleted=can_read_deleted(context)).\
+                   all()
+
+@require_admin_context
+def instance_get_all_by_cpu_arch(context, cpu_arch):
+    session = get_session()
+    return session.query(models.Instance).\
+                   options(joinedload_all('fixed_ip.floating_ips')).\
+                   options(joinedload('security_groups')).\
+                   options(joinedload_all('fixed_ip.network')).\
+                   filter_by(cpu_arch=cpu_arch).\
+                   filter_by(deleted=can_read_deleted(context)).\
+                   all()
+
+@require_admin_context
+def instance_get_all_by_xpu_arch(context, xpu_arch):
+    session = get_session()
+    return session.query(models.Instance).\
+                   options(joinedload_all('fixed_ip.floating_ips')).\
+                   options(joinedload('security_groups')).\
+                   options(joinedload_all('fixed_ip.network')).\
+                   filter_by(xpu_arch=xpu_arch).\
                    filter_by(deleted=can_read_deleted(context)).\
                    all()
 

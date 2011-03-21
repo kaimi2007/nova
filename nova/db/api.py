@@ -162,6 +162,23 @@ def compute_node_get(context, compute_id, session=None):
     """Get an computeNode or raise if it does not exist."""
     return IMPL.compute_node_get(context, compute_id)
 
+#RLK
+def compute_node_get_all(context, disabled=False):
+    """Get all services."""
+    return IMPL.service_get_all(context, disabled)
+
+def compute_node_get_by_arch(context, cpu_arch, xpu_arch, session=None):
+    """Get a computeNode by cpu_arch and xpu_arch
+        or raise if it does not exist."""
+    return IMPL.compute_node_get_by_arch(context, cpu_arch, xpu_arch)
+
+def compute_node_get_by_cpu_arch(context, cpu_arch, session=None):
+    """Get a computeNode or raise if it does not exist."""
+    return IMPL.compute_node_get_by_cpu_arch(context, cpu_arch)
+
+def compute_node_get_by_xpu_arch(context, xpu_arch, session=None):
+    """Get a computeNode or raise if it does not exist."""
+    return IMPL.compute_node_get_by_xpu_arch(context, xpu_arch)
 
 def compute_node_create(context, values):
     """Create a computeNode from the values dictionary."""
@@ -414,6 +431,17 @@ def instance_get_all(context):
     """Get all instances."""
     return IMPL.instance_get_all(context)
 
+def instance_get_all_by_instance_id(context, instance_id):
+    """Get by instance_id."""
+    return IMPL.instance_get_all_by_instance_id(context, instance_id)
+
+def instance_get_all_by_cpu_arch(context, cpu_arch):
+    """Get by cpu_arch."""
+    return IMPL.instance_get_by_cpu_arch(context, cpu_arch)
+
+def instance_get_all_by_xpu_arch(context, xpu_arch):
+    """Get by cpu_arch."""
+    return IMPL.instance_get_by_xpu_arch(context, xpu_arch)
 
 def instance_get_all_by_user(context, user_id):
     """Get all instances."""
