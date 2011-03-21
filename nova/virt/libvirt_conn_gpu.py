@@ -1028,8 +1028,6 @@ class LibvirtConnection(object):
             cpu_info['vendor'] = vendor_nodes[0].getContent()
 
         topology_nodes = xml.xpathEval('//host/cpu/topology')
-
-
         topology = dict()
         if topology_nodes:
             topology_node = topology_nodes[0].get_properties()
@@ -1645,7 +1643,6 @@ class IptablesFirewallDriver(FirewallDriver):
         self.iptables.ipv4['filter'].add_rule('sg-fallback', '-j DROP')
         self.iptables.ipv6['filter'].add_chain('sg-fallback')
         self.iptables.ipv6['filter'].add_rule('sg-fallback', '-j DROP')
-
 
     def setup_basic_filtering(self, instance):
         """Use NWFilter from libvirt for this."""
