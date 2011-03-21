@@ -43,27 +43,38 @@ class ArchitectureScheduler(driver.Scheduler):
         if instance_id is None:
             return self.hosts_up(context, topic)
 
-        instances = db.instance_get_all_by_instance_id(context, instance_id)
-        LOG.debug(_("##\tRLK - instances %s"), instances)
+        instances = db.instance_get_all_by_instance_id(context,
+                                                       instance_id)
+        LOG.debug(_("##\tRLK - instances %s"),
+                  instances)
+
         services = db.service_get_all_by_topic(context, topic)
-        LOG.debug(_("##\tRLK - services %s"), services )
-        LOG.debug(_("##\tRLK - instance.id %s"), instances[0].id)
-        LOG.debug(_("##\tRLK - instance.cpu_arch %s"), instances[0].cpu_arch)
-        LOG.debug(_("##\tRLK - instance.xpu_arch %s"), instances[0].xpu_arch)
-        """Select first compute_node available where cpu_arch and xpu_arch match
-        the instance. extend to selecting compute_node only if it is
+
+        LOG.debug(_("##\tRLK - services %s"),
+                  services)
+        LOG.debug(_("##\tRLK - instance.id %s"),
+                  instances[0].id)
+        LOG.debug(_("##\tRLK - instance.cpu_arch %s"),
+                  instances[0].cpu_arch)
+        LOG.debug(_("##\tRLK - instance.xpu_arch %s"),
+                  instances[0].xpu_arch)
+        """Select first compute_node available where cpu_arch and xpu_arch
+        match the instance. extend to selecting compute_node only if it is
         available.
         """
-        compute_nodes = db.compute_node_get_by_arch(context, instances[0].cpu_arch,
-                instances[0].xpu_arch)
+        compute_nodes = db.compute_node_get_by_arch(context,
+                                                    instances[0].cpu_arch,
+                                                    instances[0].xpu_arch)
         LOG.debug(_("##\tRLK - compute_nodes.service_id %d"),
             compute_nodes.service_id)
-        #LOG.debug(_("##\tRLK - compute_nodes.length %d"), len(compute_nodes))
+        #LOG.debug(_("##\tRLK - compute_nodes.length %d"),
+        # len(compute_nodes))
         #for node in compute_nodes:
         #    LOG.debug(_("##\tRLK - node %s"), node)
-        #compute_node = compute_nodes[int(random.random() * len(compute_nodes))]
+        #compute_node = compute_nodes[int(random.random() *
+        # len(compute_nodes))]
         services = db.service_get_all_by_topic(context, topic)
-        LOG.debug(_("##\tRLK - services %s"), services )
+        LOG.debug(_("##\tRLK - services %s"), services)
         return [service.host
                 for service in services
                 if self.service_is_up(service)

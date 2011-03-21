@@ -109,10 +109,8 @@ instance_types_net_info = Column('net_info',
 instance_types_net_mbps = Column('net_mbps', Integer())
 
 
-
 # Here are our new defaults for Tilera, Nvidia GPU, and SGI UV
-# TODO, I think we shold have flavor autoincrement!
-
+# TODO, I think we should have flavor autoincrement!
 INSTANCE_TYPES = {
 
     # x86+GPU
@@ -141,7 +139,7 @@ INSTANCE_TYPES = {
                         xpu_arch="fermi", xpus=2,
                         xpu_info='{"model":"Tesla 2050", "gcores":"448"}',
                         net_arch="ethernet", net_mbps=10000),
-    
+
     # Shared-memory (SGI UV)
     'sh1.small': dict(memory_mb=2048, vcpus=1, local_gb=20,
                       flavorid=200,
@@ -175,7 +173,7 @@ INSTANCE_TYPES = {
                          flavorid=208,
                          cpu_arch="x86_64",
                          cpu_info='{"model":"UV"}'),
-    
+
     # Tilera (reservation is currently whole board)
     't64.8x8':  dict(memory_mb=16384, vcpus=1, local_gb=500,
                      flavorid=301,
@@ -202,7 +200,6 @@ INSTANCE_TYPES = {
                        cpu_arch="tile-gx100",
                        cpu_info='{"geometry":"10x10"}')
     }
-
 
 
 def upgrade(migrate_engine):

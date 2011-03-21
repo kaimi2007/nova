@@ -112,4 +112,3 @@ def downgrade(migrate_engine):
     compute_nodes.drop_column('net_arch')
     compute_nodes.drop_column('net_info')
     compute_nodes.drop_column('net_mbps')
-
