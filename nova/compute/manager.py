@@ -202,8 +202,14 @@ class ComputeManager(manager.Manager):
         context = context.elevated()
         instance_ref = self.db.instance_get(context, instance_id)
         instance_ref.injected_files = kwargs.get('injected_files', [])
-        if instance_ref['name'] in self.driver.list_instances():
-            raise exception.Error(_("Instance has already been created"))
+        #MK
+        if FLAGS.connection_type == 'tilera':
+            if instance_ref['name'] in []:
+                raise exception.Error(_("Instance has already been created"))
+        else:
+            if instance_ref['name'] in self.driver.list_instances():
+                raise exception.Error(_("Instance has already been created"))
+        #_MK
         LOG.audit(_("instance %s: starting..."), instance_id,
                   context=context)
         self.db.instance_update(context,
