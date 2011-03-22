@@ -108,3 +108,16 @@ def upgrade(migrate_engine):
     instances.create_column(instances_net_arch)
     instances.create_column(instances_net_info)
     instances.create_column(instances_net_mbps)
+
+
+def downgrade(migrate_engine):
+    meta.bind = migrate_engine
+
+    instances.drop_column('cpu_arch')
+    instances.drop_column('cpu_info')
+    instances.drop_column('xpu_arch')
+    instances.drop_column('xpu_info')
+    instances.drop_column('xpus')
+    instances.drop_column('net_arch')
+    instances.drop_column('net_info')
+    instances.drop_column('net_mbps')

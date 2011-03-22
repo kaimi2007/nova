@@ -36,6 +36,7 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string('scheduler_driver',
                     'nova.scheduler.simple.SimpleScheduler',
                     'Driver to use for the scheduler')
+#                    'nova.scheduler.arch.ArchitectureScheduler',
 
 
 class SchedulerManager(manager.Manager):

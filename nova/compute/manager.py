@@ -39,6 +39,7 @@ import os
 import random
 import string
 import socket
+import sys
 import tempfile
 import time
 import functools
@@ -69,17 +70,17 @@ flags.DEFINE_integer('live_migration_retry_count', 30,
 #RLK
 flags.DEFINE_string('cpu_arch', 'x86_64',
                     'Architecture the instance runs on')
-flags.DEFINE_string('xpu_arch', 'fermi',
+flags.DEFINE_string('xpu_arch', '',
                     'Architecture of the accelerator instance runs on')
-flags.DEFINE_string('xpu_info', 'default',
+flags.DEFINE_string('xpu_info', '',
                     'Accelerator info')
-flags.DEFINE_integer('xpus', 1,
+flags.DEFINE_integer('xpus', 0,
                     'Number of xpus')
-flags.DEFINE_string('net_arch', 'default',
+flags.DEFINE_string('net_arch', '',
                     'Architecture of the network')
 flags.DEFINE_integer('net_mbps', 256,
                     'Network speed')
-flags.DEFINE_string('net_info', 'default',
+flags.DEFINE_string('net_info', '',
                     'Network info')
 
 LOG = logging.getLogger('nova.compute.manager')
@@ -129,7 +130,13 @@ class ComputeManager(manager.Manager):
         #             and redocument the module docstring
         if not compute_driver:
             compute_driver = FLAGS.compute_driver
-        self.driver = utils.import_object(compute_driver)
+
+        try:
+            self.driver = utils.import_object(compute_driver)
+        except ImportError:
+            LOG.error("Unable to load the virtualization driver.")
+            sys.exit(1)
+
         self.network_manager = utils.import_object(FLAGS.network_manager)
         self.volume_manager = utils.import_object(FLAGS.volume_manager)
         super(ComputeManager, self).__init__(*args, **kwargs)
@@ -195,8 +202,14 @@ class ComputeManager(manager.Manager):
         context = context.elevated()
         instance_ref = self.db.instance_get(context, instance_id)
         instance_ref.injected_files = kwargs.get('injected_files', [])
-        if instance_ref['name'] in self.driver.list_instances():
-            raise exception.Error(_("Instance has already been created"))
+        #MK
+        if FLAGS.connection_type == 'tilera':
+            if instance_ref['name'] in []:
+                raise exception.Error(_("Instance has already been created"))
+        else:
+            if instance_ref['name'] in self.driver.list_instances():
+                raise exception.Error(_("Instance has already been created"))
+        #_MK
         LOG.audit(_("instance %s: starting..."), instance_id,
                   context=context)
         self.db.instance_update(context,
@@ -236,8 +249,9 @@ class ComputeManager(manager.Manager):
                                     instance_id,
                                     {'launched_at': now})
         except Exception:  # pylint: disable=W0702
-            LOG.exception(_("instance %s: Failed to spawn"), instance_id,
-                          context=context)
+            LOG.exception(_("Instance '%s' failed to spawn. Is virtualization"
+                            " enabled in the BIOS?"), instance_id,
+                                                     context=context)
             self.db.instance_set_state(context,
                                        instance_id,
                                        power_state.SHUTDOWN)

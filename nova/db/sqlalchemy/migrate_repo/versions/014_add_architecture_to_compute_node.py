@@ -100,3 +100,15 @@ def upgrade(migrate_engine):
     compute_nodes.create_column(compute_nodes_net_arch)
     compute_nodes.create_column(compute_nodes_net_info)
     compute_nodes.create_column(compute_nodes_net_mbps)
+
+
+def downgrade(migrate_engine):
+    meta.bind = migrate_engine
+
+    compute_nodes.drop_column('cpu_arch')
+    compute_nodes.drop_column('xpu_arch')
+    compute_nodes.drop_column('xpu_info')
+    compute_nodes.drop_column('xpus')
+    compute_nodes.drop_column('net_arch')
+    compute_nodes.drop_column('net_info')
+    compute_nodes.drop_column('net_mbps')

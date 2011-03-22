@@ -20,6 +20,7 @@ function process_option {
     -h|--help) usage;;
     -V|--virtual-env) let always_venv=1; let never_venv=0;;
     -N|--no-virtual-env) let always_venv=0; let never_venv=1;;
+    -P|--pep8) let just_pep8=1;;
     -f|--force) let force=1;;
     *) noseargs="$noseargs $1"
   esac
@@ -29,6 +30,7 @@ venv=.nova-venv
 with_venv=tools/with_venv.sh
 always_venv=0
 never_venv=0
+just_pep8=0
 force=0
 noseargs=
 wrapper=""
@@ -85,7 +87,12 @@ if [ -z "$noseargs" ];
 then
   srcfiles=`find bin -type f ! -name "nova.conf*"`
   srcfiles+=" nova setup.py plugins/xenserver/xenapi/etc/xapi.d/plugins/glance"
-  run_tests && pep8 --repeat --show-pep8 --show-source --exclude=vcsversion.py ${srcfiles} || exit 1
+  if [ $just_pep8 -eq 0 ]; then
+    run_tests && pep8 --repeat --show-pep8 --show-source --exclude=vcsversion.py ${srcfiles} || exit 1
+  else
+    pep8 --repeat --show-pep8 --show-source --exclude=vcsversion.py ${srcfiles} || exit 1
+  fi
+
 else
   run_tests
 fi

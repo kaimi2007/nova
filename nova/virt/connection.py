@@ -28,7 +28,7 @@ from nova.virt import libvirt_conn
 from nova.virt import libvirt_conn_gpu
 from nova.virt import xenapi_conn
 from nova.virt import hyperv
-
+#from nova.virt import tilera #MK
 
 LOG = logging.getLogger("nova.virt.connection")
 FLAGS = flags.FLAGS
@@ -71,6 +71,11 @@ def get_connection(read_only=False):
     elif t == 'gpu':
         print 'Starting with GPU support'
         conn = libvirt_conn_gpu.get_connection(read_only)
+    #MK
+    elif t == 'tilera':
+        print 'Starting with Tilera support'
+        conn = tilera.get_connection(read_only)
+    #_MK
     else:
         raise Exception('Unknown connection type "%s"' % t)
 
