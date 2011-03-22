@@ -28,7 +28,7 @@ from nova.virt import libvirt_conn
 from nova.virt import libvirt_conn_gpu
 from nova.virt import xenapi_conn
 from nova.virt import hyperv
-from nova.virt import tilera #MK 
+from nova.virt import tilera #MK
 
 LOG = logging.getLogger("nova.virt.connection")
 FLAGS = flags.FLAGS
