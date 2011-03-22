@@ -75,12 +75,12 @@ LOG = logging.getLogger('nova.virt.tilera')
 
 FLAGS = flags.FLAGS
 # TODO(vish): These flags should probably go into a shared location
-flags.DEFINE_string('tilera_rescue_image_id', 'ami-rescue', 'Rescue ami image')
-flags.DEFINE_string('tilera_rescue_kernel_id', 'aki-rescue', 'Rescue aki image')
-flags.DEFINE_string('tilera_rescue_ramdisk_id', 'ari-rescue', 'Rescue ari image')
-flags.DEFINE_string('tilera_injected_network_template',
-                    utils.abspath('virt/tilera_interfaces.template'),
-                    'Template file for injected network')
+#flags.DEFINE_string('tilera_rescue_image_id', 'ami-rescue', 'Rescue ami image')
+#flags.DEFINE_string('tilera_rescue_kernel_id', 'aki-rescue', 'Rescue aki image')
+#flags.DEFINE_string('tilera_rescue_ramdisk_id', 'ari-rescue', 'Rescue ari image')
+#flags.DEFINE_string('tilera_injected_network_template',
+#                    utils.abspath('virt/tilera_interfaces.template'),
+#                    'Template file for injected network')
 flags.DEFINE_string('tilera_xml_template',
                     utils.abspath('virt/tilera.xml.template'),
                     'tilera XML Template')
@@ -94,15 +94,15 @@ flags.DEFINE_string('tilera_uri',
 flags.DEFINE_bool('tilera_allow_project_net_traffic',
                   True,
                   'Whether to allow in project network traffic')
-flags.DEFINE_bool('tilera_use_cow_images',
-                  False, #MK #True,
-                  'Whether to use cow images')
-flags.DEFINE_string('tilera_ajaxterm_portrange',
-                    '10000-12000',
-                    'Range of ports that ajaxterm should randomly try to bind')
-flags.DEFINE_string('tilera_firewall_driver',
-                    'nova.virt.tilera.IptablesFirewallDriver',
-                    'Firewall driver (defaults to iptables)')
+#flags.DEFINE_bool('tilera_use_cow_images',
+#                  False, #MK #True,
+#                  'Whether to use cow images')
+#flags.DEFINE_string('tilera_ajaxterm_portrange',
+#                    '10000-12000',
+#                    'Range of ports that ajaxterm should randomly try to bind')
+#flags.DEFINE_string('tilera_firewall_driver',
+#                    'nova.virt.tilera.IptablesFirewallDriver',
+#                    'Firewall driver (defaults to iptables)')
 
 #MK
 global tilera_boards 
