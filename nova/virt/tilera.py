@@ -81,7 +81,7 @@ FLAGS = flags.FLAGS
 #flags.DEFINE_string('tilera_injected_network_template',
 #                    utils.abspath('virt/tilera_interfaces.template'),
 #                    'Template file for injected network')
-flags.DEFINE_string('tilera_xml_template',
+"""flags.DEFINE_string('tilera_xml_template',
                     utils.abspath('virt/tilera.xml.template'),
                     'tilera XML Template')
 flags.DEFINE_string('tilera_type',
@@ -93,7 +93,7 @@ flags.DEFINE_string('tilera_uri',
                     ' on tilera_type)')
 flags.DEFINE_bool('tilera_allow_project_net_traffic',
                   True,
-                  'Whether to allow in project network traffic')
+                  'Whether to allow in project network traffic')"""
 #flags.DEFINE_bool('tilera_use_cow_images',
 #                  False, #MK #True,
 #                  'Whether to use cow images')
