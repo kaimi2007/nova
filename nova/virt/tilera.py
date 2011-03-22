@@ -868,25 +868,27 @@ class tileraConnection(object):
                                   'broadcast': network_ref['broadcast'],
                                   'dns': network_ref['dns'],
                                   'ra_server': ra_server}
+
+
         if key or net:
+            inst_name = instance['name']
+            img_id = instance.image_id
             if key:
-                LOG.info(_('instance %s: injecting key into image %s'),
-                    instance['name'], instance.image_id)
+                LOG.info(_('instance %(inst_name)s: injecting key into'
+                        ' image %(img_id)s') % locals())
             if net:
-                LOG.info(_('instance %s: injecting net into image %s'),
-                             instance['name'], instance.image_id)
+                LOG.info(_('instance %(inst_name)s: injecting net into'
+                        ' image %(img_id)s') % locals())
             try:
                 #MK
                 #disk.inject_data(basepath('disk'), key, net,
                 disk.inject_data(basepath('root'), key, net,
                                  partition=target_partition,
-                                 #execute=execute) 
-                                 nbd=FLAGS.use_cow_images) # SHOULD BE CHANGED
+                                 nbd=FLAGS.use_cow_images)
             except Exception as e:
                 # This could be a windows image, or a vmdk format disk
-                LOG.warn(_('instance %s: ignoring error injecting data'
-                           ' into image %s (%s)'),
-                         instance['name'], instance.image_id, e)
+                LOG.warn(_('instance %(inst_name)s: ignoring error injecting'
+                        ' data into image %(img_id)s (%(e)s)') % locals())
 
         if FLAGS.tilera_type == 'uml':
             utils.execute('sudo', 'chown', 'root', basepath('disk'))
