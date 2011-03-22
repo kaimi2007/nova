@@ -110,7 +110,7 @@ global fake_doms
 
 class _tilera_board(object):
     """Manages tilera board information"""
-    file_name = "/tftpboot/tilera_boards"
+    file_name = "./tilera_boards"
     boards = []
     BOARD_ID = 0
     IP_ADDR = 1
