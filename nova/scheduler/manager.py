@@ -38,7 +38,6 @@ flags.DEFINE_string('scheduler_driver',
                     'Driver to use for the scheduler')
 #                    'nova.scheduler.arch.ArchitectureScheduler',
 
-
 class SchedulerManager(manager.Manager):
     """Chooses a host to run instances on."""
     def __init__(self, scheduler_driver=None, *args, **kwargs):

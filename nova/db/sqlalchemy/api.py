@@ -332,7 +332,7 @@ def compute_node_get_all(context, disabled=False):
 
 
 @require_admin_context
-def compute_node_get_by_arch(context, cpu_arch, xpu_arch, session=None):
+def compute_node_get_all_by_arch(context, cpu_arch, xpu_arch, session=None):
     if not session:
         session = get_session()
 
@@ -341,7 +341,7 @@ def compute_node_get_by_arch(context, cpu_arch, xpu_arch, session=None):
                      filter_by(cpu_arch=cpu_arch).\
                      filter_by(xpu_arch=xpu_arch).\
                      filter_by(deleted=can_read_deleted(context)).\
-                     first()
+                     all()
 
     if not result:
         raise exception.NotFound(_('No computeNode for cpu_arch %s') %
