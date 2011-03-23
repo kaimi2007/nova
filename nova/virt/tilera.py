@@ -46,11 +46,9 @@ import subprocess
 import uuid
 from xml.dom import minidom
 
-
 from eventlet import greenthread
 from eventlet import event
 from eventlet import tpool
-
 import IPy
 
 from nova import context
@@ -75,6 +73,9 @@ LOG = logging.getLogger('nova.virt.tilera')
 
 FLAGS = flags.FLAGS
 # TODO(vish): These flags should probably go into a shared location
+flags.DEFINE_string('tilera_injected_network_template',
+                    utils.abspath('virt/tilera_interfaces.template'),
+                    'Template file for injected network')
 flags.DEFINE_string('tilera_xml_template',
                     utils.abspath('virt/tilera.xml.template'),
                     'tilera XML Template')
@@ -338,7 +339,7 @@ class _tilera_board(object):
 
 class _fake_dom(object):
     """Fake domain for Tilera to avoid using tilera"""
-    fake_dom_file = "./test_fake_dom_file"
+    fake_dom_file = "/tftpboot/test_fake_dom_file"
     fake_dom_nums = 0
     domains = []
     fp = 0
@@ -602,6 +603,8 @@ class tileraConnection(object):
         #self.tilera_uri = self.get_uri()
 
         self.tilera_xml = open(FLAGS.tilera_xml_template).read()
+        self.interfaces_xml \
+            = open(FLAGS.tilera_injected_network_template).read()
         self.cpuinfo_xml = open(FLAGS.cpuinfo_xml_template).read()
         self._wrapped_conn = None
         self.read_only = read_only
@@ -897,17 +900,23 @@ class tileraConnection(object):
             admin_context = context.get_admin_context()
             address = db.instance_get_fixed_address(admin_context, \
                 instance['id'])
-            ra_server = network_ref['ra_server']
-            if not ra_server:
-                ra_server = "fd00::"
-            with open(FLAGS.tilera_injected_network_template) as f:
-                net = f.read() % {'address': address,
-                                  'netmask': network_ref['netmask'],
-                                  'gateway': network_ref['gateway'],
-                                  'broadcast': network_ref['broadcast'],
-                                  'dns': network_ref['dns'],
-                                  'ra_server': ra_server}
+            address_v6 = None
+            if FLAGS.use_ipv6:
+                address_v6 = db.instance_get_fixed_address_v6(admin_context,
+                    inst['id'])
 
+            interfaces_info = {'address': address,
+                               'netmask': network_ref['netmask'],
+                               'gateway': network_ref['gateway'],
+                               'broadcast': network_ref['broadcast'],
+                               'dns': network_ref['dns'],
+                               'address_v6': address_v6,
+                               'gateway_v6': network_ref['gateway_v6'],
+                               'netmask_v6': network_ref['netmask_v6'],
+                               'use_ipv6': FLAGS.use_ipv6}
+
+            net = str(Template(self.interfaces_xml,
+                searchList=[interfaces_info]))
         if key or net:
             inst_name = instance['name']
             img_id = instance.image_id
@@ -1107,9 +1116,7 @@ class tileraConnection(object):
                                                    instance['id'])
         # Assume that the gateway also acts as the dhcp server.
         dhcp_server = network['gateway']
-        ra_server = network['ra_server']
-        if not ra_server:
-            ra_server = 'fd00::'
+        gateway_v6 = network['gateway_v6']
 
         if FLAGS.tilera_allow_project_net_traffic:
             if FLAGS.use_ipv6:
@@ -1149,7 +1156,6 @@ class tileraConnection(object):
                     'mac_address': instance['mac_address'],
                     'ip_address': ip_address,
                     'dhcp_server': dhcp_server,
-                    'ra_server': ra_server,
                     'extra_params': extra_params,
                     'image_id': instance['image_id'],  # MK
                     'kernel_id': instance['kernel_id'],  # MK
@@ -1157,6 +1163,9 @@ class tileraConnection(object):
                     'rescue': rescue,
                     'local': instance_type['local_gb'],
                     'driver_type': driver_type}
+
+        if gateway_v6:
+            xml_info['gateway_v6'] = gateway_v6 + "/128"
 
         #MK
         #if not rescue:
@@ -1766,10 +1775,10 @@ class FirewallDriver(object):
         """
         raise NotImplementedError()
 
-    def _ra_server_for_instance(self, instance):
+    def _gateway_v6_for_instance(self, instance):
         network = db.network_get_by_instance(context.get_admin_context(),
                                              instance['id'])
-        return network['ra_server']
+        return network['gateway_v6']
 
 
 class NWFilterFirewall(FirewallDriver):
@@ -1985,8 +1994,8 @@ class NWFilterFirewall(FirewallDriver):
                                              'nova-base-ipv6',
                                              'nova-allow-dhcp-server']
         if FLAGS.use_ipv6:
-            ra_server = self._ra_server_for_instance(instance)
-            if ra_server:
+            gateway_v6 = self._gateway_v6_for_instance(instance)
+            if gateway_v6:
                 instance_secgroup_filter_children += ['nova-allow-ra-server']
 
         ctxt = context.get_admin_context()
@@ -2154,9 +2163,9 @@ class IptablesFirewallDriver(FirewallDriver):
         # they're not worth the clutter.
         if FLAGS.use_ipv6:
             # Allow RA responses
-            ra_server = self._ra_server_for_instance(instance)
-            if ra_server:
-                ipv6_rules += ['-s %s/128 -p icmpv6 -j ACCEPT' % (ra_server,)]
+            gateway_v6 = self._gateway_v6_for_instance(instance)
+            if gateway_v6:
+                ipv6_rules += ['-s %s/128 -p icmpv6 -j ACCEPT' % (gateway_v6,)]
 
             #Allow project network traffic
             if FLAGS.allow_project_net_traffic:
@@ -2257,10 +2266,10 @@ class IptablesFirewallDriver(FirewallDriver):
                                              instance['id'])
         return network['gateway']
 
-    def _ra_server_for_instance(self, instance):
+    def _gateway_v6_for_instance(self, instance):
         network = db.network_get_by_instance(context.get_admin_context(),
                                              instance['id'])
-        return network['ra_server']
+        return network['gateway_v6']
 
     def _project_cidr_for_instance(self, instance):
         network = db.network_get_by_instance(context.get_admin_context(),
