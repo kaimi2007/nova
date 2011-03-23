@@ -58,27 +58,24 @@ class ArchitectureScheduler(driver.Scheduler):
                   instances[0].cpu_arch)
         LOG.debug(_("##\tRLK - instance.xpu_arch %s"),
                   instances[0].xpu_arch)
-        """Select first compute_node available where cpu_arch and xpu_arch
-        match the instance. extend to selecting compute_node only if it is
-        available.
+        """Select all compute_node available where cpu_arch and xpu_arch
+        match the instance available.
         """
-        compute_nodes = db.compute_node_get_by_arch(context,
-                                                    instances[0].cpu_arch,
-                                                    instances[0].xpu_arch)
-        LOG.debug(_("##\tRLK - compute_nodes.service_id %d"),
-            compute_nodes.service_id)
-        #LOG.debug(_("##\tRLK - compute_nodes.length %d"),
-        # len(compute_nodes))
-        #for node in compute_nodes:
-        #    LOG.debug(_("##\tRLK - node %s"), node)
-        #compute_node = compute_nodes[int(random.random() *
-        # len(compute_nodes))]
+        compute_nodes = db.compute_node_get_all_by_arch(context,
+                instances[0].cpu_arch, instances[0].xpu_arch)
+        LOG.debug(_("##\tRLK - compute_nodes[0].service_id %d"),
+            compute_nodes[0].service_id)
+        LOG.debug(_("##\tRLK - compute_nodes.length %d"), len(compute_nodes))
+        for node in compute_nodes:
+            LOG.debug(_("##\tRLK - found matching compute_node.id %s"),
+                    node.id)
+        compute_node = compute_nodes[int(random.random() * len(compute_nodes))]
         services = db.service_get_all_by_topic(context, topic)
         LOG.debug(_("##\tRLK - services %s"), services)
         return [service.host
                 for service in services
                 if self.service_is_up(service)
-                and service.id == compute_nodes.service_id]
+                and service.id == compute_node.service_id]
 
     def schedule(self, context, topic, *_args, **_kwargs):
         """Picks a host that is up at random in selected

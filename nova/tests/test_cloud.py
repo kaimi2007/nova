@@ -244,18 +244,28 @@ class CloudTestCase(test.TestCase):
 
     def test_ajax_console(self):
         kwargs = {'image_id': 'ami-1'}
+        LOG.debug(_("###RLK ---- test_ajax_console - 0"))
         rv = self.cloud.run_instances(self.context, **kwargs)
+        LOG.debug(_("###RLK ---- test_ajax_console - 1"))
         instance_id = rv['instancesSet'][0]['instanceId']
+        LOG.debug(_("###RLK ---- test_ajax_console - 2"))
         greenthread.sleep(0.3)
+        LOG.debug(_("###RLK ---- test_ajax_console - 3"))
         output = self.cloud.get_ajax_console(context=self.context,
                                              instance_id=[instance_id])
+        LOG.debug(_("###RLK ---- test_ajax_console - 4"))
         self.assertEquals(output['url'],
                           '%s/?token=FAKETOKEN' % FLAGS.ajax_console_proxy_url)
+        LOG.debug(_("###RLK ---- test_ajax_console - 5"))
         # TODO(soren): We need this until we can stop polling in the rpc code
         #              for unit tests.
+        LOG.debug(_("###RLK ---- test_ajax_console - 6"))
         greenthread.sleep(0.3)
+        LOG.debug(_("###RLK ---- test_ajax_console - 7"))
         rv = self.cloud.terminate_instances(self.context, [instance_id])
+        LOG.debug(_("###RLK ---- test_ajax_console - 8"))
         greenthread.sleep(0.3)
+        LOG.debug(_("###RLK ---- test_ajax_console - 9"))
 
     def test_key_generation(self):
         result = self._create_key('test')
