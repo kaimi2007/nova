@@ -46,10 +46,9 @@ import time
 import uuid
 from xml.dom import minidom
 
-
+from eventlet import greenthread
 from eventlet import tpool
 from eventlet import semaphore
-
 import IPy
 
 from nova import context
@@ -64,6 +63,7 @@ from nova.compute import instance_types
 from nova.compute import power_state
 from nova.virt import disk
 from nova.virt import images
+from nova.virt import libvirt_flags
 
 libvirt = None
 libxml2 = None
@@ -72,48 +72,6 @@ Template = None
 LOG = logging.getLogger('nova.virt.libvirt_conn')
 
 FLAGS = flags.FLAGS
-flags.DECLARE('live_migration_retry_count', 'nova.compute.manager')
-# TODO(vish): These flags should probably go into a shared location
-flags.DEFINE_string('rescue_image_id', 'ami-rescue', 'Rescue ami image')
-flags.DEFINE_string('rescue_kernel_id', 'aki-rescue', 'Rescue aki image')
-flags.DEFINE_string('rescue_ramdisk_id', 'ari-rescue', 'Rescue ari image')
-flags.DEFINE_string('injected_network_template',
-                    utils.abspath('virt/interfaces.template'),
-                    'Template file for injected network')
-flags.DEFINE_string('libvirt_xml_template',
-                    utils.abspath('virt/libvirt.xml.template'),
-                    'Libvirt XML Template')
-flags.DEFINE_string('libvirt_type',
-                    'kvm',
-                    'Libvirt domain type (valid options are: '
-                    'kvm, qemu, uml, xen)')
-flags.DEFINE_string('libvirt_uri',
-                    '',
-                    'Override the default libvirt URI (which is dependent'
-                    ' on libvirt_type)')
-flags.DEFINE_bool('allow_project_net_traffic',
-                  True,
-                  'Whether to allow in project network traffic')
-flags.DEFINE_bool('use_cow_images',
-                  True,
-                  'Whether to use cow images')
-flags.DEFINE_string('ajaxterm_portrange',
-                    '10000-12000',
-                    'Range of ports that ajaxterm should randomly try to bind')
-flags.DEFINE_string('firewall_driver',
-                    'nova.virt.libvirt_conn.IptablesFirewallDriver',
-                    'Firewall driver (defaults to iptables)')
-flags.DEFINE_string('cpuinfo_xml_template',
-                    utils.abspath('virt/cpuinfo.xml.template'),
-                    'CpuInfo XML Template (Used only live migration now)')
-flags.DEFINE_string('live_migration_uri',
-                    "qemu+tcp://%s/system",
-                    'Define protocol used by live_migration feature')
-flags.DEFINE_string('live_migration_flag',
-                    "VIR_MIGRATE_UNDEFINE_SOURCE, VIR_MIGRATE_PEER2PEER",
-                    'Define live migration behavior.')
-flags.DEFINE_integer('live_migration_bandwidth', 0,
-                    'Define live migration behavior')
 
 
 def get_connection(read_only):
@@ -160,6 +118,7 @@ class LibvirtConnection(object):
         self.libvirt_uri = self.get_uri()
 
         self.libvirt_xml = open(FLAGS.libvirt_xml_template).read()
+        self.interfaces_xml = open(FLAGS.injected_network_template).read()
         self.cpuinfo_xml = open(FLAGS.cpuinfo_xml_template).read()
         self._wrapped_conn = None
         self.read_only = read_only
@@ -339,7 +298,11 @@ class LibvirtConnection(object):
     def reboot(self, instance):
         self.destroy(instance, False)
         xml = self.to_xml(instance)
+        self.firewall_driver.setup_basic_filtering(instance)
+        self.firewall_driver.prepare_instance_filter(instance)
         self._conn.createXML(xml, 0)
+        self.firewall_driver.apply_instance_filter(instance)
+
         timer = utils.LoopingCall(f=None)
 
         def _wait_for_reboot():
@@ -362,19 +325,19 @@ class LibvirtConnection(object):
 
     @exception.wrap_exception
     def pause(self, instance, callback):
-        raise exception.APIError("pause not supported for libvirt.")
+        raise exception.ApiError("pause not supported for libvirt.")
 
     @exception.wrap_exception
     def unpause(self, instance, callback):
-        raise exception.APIError("unpause not supported for libvirt.")
+        raise exception.ApiError("unpause not supported for libvirt.")
 
     @exception.wrap_exception
     def suspend(self, instance, callback):
-        raise exception.APIError("suspend not supported for libvirt")
+        raise exception.ApiError("suspend not supported for libvirt")
 
     @exception.wrap_exception
     def resume(self, instance, callback):
-        raise exception.APIError("resume not supported for libvirt")
+        raise exception.ApiError("resume not supported for libvirt")
 
     @exception.wrap_exception
     def rescue(self, instance, callback=None):
@@ -502,7 +465,7 @@ class LibvirtConnection(object):
                 cmd = 'netcat', '0.0.0.0', port, '-w', '1'
                 try:
                     stdout, stderr = utils.execute(*cmd, process_input='')
-                except ProcessExecutionError:
+                except exception.ProcessExecutionError:
                     return port
             raise Exception(_('Unable to find an open port'))
 
@@ -659,16 +622,23 @@ class LibvirtConnection(object):
         if network_ref['injected']:
             admin_context = context.get_admin_context()
             address = db.instance_get_fixed_address(admin_context, inst['id'])
-            ra_server = network_ref['ra_server']
-            if not ra_server:
-                ra_server = "fd00::"
-            with open(FLAGS.injected_network_template) as f:
-                net = f.read() % {'address': address,
-                                  'netmask': network_ref['netmask'],
-                                  'gateway': network_ref['gateway'],
-                                  'broadcast': network_ref['broadcast'],
-                                  'dns': network_ref['dns'],
-                                  'ra_server': ra_server}
+            address_v6 = None
+            if FLAGS.use_ipv6:
+                address_v6 = db.instance_get_fixed_address_v6(admin_context,
+                                                              inst['id'])
+
+            interfaces_info = {'address': address,
+                               'netmask': network_ref['netmask'],
+                               'gateway': network_ref['gateway'],
+                               'broadcast': network_ref['broadcast'],
+                               'dns': network_ref['dns'],
+                               'address_v6': address_v6,
+                               'gateway_v6': network_ref['gateway_v6'],
+                               'netmask_v6': network_ref['netmask_v6'],
+                               'use_ipv6': FLAGS.use_ipv6}
+
+            net = str(Template(self.interfaces_xml,
+                                searchList=[interfaces_info]))
         if key or net:
             inst_name = inst['name']
             img_id = inst.image_id
@@ -703,7 +673,7 @@ class LibvirtConnection(object):
                                                    instance['id'])
         # Assume that the gateway also acts as the dhcp server.
         dhcp_server = network['gateway']
-        ra_server = network['ra_server']
+        gateway_v6 = network['gateway_v6']
 
         if FLAGS.allow_project_net_traffic:
             if FLAGS.use_ipv6:
@@ -748,8 +718,8 @@ class LibvirtConnection(object):
                     'local': instance_type['local_gb'],
                     'driver_type': driver_type}
 
-        if ra_server:
-            xml_info['ra_server'] = ra_server + "/128"
+        if gateway_v6:
+            xml_info['gateway_v6'] = gateway_v6 + "/128"
         if not rescue:
             if instance['kernel_id']:
                 xml_info['kernel'] = xml_info['basepath'] + "/kernel"
@@ -779,7 +749,7 @@ class LibvirtConnection(object):
                 'cpu_time': cpu_time}
 
     def get_diagnostics(self, instance_name):
-        raise exception.APIError(_("diagnostics are not supported "
+        raise exception.ApiError(_("diagnostics are not supported "
                                    "for libvirt"))
 
     def get_disks(self, instance_name):
@@ -984,32 +954,44 @@ class LibvirtConnection(object):
 
         xml = self._conn.getCapabilities()
         xml = libxml2.parseDoc(xml)
-        nodes = xml.xpathEval('//cpu')
+        nodes = xml.xpathEval('//host/cpu')
         if len(nodes) != 1:
             raise exception.Invalid(_("Invalid xml. '<cpu>' must be 1,"
                                       "but %d\n") % len(nodes)
                                       + xml.serialize())
 
         cpu_info = dict()
-        cpu_info['arch'] = xml.xpathEval('//cpu/arch')[0].getContent()
-        cpu_info['model'] = xml.xpathEval('//cpu/model')[0].getContent()
-        cpu_info['vendor'] = xml.xpathEval('//cpu/vendor')[0].getContent()
 
-        topology_node = xml.xpathEval('//cpu/topology')[0].get_properties()
+        arch_nodes = xml.xpathEval('//host/cpu/arch')
+        if arch_nodes:
+            cpu_info['arch'] = arch_nodes[0].getContent()
+
+        model_nodes = xml.xpathEval('//host/cpu/model')
+        if model_nodes:
+            cpu_info['model'] = model_nodes[0].getContent()
+
+        vendor_nodes = xml.xpathEval('//host/cpu/vendor')
+        if vendor_nodes:
+            cpu_info['vendor'] = vendor_nodes[0].getContent()
+
+        topology_nodes = xml.xpathEval('//host/cpu/topology')
         topology = dict()
-        while topology_node != None:
-            name = topology_node.get_name()
-            topology[name] = topology_node.getContent()
-            topology_node = topology_node.get_next()
+        if topology_nodes:
+            topology_node = topology_nodes[0].get_properties()
+            while topology_node:
+                name = topology_node.get_name()
+                topology[name] = topology_node.getContent()
+                topology_node = topology_node.get_next()
 
-        keys = ['cores', 'sockets', 'threads']
-        tkeys = topology.keys()
-        if list(set(tkeys)) != list(set(keys)):
-            ks = ', '.join(keys)
-            raise exception.Invalid(_("Invalid xml: topology(%(topology)s) "
-                                      "must have %(ks)s") % locals())
+            keys = ['cores', 'sockets', 'threads']
+            tkeys = topology.keys()
+            if set(tkeys) != set(keys):
+                ks = ', '.join(keys)
+                raise exception.Invalid(_("Invalid xml: topology"
+                                          "(%(topology)s) must have "
+                                          "%(ks)s") % locals())
 
-        feature_nodes = xml.xpathEval('//cpu/feature')
+        feature_nodes = xml.xpathEval('//host/cpu/feature')
         features = list()
         for nodes in feature_nodes:
             features.append(nodes.get_properties().getContent())
@@ -1075,9 +1057,19 @@ class LibvirtConnection(object):
                'local_gb_used': self.get_local_gb_used(),
                'hypervisor_type': self.get_hypervisor_type(),
                'hypervisor_version': self.get_hypervisor_version(),
-               'cpu_info': self.get_cpu_info()}
+               'cpu_info': self.get_cpu_info(),
+               #RLK
+               'cpu_arch': FLAGS.cpu_arch,
+               'xpu_arch': FLAGS.xpu_arch,
+               'xpus': FLAGS.xpus,
+               'xpu_info': FLAGS.xpu_info,
+               'net_arch': FLAGS.net_arch,
+               'net_info': FLAGS.net_info,
+               'net_mbps': FLAGS.net_mbps
+               }
 
         compute_node_ref = service_ref['compute_node']
+        LOG.info(_('#### RLK: cpu_arch = %s ') % FLAGS.cpu_arch)
         if not compute_node_ref:
             LOG.info(_('Compute_service record created for %s ') % host)
             dic['service_id'] = service_ref['id']
@@ -1294,10 +1286,10 @@ class FirewallDriver(object):
         """
         raise NotImplementedError()
 
-    def _ra_server_for_instance(self, instance):
+    def _gateway_v6_for_instance(self, instance):
         network = db.network_get_by_instance(context.get_admin_context(),
                                              instance['id'])
-        return network['ra_server']
+        return network['gateway_v6']
 
 
 class NWFilterFirewall(FirewallDriver):
@@ -1513,8 +1505,8 @@ class NWFilterFirewall(FirewallDriver):
                                              'nova-base-ipv6',
                                              'nova-allow-dhcp-server']
         if FLAGS.use_ipv6:
-            ra_server = self._ra_server_for_instance(instance)
-            if ra_server:
+            gateway_v6 = self._gateway_v6_for_instance(instance)
+            if gateway_v6:
                 instance_secgroup_filter_children += ['nova-allow-ra-server']
 
         ctxt = context.get_admin_context()
@@ -1597,6 +1589,8 @@ class IptablesFirewallDriver(FirewallDriver):
 
         self.iptables.ipv4['filter'].add_chain('sg-fallback')
         self.iptables.ipv4['filter'].add_rule('sg-fallback', '-j DROP')
+        self.iptables.ipv6['filter'].add_chain('sg-fallback')
+        self.iptables.ipv6['filter'].add_rule('sg-fallback', '-j DROP')
 
     def setup_basic_filtering(self, instance):
         """Use NWFilter from libvirt for this."""
@@ -1680,9 +1674,9 @@ class IptablesFirewallDriver(FirewallDriver):
         # they're not worth the clutter.
         if FLAGS.use_ipv6:
             # Allow RA responses
-            ra_server = self._ra_server_for_instance(instance)
-            if ra_server:
-                ipv6_rules += ['-s %s/128 -p icmpv6 -j ACCEPT' % (ra_server,)]
+            gateway_v6 = self._gateway_v6_for_instance(instance)
+            if gateway_v6:
+                ipv6_rules += ['-s %s/128 -p icmpv6 -j ACCEPT' % (gateway_v6,)]
 
             #Allow project network traffic
             if FLAGS.allow_project_net_traffic:
@@ -1783,10 +1777,10 @@ class IptablesFirewallDriver(FirewallDriver):
                                              instance['id'])
         return network['gateway']
 
-    def _ra_server_for_instance(self, instance):
+    def _gateway_v6_for_instance(self, instance):
         network = db.network_get_by_instance(context.get_admin_context(),
                                              instance['id'])
-        return network['ra_server']
+        return network['gateway_v6']
 
     def _project_cidr_for_instance(self, instance):
         network = db.network_get_by_instance(context.get_admin_context(),

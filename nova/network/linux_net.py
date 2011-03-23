@@ -19,6 +19,7 @@ Implements vlans, bridges, and iptables rules using linux utilities.
 
 import inspect
 import os
+import calendar
 
 from eventlet import semaphore
 
@@ -56,6 +57,8 @@ flags.DEFINE_string('routing_source_ip', '$my_ip',
                     'Public IP of network host')
 flags.DEFINE_string('input_chain', 'INPUT',
                     'chain to add nova_input to')
+flags.DEFINE_integer('dhcp_lease_time', 120,
+                     'Lifetime of a DHCP lease')
 
 flags.DEFINE_string('dns_server', None,
                     'if set, uses specific dns server for dnsmasq')
@@ -533,8 +536,17 @@ def ensure_bridge(bridge, interface, net_attrs=None):
                                              bridge)
 
 
+def get_dhcp_leases(context, network_id):
+    """Return a network's hosts config in dnsmasq leasefile format"""
+    hosts = []
+    for fixed_ip_ref in db.network_get_associated_fixed_ips(context,
+                                                            network_id):
+        hosts.append(_host_lease(fixed_ip_ref))
+    return '\n'.join(hosts)
+
+
 def get_dhcp_hosts(context, network_id):
-    """Get a string containing a network's hosts config in dnsmasq format"""
+    """Get a string containing a network's hosts config in dhcp-host format"""
     hosts = []
     for fixed_ip_ref in db.network_get_associated_fixed_ips(context,
                                                             network_id):
@@ -545,6 +557,7 @@ def get_dhcp_hosts(context, network_id):
 # NOTE(ja): Sending a HUP only reloads the hostfile, so any
 #           configuration options (like dchp-range, vlan, ...)
 #           aren't reloaded.
+@utils.synchronized('dnsmasq_start')
 def update_dhcp(context, network_id):
     """(Re)starts a dnsmasq server for a given network
 
@@ -570,7 +583,7 @@ def update_dhcp(context, network_id):
             try:
                 _execute('sudo', 'kill', '-HUP', pid)
                 return
-            except Exception as exc:  # pylint: disable-msg=W0703
+            except Exception as exc:  # pylint: disable=W0703
                 LOG.debug(_("Hupping dnsmasq threw %s"), exc)
         else:
             LOG.debug(_("Pid %d is stale, relaunching dnsmasq"), pid)
@@ -582,6 +595,7 @@ def update_dhcp(context, network_id):
     _execute(*command, addl_env=env)
 
 
+@utils.synchronized('radvd_start')
 def update_ra(context, network_id):
     network_ref = db.network_get(context, network_id)
 
@@ -614,19 +628,35 @@ interface %s
         if conffile in out:
             try:
                 _execute('sudo', 'kill', pid)
-            except Exception as exc:  # pylint: disable-msg=W0703
+            except Exception as exc:  # pylint: disable=W0703
                 LOG.debug(_("killing radvd threw %s"), exc)
         else:
             LOG.debug(_("Pid %d is stale, relaunching radvd"), pid)
     command = _ra_cmd(network_ref)
     _execute(*command)
     db.network_update(context, network_id,
-                      {"ra_server":
+                      {"gateway_v6":
                        utils.get_my_linklocal(network_ref['bridge'])})
 
 
+def _host_lease(fixed_ip_ref):
+    """Return a host string for an address in leasefile format"""
+    instance_ref = fixed_ip_ref['instance']
+    if instance_ref['updated_at']:
+        timestamp = instance_ref['updated_at']
+    else:
+        timestamp = instance_ref['created_at']
+
+    seconds_since_epoch = calendar.timegm(timestamp.utctimetuple())
+
+    return "%d %s %s %s *" % (seconds_since_epoch + FLAGS.dhcp_lease_time,
+                              instance_ref['mac_address'],
+                              fixed_ip_ref['address'],
+                              instance_ref['hostname'] or '*')
+
+
 def _host_dhcp(fixed_ip_ref):
-    """Return a host string for an address"""
+    """Return a host string for an address in dhcp-host format"""
     instance_ref = fixed_ip_ref['instance']
     return "%s,%s.%s,%s" % (instance_ref['mac_address'],
                                    instance_ref['hostname'],
@@ -685,7 +715,7 @@ def _stop_dnsmasq(network):
     if pid:
         try:
             _execute('sudo', 'kill', '-TERM', pid)
-        except Exception as exc:  # pylint: disable-msg=W0703
+        except Exception as exc:  # pylint: disable=W0703
             LOG.debug(_("Killing dnsmasq threw %s"), exc)
 
 

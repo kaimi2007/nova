@@ -324,6 +324,67 @@ def compute_node_get(context, compute_id, session=None):
 
 
 @require_admin_context
+def compute_node_get_all(context, disabled=False):
+    session = get_session()
+    return session.query(models.ComputeNode).\
+                   filter_by(deleted=can_read_deleted(context)).\
+                   all()
+
+
+@require_admin_context
+def compute_node_get_by_arch(context, cpu_arch, xpu_arch, session=None):
+    if not session:
+        session = get_session()
+
+                     #add if available=True?
+    result = session.query(models.ComputeNode).\
+                     filter_by(cpu_arch=cpu_arch).\
+                     filter_by(xpu_arch=xpu_arch).\
+                     filter_by(deleted=can_read_deleted(context)).\
+                     first()
+
+    if not result:
+        raise exception.NotFound(_('No computeNode for cpu_arch %s') %
+                cpu_arch)
+
+    return result
+
+
+@require_admin_context
+def compute_node_get_by_cpu_arch(context, cpu_arch, session=None):
+    if not session:
+        session = get_session()
+
+    result = session.query(models.ComputeNode).\
+                     filter_by(cpu_arch=cpu_arch).\
+                     filter_by(deleted=can_read_deleted(context)).\
+                     first()
+
+    if not result:
+        raise exception.NotFound(_('No computeNode for cpu_arch %s') %
+                cpu_arch)
+
+    return result
+
+
+@require_admin_context
+def compute_node_get_by_xpu_arch(context, xpu_arch, session=None):
+    if not session:
+        session = get_session()
+
+    result = session.query(models.ComputeNode).\
+                     filter_by(xpu_arch=xpu_arch).\
+                     filter_by(deleted=can_read_deleted(context)).\
+                     first()
+
+    if not result:
+        raise exception.NotFound(_('No computeNode for xpu_arch %s') %
+                xpu_arch)
+
+    return result
+
+
+@require_admin_context
 def compute_node_create(context, values):
     compute_node_ref = models.ComputeNode()
     compute_node_ref.update(values)
@@ -670,6 +731,22 @@ def fixed_ip_get_all(context, session=None):
     return result
 
 
+@require_admin_context
+def fixed_ip_get_all_by_host(context, host=None):
+    session = get_session()
+
+    result = session.query(models.FixedIp).\
+                    join(models.FixedIp.instance).\
+                    filter_by(state=1).\
+                    filter_by(host=host).\
+                    all()
+
+    if not result:
+        raise exception.NotFound(_('No fixed ips for this host defined'))
+
+    return result
+
+
 @require_context
 def fixed_ip_get_by_address(context, address, session=None):
     if not session:
@@ -744,6 +821,15 @@ def instance_create(context, values):
     context - request context object
     values - dict containing column values.
     """
+    metadata = values.get('metadata')
+    metadata_refs = []
+    if metadata:
+        for metadata_item in metadata:
+            metadata_ref = models.InstanceMetadata()
+            metadata_ref.update(metadata_item)
+            metadata_refs.append(metadata_ref)
+    values['metadata'] = metadata_refs
+
     instance_ref = models.Instance()
     instance_ref.update(values)
 
@@ -775,6 +861,11 @@ def instance_destroy(context, instance_id):
                         'deleted_at': datetime.datetime.utcnow(),
                         'updated_at': literal_column('updated_at')})
         session.query(models.SecurityGroupInstanceAssociation).\
+                filter_by(instance_id=instance_id).\
+                update({'deleted': 1,
+                        'deleted_at': datetime.datetime.utcnow(),
+                        'updated_at': literal_column('updated_at')})
+        session.query(models.InstanceMetadata).\
                 filter_by(instance_id=instance_id).\
                 update({'deleted': 1,
                         'deleted_at': datetime.datetime.utcnow(),
@@ -846,6 +937,42 @@ def instance_get_all_by_host(context, host):
                    options(joinedload('security_groups')).\
                    options(joinedload_all('fixed_ip.network')).\
                    filter_by(host=host).\
+                   filter_by(deleted=can_read_deleted(context)).\
+                   all()
+
+
+@require_admin_context
+def instance_get_all_by_instance_id(context, instance_id):
+    session = get_session()
+    return session.query(models.Instance).\
+                   options(joinedload_all('fixed_ip.floating_ips')).\
+                   options(joinedload('security_groups')).\
+                   options(joinedload_all('fixed_ip.network')).\
+                   filter_by(id=instance_id).\
+                   filter_by(deleted=can_read_deleted(context)).\
+                   all()
+
+
+@require_admin_context
+def instance_get_all_by_cpu_arch(context, cpu_arch):
+    session = get_session()
+    return session.query(models.Instance).\
+                   options(joinedload_all('fixed_ip.floating_ips')).\
+                   options(joinedload('security_groups')).\
+                   options(joinedload_all('fixed_ip.network')).\
+                   filter_by(cpu_arch=cpu_arch).\
+                   filter_by(deleted=can_read_deleted(context)).\
+                   all()
+
+
+@require_admin_context
+def instance_get_all_by_xpu_arch(context, xpu_arch):
+    session = get_session()
+    return session.query(models.Instance).\
+                   options(joinedload_all('fixed_ip.floating_ips')).\
+                   options(joinedload('security_groups')).\
+                   options(joinedload_all('fixed_ip.network')).\
+                   filter_by(xpu_arch=xpu_arch).\
                    filter_by(deleted=can_read_deleted(context)).\
                    all()
 
@@ -1222,7 +1349,7 @@ def network_get_all(context):
 
 # NOTE(vish): pylint complains because of the long method name, but
 #             it fits with the names of the rest of the methods
-# pylint: disable-msg=C0103
+# pylint: disable=C0103
 
 
 @require_admin_context
@@ -2310,7 +2437,7 @@ def instance_type_create(_context, values):
 
 
 @require_context
-def instance_type_get_all(context, inactive=0):
+def instance_type_get_all(context, inactive=False):
     """
     Returns a dict describing all instance_types with name as key.
     """
@@ -2321,7 +2448,7 @@ def instance_type_get_all(context, inactive=0):
                         all()
     else:
         inst_types = session.query(models.InstanceTypes).\
-                        filter_by(deleted=inactive).\
+                        filter_by(deleted=False).\
                         order_by("name").\
                         all()
     if inst_types:
@@ -2365,7 +2492,7 @@ def instance_type_destroy(context, name):
     session = get_session()
     instance_type_ref = session.query(models.InstanceTypes).\
                                       filter_by(name=name)
-    records = instance_type_ref.update(dict(deleted=1))
+    records = instance_type_ref.update(dict(deleted=True))
     if records == 0:
         raise exception.NotFound
     else:

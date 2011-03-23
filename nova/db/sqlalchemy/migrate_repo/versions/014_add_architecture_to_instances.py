@@ -26,9 +26,9 @@ meta = MetaData()
 
 # Table stub-definitions
 # Just for the ForeignKey and column creation to succeed, these are not the
-# actual definitions of compute_nodes or services.
+# actual definitions of instances or services.
 #
-compute_nodes = Table('compute_nodes', meta,
+instances = Table('instances', meta,
                   Column('id', Integer(),
                          primary_key=True, nullable=False))
 
@@ -47,44 +47,51 @@ compute_nodes = Table('compute_nodes', meta,
 #
 
 
-compute_nodes_cpu_arch = Column('cpu_arch',
+instances_cpu_arch = Column('cpu_arch',
                             String(length=255,
                                    convert_unicode=False,
                                    assert_unicode=None,
                                    unicode_error=None,
                                    _warn_on_bytestring=False))
 
-compute_nodes_xpu_arch = Column('xpu_arch',
+instances_cpu_info = Column('cpu_info',
                             String(length=255,
                                    convert_unicode=False,
                                    assert_unicode=None,
                                    unicode_error=None,
                                    _warn_on_bytestring=False))
 
-compute_nodes_xpu_info = Column('xpu_info',
+instances_xpu_arch = Column('xpu_arch',
                             String(length=255,
                                    convert_unicode=False,
                                    assert_unicode=None,
                                    unicode_error=None,
                                    _warn_on_bytestring=False))
 
-compute_nodes_xpus = Column('xpus', Integer())
-
-compute_nodes_net_arch = Column('net_arch',
+instances_xpu_info = Column('xpu_info',
                             String(length=255,
                                    convert_unicode=False,
                                    assert_unicode=None,
                                    unicode_error=None,
                                    _warn_on_bytestring=False))
 
-compute_nodes_net_info = Column('net_info',
+instances_xpus = Column('xpus', Integer())
+
+instances_net_arch = Column('net_arch',
                             String(length=255,
                                    convert_unicode=False,
                                    assert_unicode=None,
                                    unicode_error=None,
                                    _warn_on_bytestring=False))
 
-compute_nodes_net_mbps = Column('net_mbps', Integer())
+instances_net_info = Column('net_info',
+                            String(length=255,
+                                   convert_unicode=False,
+                                   assert_unicode=None,
+                                   unicode_error=None,
+                                   _warn_on_bytestring=False))
+
+instances_net_mbps = Column('net_mbps', Integer())
 
 
 def upgrade(migrate_engine):
@@ -93,10 +100,24 @@ def upgrade(migrate_engine):
     meta.bind = migrate_engine
 
     # Add columns to existing tables
-    compute_nodes.create_column(compute_nodes_cpu_arch)
-    compute_nodes.create_column(compute_nodes_xpu_arch)
-    compute_nodes.create_column(compute_nodes_xpu_info)
-    compute_nodes.create_column(compute_nodes_xpus)
-    compute_nodes.create_column(compute_nodes_net_arch)
-    compute_nodes.create_column(compute_nodes_net_info)
-    compute_nodes.create_column(compute_nodes_net_mbps)
+    instances.create_column(instances_cpu_arch)
+    instances.create_column(instances_cpu_info)
+    instances.create_column(instances_xpu_arch)
+    instances.create_column(instances_xpu_info)
+    instances.create_column(instances_xpus)
+    instances.create_column(instances_net_arch)
+    instances.create_column(instances_net_info)
+    instances.create_column(instances_net_mbps)
+
+
+def downgrade(migrate_engine):
+    meta.bind = migrate_engine
+
+    instances.drop_column('cpu_arch')
+    instances.drop_column('cpu_info')
+    instances.drop_column('xpu_arch')
+    instances.drop_column('xpu_info')
+    instances.drop_column('xpus')
+    instances.drop_column('net_arch')
+    instances.drop_column('net_info')
+    instances.drop_column('net_mbps')

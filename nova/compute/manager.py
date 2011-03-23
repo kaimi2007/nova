@@ -34,12 +34,12 @@ terminating it.
                   :func:`nova.utils.import_object`
 """
 
-import base64
 import datetime
 import os
 import random
 import string
 import socket
+import sys
 import tempfile
 import time
 import functools
@@ -67,6 +67,21 @@ flags.DEFINE_string('console_host', socket.gethostname(),
 flags.DEFINE_integer('live_migration_retry_count', 30,
                     ("Retry count needed in live_migration."
                      " sleep 1 sec for each count"))
+#RLK
+flags.DEFINE_string('cpu_arch', 'x86_64',
+                    'Architecture the instance runs on')
+flags.DEFINE_string('xpu_arch', '',
+                    'Architecture of the accelerator instance runs on')
+flags.DEFINE_string('xpu_info', '',
+                    'Accelerator info')
+flags.DEFINE_integer('xpus', 0,
+                    'Number of xpus')
+flags.DEFINE_string('net_arch', '',
+                    'Architecture of the network')
+flags.DEFINE_integer('net_mbps', 256,
+                    'Network speed')
+flags.DEFINE_string('net_info', '',
+                    'Network info')
 
 LOG = logging.getLogger('nova.compute.manager')
 
@@ -115,7 +130,13 @@ class ComputeManager(manager.Manager):
         #             and redocument the module docstring
         if not compute_driver:
             compute_driver = FLAGS.compute_driver
-        self.driver = utils.import_object(compute_driver)
+
+        try:
+            self.driver = utils.import_object(compute_driver)
+        except ImportError:
+            LOG.error("Unable to load the virtualization driver.")
+            sys.exit(1)
+
         self.network_manager = utils.import_object(FLAGS.network_manager)
         self.volume_manager = utils.import_object(FLAGS.volume_manager)
         super(ComputeManager, self).__init__(*args, **kwargs)
@@ -180,9 +201,15 @@ class ComputeManager(manager.Manager):
         """Launch a new instance with specified options."""
         context = context.elevated()
         instance_ref = self.db.instance_get(context, instance_id)
-        instance_ref.onset_files = kwargs.get('onset_files', [])
-        if instance_ref['name'] in self.driver.list_instances():
-            raise exception.Error(_("Instance has already been created"))
+        instance_ref.injected_files = kwargs.get('injected_files', [])
+        #MK
+        if FLAGS.connection_type == 'tilera':
+            if instance_ref['name'] in []:
+                raise exception.Error(_("Instance has already been created"))
+        else:
+            if instance_ref['name'] in self.driver.list_instances():
+                raise exception.Error(_("Instance has already been created"))
+        #_MK
         LOG.audit(_("instance %s: starting..."), instance_id,
                   context=context)
         self.db.instance_update(context,
@@ -221,9 +248,10 @@ class ComputeManager(manager.Manager):
             self.db.instance_update(context,
                                     instance_id,
                                     {'launched_at': now})
-        except Exception:  # pylint: disable-msg=W0702
-            LOG.exception(_("instance %s: Failed to spawn"), instance_id,
-                          context=context)
+        except Exception:  # pylint: disable=W0702
+            LOG.exception(_("Instance '%s' failed to spawn. Is virtualization"
+                            " enabled in the BIOS?"), instance_id,
+                                                     context=context)
             self.db.instance_set_state(context,
                                        instance_id,
                                        power_state.SHUTDOWN)
@@ -359,15 +387,10 @@ class ComputeManager(manager.Manager):
             LOG.warn(_('trying to inject a file into a non-running '
                     'instance: %(instance_id)s (state: %(instance_state)s '
                     'expected: %(expected_state)s)') % locals())
-        # Files/paths *should* be base64-encoded at this point, but
-        # double-check to make sure.
-        b64_path = utils.ensure_b64_encoding(path)
-        b64_contents = utils.ensure_b64_encoding(file_contents)
-        plain_path = base64.b64decode(b64_path)
         nm = instance_ref['name']
-        msg = _('instance %(nm)s: injecting file to %(plain_path)s') % locals()
+        msg = _('instance %(nm)s: injecting file to %(path)s') % locals()
         LOG.audit(msg)
-        self.driver.inject_file(instance_ref, b64_path, b64_contents)
+        self.driver.inject_file(instance_ref, path, file_contents)
 
     @exception.wrap_exception
     @checks_instance_lock
@@ -698,7 +721,7 @@ class ComputeManager(manager.Manager):
                                     volume_id,
                                     instance_id,
                                     mountpoint)
-        except Exception as exc:  # pylint: disable-msg=W0702
+        except Exception as exc:  # pylint: disable=W0702
             # NOTE(vish): The inline callback eats the exception info so we
             #             log the traceback here and reraise the same
             #             ecxception below.
