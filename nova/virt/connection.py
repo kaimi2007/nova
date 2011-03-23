@@ -28,10 +28,12 @@ from nova.virt import libvirt_conn
 from nova.virt import libvirt_conn_gpu
 from nova.virt import xenapi_conn
 from nova.virt import hyperv
-#from nova.virt import tilera #MK
 
 LOG = logging.getLogger("nova.virt.connection")
 FLAGS = flags.FLAGS
+
+if FLAGS.connection_type == 'tilera':
+    from nova.virt import tilera
 
 
 def get_connection(read_only=False):
