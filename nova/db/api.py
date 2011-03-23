@@ -168,10 +168,10 @@ def compute_node_get_all(context, disabled=False):
     return IMPL.compute_node_get_all(context, disabled)
 
 
-def compute_node_get_by_arch(context, cpu_arch, xpu_arch, session=None):
-    """Get a computeNode by cpu_arch and xpu_arch
+def compute_node_get_all_by_arch(context, cpu_arch, xpu_arch, session=None):
+    """Get all computeNodes by cpu_arch and xpu_arch
         or raise if it does not exist."""
-    return IMPL.compute_node_get_by_arch(context, cpu_arch, xpu_arch)
+    return IMPL.compute_node_get_all_by_arch(context, cpu_arch, xpu_arch)
 
 
 def compute_node_get_by_cpu_arch(context, cpu_arch, session=None):

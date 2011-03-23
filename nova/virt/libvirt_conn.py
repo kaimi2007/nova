@@ -44,12 +44,15 @@ import random
 import subprocess
 import time
 import uuid
+#JP Walters
+import shlex
+import signal
+#END
 from xml.dom import minidom
 
-
+from eventlet import greenthread
 from eventlet import tpool
 from eventlet import semaphore
-
 import IPy
 
 from nova import context
@@ -73,6 +76,8 @@ Template = None
 LOG = logging.getLogger('nova.virt.libvirt_conn')
 
 FLAGS = flags.FLAGS
+if FLAGS.connection_type == 'gpu':
+    gvirtus_pids = {}
 
 
 def get_connection(read_only):
@@ -119,6 +124,7 @@ class LibvirtConnection(object):
         self.libvirt_uri = self.get_uri()
 
         self.libvirt_xml = open(FLAGS.libvirt_xml_template).read()
+        self.interfaces_xml = open(FLAGS.injected_network_template).read()
         self.cpuinfo_xml = open(FLAGS.cpuinfo_xml_template).read()
         self._wrapped_conn = None
         self.read_only = read_only
@@ -180,6 +186,18 @@ class LibvirtConnection(object):
             uri = FLAGS.libvirt_uri or 'qemu:///system'
         return uri
 
+    #JP Walters: poached this from the one defined below that's used
+    #by the ajax term.  I left the ajax term stuff in place to avoid
+    #unwanted side effects
+    def get_pty_for_instance(self, instance_name):
+        virt_dom = self._conn.lookupByName(instance_name)
+        xml = virt_dom.XMLDesc(0)
+        dom = minidom.parseString(xml)
+        for serial in dom.getElementsByTagName('serial'):
+            if serial.getAttribute('type') == 'pty':
+                source = serial.getElementsByTagName('source')[0]
+                return source.getAttribute('path')
+
     def _connect(self, uri, read_only):
         auth = [[libvirt.VIR_CRED_AUTHNAME, libvirt.VIR_CRED_NOECHOPROMPT],
                 'root',
@@ -195,6 +213,8 @@ class LibvirtConnection(object):
                 for x in self._conn.listDomainsID()]
 
     def destroy(self, instance, cleanup=True):
+        if FLAGS.connection_type == 'gpu':
+            global gvirtus_pids
         try:
             virt_dom = self._conn.lookupByName(instance['name'])
             virt_dom.destroy()
@@ -205,6 +225,22 @@ class LibvirtConnection(object):
         # We'll save this for when we do shutdown,
         # instead of destroy - but destroy returns immediately
         timer = utils.LoopingCall(f=None)
+
+        if FLAGS.connection_type == 'gpu':
+            print 'Terminating gvirtus'
+            #JP Walters: retrieve the pid from the hash table
+            local_pid = gvirtus_pids[instance['name']]
+            #JP Walters: send that pid (gvirtus) a SIGTERM.
+            #gvirtus has been modified to catch SIGTERM and
+            #shut down gracefully
+            os.kill(local_pid, signal.SIGINT)
+            #JP Walters: this just ensures that we fully clean up the process.
+            #it avoids zombies
+            os.waitpid(local_pid, 0)
+            #JP Walters: remove the instance:pid mapping from the hash table
+            #to keep the hash table size manageable.
+            del gvirtus_pids[instance['name']]
+            print 'gvirtus dead'
 
         while True:
             try:
@@ -296,9 +332,18 @@ class LibvirtConnection(object):
 
     @exception.wrap_exception
     def reboot(self, instance):
+    #JP Walters: we need to re-instantiate gvirtus, so we need
+    #access to the hash table
+        if FLAGS.connection_type == 'gpu':
+            global gvirtus_pids
+
         self.destroy(instance, False)
         xml = self.to_xml(instance)
+        self.firewall_driver.setup_basic_filtering(instance)
+        self.firewall_driver.prepare_instance_filter(instance)
         self._conn.createXML(xml, 0)
+        self.firewall_driver.apply_instance_filter(instance)
+
         timer = utils.LoopingCall(f=None)
 
         def _wait_for_reboot():
@@ -315,6 +360,17 @@ class LibvirtConnection(object):
                                       instance['id'],
                                       power_state.SHUTDOWN)
                 timer.stop()
+
+        if FLAGS.connection_type == 'gpu':
+            #JP Walters: again, find the tty and kick off a gvirtus-backend
+            tty = self.get_pty_for_instance(instance['name'])
+            command_line = '/usr/local/gvirtus/sbin/gvirtus-backend \
+                            /usr/local/gvirtus/etc/gvirtus.properties 0 %s' % (tty)
+
+            args = shlex.split(str(command_line))
+            print args
+            gvirtus_driver = subprocess.Popen(args)
+            gvirtus_pids[instance['name']] = gvirtus_driver.pid
 
         timer.f = _wait_for_reboot
         return timer.start(interval=0.5, now=True)
@@ -373,6 +429,11 @@ class LibvirtConnection(object):
 
     @exception.wrap_exception
     def spawn(self, instance):
+    #Added by JP Walters, gvirtus_pids is a hash table
+    #that maps instances to gvirtus_pids
+        if FLAGS.connection_type == 'gpu':
+            global gvirtus_pids
+
         xml = self.to_xml(instance)
         db.instance_set_state(context.get_admin_context(),
                               instance['id'],
@@ -404,6 +465,23 @@ class LibvirtConnection(object):
                 timer.stop()
 
         timer.f = _wait_for_boot
+
+        if FLAGS.connection_type == 'gpu':
+            #JP Walters: get the tty that's started.  We'll use this
+            #for our initial gvirtus_driver communication.  Note that
+            #this prevents the use of the ajax terminal since we're
+            #borrowing the tty.
+            tty = self.get_pty_for_instance(instance['name'])
+            command_line = '/usr/local/gvirtus/sbin/gvirtus-backend \
+                            /usr/local/gvirtus/etc/gvirtus.properties 0 %s' % (tty)
+
+            args = shlex.split(str(command_line))
+            print args
+            #JP Walters: kick off gvirtus
+            gvirtus_driver = subprocess.Popen(args)
+            #JP Walters: record the pid in the hash table
+            gvirtus_pids[instance['name']] = gvirtus_driver.pid
+
         return timer.start(interval=0.5, now=True)
 
     def _flush_xen_console(self, virsh_output):
@@ -618,16 +696,23 @@ class LibvirtConnection(object):
         if network_ref['injected']:
             admin_context = context.get_admin_context()
             address = db.instance_get_fixed_address(admin_context, inst['id'])
-            ra_server = network_ref['ra_server']
-            if not ra_server:
-                ra_server = "fd00::"
-            with open(FLAGS.injected_network_template) as f:
-                net = f.read() % {'address': address,
-                                  'netmask': network_ref['netmask'],
-                                  'gateway': network_ref['gateway'],
-                                  'broadcast': network_ref['broadcast'],
-                                  'dns': network_ref['dns'],
-                                  'ra_server': ra_server}
+            address_v6 = None
+            if FLAGS.use_ipv6:
+                address_v6 = db.instance_get_fixed_address_v6(admin_context,
+                                                              inst['id'])
+
+            interfaces_info = {'address': address,
+                               'netmask': network_ref['netmask'],
+                               'gateway': network_ref['gateway'],
+                               'broadcast': network_ref['broadcast'],
+                               'dns': network_ref['dns'],
+                               'address_v6': address_v6,
+                               'gateway_v6': network_ref['gateway_v6'],
+                               'netmask_v6': network_ref['netmask_v6'],
+                               'use_ipv6': FLAGS.use_ipv6}
+
+            net = str(Template(self.interfaces_xml,
+                                searchList=[interfaces_info]))
         if key or net:
             inst_name = inst['name']
             img_id = inst.image_id
@@ -662,7 +747,7 @@ class LibvirtConnection(object):
                                                    instance['id'])
         # Assume that the gateway also acts as the dhcp server.
         dhcp_server = network['gateway']
-        ra_server = network['ra_server']
+        gateway_v6 = network['gateway_v6']
 
         if FLAGS.allow_project_net_traffic:
             if FLAGS.use_ipv6:
@@ -707,8 +792,8 @@ class LibvirtConnection(object):
                     'local': instance_type['local_gb'],
                     'driver_type': driver_type}
 
-        if ra_server:
-            xml_info['ra_server'] = ra_server + "/128"
+        if gateway_v6:
+            xml_info['gateway_v6'] = gateway_v6 + "/128"
         if not rescue:
             if instance['kernel_id']:
                 xml_info['kernel'] = xml_info['basepath'] + "/kernel"
@@ -1275,10 +1360,10 @@ class FirewallDriver(object):
         """
         raise NotImplementedError()
 
-    def _ra_server_for_instance(self, instance):
+    def _gateway_v6_for_instance(self, instance):
         network = db.network_get_by_instance(context.get_admin_context(),
                                              instance['id'])
-        return network['ra_server']
+        return network['gateway_v6']
 
 
 class NWFilterFirewall(FirewallDriver):
@@ -1494,8 +1579,8 @@ class NWFilterFirewall(FirewallDriver):
                                              'nova-base-ipv6',
                                              'nova-allow-dhcp-server']
         if FLAGS.use_ipv6:
-            ra_server = self._ra_server_for_instance(instance)
-            if ra_server:
+            gateway_v6 = self._gateway_v6_for_instance(instance)
+            if gateway_v6:
                 instance_secgroup_filter_children += ['nova-allow-ra-server']
 
         ctxt = context.get_admin_context()
@@ -1663,9 +1748,9 @@ class IptablesFirewallDriver(FirewallDriver):
         # they're not worth the clutter.
         if FLAGS.use_ipv6:
             # Allow RA responses
-            ra_server = self._ra_server_for_instance(instance)
-            if ra_server:
-                ipv6_rules += ['-s %s/128 -p icmpv6 -j ACCEPT' % (ra_server,)]
+            gateway_v6 = self._gateway_v6_for_instance(instance)
+            if gateway_v6:
+                ipv6_rules += ['-s %s/128 -p icmpv6 -j ACCEPT' % (gateway_v6,)]
 
             #Allow project network traffic
             if FLAGS.allow_project_net_traffic:
@@ -1766,10 +1851,10 @@ class IptablesFirewallDriver(FirewallDriver):
                                              instance['id'])
         return network['gateway']
 
-    def _ra_server_for_instance(self, instance):
+    def _gateway_v6_for_instance(self, instance):
         network = db.network_get_by_instance(context.get_admin_context(),
                                              instance['id'])
-        return network['ra_server']
+        return network['gateway_v6']
 
     def _project_cidr_for_instance(self, instance):
         network = db.network_get_by_instance(context.get_admin_context(),

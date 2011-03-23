@@ -18,21 +18,20 @@
 #    under the License.
 
 """
-A connection to a hypervisor through libvirt.
+A connection to a tilera.
 
-Supports KVM, QEMU, UML, and XEN.
+Supports tilera board only
 
 **Related Flags**
 
-:libvirt_type:  Libvirt domain type.  Can be kvm, qemu, uml, xen
-                (default: kvm).
-:libvirt_uri:  Override for the default libvirt URI (depends on libvirt_type).
-:libvirt_xml_template:  Libvirt XML Template.
-:rescue_image_id:  Rescue ami image (default: ami-rescue).
-:rescue_kernel_id:  Rescue aki image (default: aki-rescue).
-:rescue_ramdisk_id:  Rescue ari image (default: ari-rescue).
-:injected_network_template:  Template file for injected network
-:allow_project_net_traffic:  Whether to allow in project network traffic
+:tilera_type:  tilera domain type.
+:tilera_uri:  Override for the default libvirt URI (depends on libvirt_type).
+:tilera_xml_template:  tilera XML Template.
+:tilera_rescue_image_id:  Rescue ami image (default: ami-rescue).
+:tilera_rescue_kernel_id:  Rescue aki image (default: aki-rescue).
+:tilera_rescue_ramdisk_id:  Rescue ari image (default: ari-rescue).
+:tilera_injected_network_template:  Template file for injected network
+:tilera_allow_project_net_traffic:  Whether to allow in project network traffic
 
 """
 
@@ -40,19 +39,17 @@ import multiprocessing
 import os
 import shutil
 import sys
+import pickle  # MK
+import time  # MK
 import random
 import subprocess
-import time
 import uuid
-#JP Walters
-import shlex
-import signal
-#END
 from xml.dom import minidom
 
 
+from eventlet import greenthread
+from eventlet import event
 from eventlet import tpool
-from eventlet import semaphore
 
 import IPy
 
@@ -61,39 +58,519 @@ from nova import db
 from nova import exception
 from nova import flags
 from nova import log as logging
-#from nova import test
 from nova import utils
+#from nova.api import context
 from nova.auth import manager
+#from nova.compute import disk
 from nova.compute import instance_types
 from nova.compute import power_state
 from nova.virt import disk
 from nova.virt import images
-from nova.virt import libvirt_flags
 
-libvirt = None
+tilera = None
 libxml2 = None
 Template = None
-gvirtus_pids = {}
 
-LOG = logging.getLogger('nova.virt.libvirt_conn_gpu')
+LOG = logging.getLogger('nova.virt.tilera')
 
 FLAGS = flags.FLAGS
-flags.DECLARE('live_migration_retry_count', 'nova.compute.manager')
+# TODO(vish): These flags should probably go into a shared location
+flags.DEFINE_string('tilera_xml_template',
+                    utils.abspath('virt/tilera.xml.template'),
+                    'tilera XML Template')
+flags.DEFINE_string('tilera_type',
+                    'tilera',
+                    'tielra domain type')
+flags.DEFINE_string('tilera_uri',
+                    '',
+                    'Override the default tilera URI (which is dependent'
+                    ' on tilera_type)')
+flags.DEFINE_bool('tilera_allow_project_net_traffic',
+                  True,
+                  'Whether to allow in project network traffic')
+
+#MK
+global tilera_boards
+global fake_doms
+
+
+class _tilera_board(object):
+    """Manages tilera board information"""
+    file_name = "/tftpboot/tilera_boards"
+    boards = []
+    BOARD_ID = 0
+    IP_ADDR = 1
+    MAC_ADDR = 2
+    #BOARD_STATUS = 3
+    VCPUS = 3
+    MEMORY_MB = 4
+    LOCAL_GB = 5
+    MEMORY_MB_USED = 6
+    LOCAL_GB_USED = 7
+    HYPERVISOR_TYPE = 8
+    HYPERVISOR_VER = 9
+    CPU_INFO = 10
+
+    def __init__(self):
+        self.fp = open(self.file_name, "r")
+        for item in self.fp:
+            l = item.split()
+            if l[0] == '#':
+                continue
+            l_d = {'board_id': int(l[self.BOARD_ID]),
+                    'ip_addr': l[self.IP_ADDR],
+                    'mac_addr': l[self.MAC_ADDR],
+                    'status': power_state.NOSTATE,
+                    'vcpus': l[self.VCPUS],
+                    'memory_mb': l[self.MEMORY_MB],
+                    'local_gb': l[self.LOCAL_GB],
+                    'memory_mb_used': l[self.MEMORY_MB_USED],
+                    'local_gb_used': l[self.LOCAL_GB_USED],
+                    'hypervisor_type': l[self.HYPERVISOR_TYPE],
+                    'hypervisor_version': l[self.HYPERVISOR_VER],
+                    'cpu_info': l[self.CPU_INFO]
+                  }
+            self.boards.append(l_d)
+        #print self.boards
+
+    def get_tilera_hw_info(self, field):
+        for board in self.boards:
+            if board['board_id'] == 2:
+                if field == 'vcpus':
+                    return board['vcpus']
+                elif field == 'memory_mb':
+                    return board['memory_mb']
+                elif field == 'local_gb':
+                    return board['local_gb']
+                elif field == 'memory_mb_used':
+                    return board['memory_mb_used']
+                elif field == 'local_gb_used':
+                    return board['local_gb_used']
+                elif field == 'hypervisor_type':
+                    return board['hypervisor_type']
+                elif field == 'hypervisor_version':
+                    return board['hypervisor_version']
+                elif field == 'cpu_info':
+                    return board['cpu_info']
+
+    def set_status(self, board_id, status):
+        for board in self.boards:
+            if board['board_id'] == board_id:
+                board['board_id'] = status
+                return 1
+        return 0
+
+    def get_idle_board(self):
+        """get an idle board"""
+        for item in self.boards:
+            if item['status'] == 0:
+                item['status'] = 1      # make status RUNNING
+                return item['board_id']
+        return -1
+
+    #MK
+    def find_ip_w_id(self, id):
+        for item in self.boards:
+            if item['board_id'] == id:
+                return item['ip_addr']
+    #_MK
+
+    def free_board(self, board_id):
+        print("free_board....\n")
+        for item in self.boards:
+            if item['board_id'] == str(board_id):
+                item['status'] = 0  # make status IDLE
+                return
+        return -1
+
+    def deactivate_board(self, board_id):
+        board_ip = tilera_boards.find_ip_w_id(board_id)
+        #print("deactivate_board is not implemented yet, \
+        print("deactivate_board is called for \
+               board_id = %s board_ip = %s\n", str(board_id), board_ip)
+        #MK
+        for item in self.boards:
+            if item['board_id'] == board_id:
+                print "status of board is set to 0"
+                item['status'] = 0
+        #_MK
+
+        #MK: PDU control
+        if board_id < 5:
+            pdu_num = 1
+            pdu_outlet_num = board_id + 5
+        else:
+            pdu_num = 2
+            pdu_outlet_num = board_id
+        cmd = "/tftpboot/pdu_mgr 10.0.100." + str(pdu_num) + " " \
+            + str(pdu_outlet_num) + " 2 >> pdu_output"
+        print cmd
+        path1 = "10.0.100." + str(pdu_num)
+        utils.execute('/tftpboot/pdu_mgr', path1, str(pdu_outlet_num), \
+            '2', '>>', 'pdu_output')
+
+        return []
+        #raise
+
+    #def activate_board(self, board_id, board_ip, name, mac_address):  # MK
+    def activate_board(self, board_id, board_ip, name, mac_address, \
+        ip_address):  # MK
+        print("activate_board \n")
+
+        target = os.path.join(FLAGS.instances_path, name)
+        print target
+
+        cmd = "cp /tftpboot/vmlinux_" + str(board_id) + \
+            "_1 /tftpboot/vmlinux_" + str(board_id)
+        print cmd
+        path1 = "/tftpboot/vmlinux_" + str(board_id) + "_1"
+        path2 = "/tftpboot/vmlinux_" + str(board_id)
+        utils.execute('cp', path1, path2)
+
+        #MK: PDU control
+        if board_id < 5:
+            pdu_num = 1
+            pdu_outlet_num = board_id + 5
+        else:
+            pdu_num = 2
+            pdu_outlet_num = board_id
+        cmd = "/tftpboot/pdu_mgr 10.0.100." + str(pdu_num) + " " \
+        + str(pdu_outlet_num) + " 3 >> pdu_output"
+        print cmd
+        path1 = "10.0.100." + str(pdu_num)
+        utils.execute('/tftpboot/pdu_mgr', path1, str(pdu_outlet_num), \
+            '3', '>>', 'pdu_output')
+        #_MK
+
+        cmd = "sleep 60"
+        print cmd
+        utils.execute('sleep', '60')
+        cmd = "/usr/local/TileraMDE/bin/tile-monitor --resume --net " \
+            + board_ip + " --upload /tftpboot/tilera_fs_" \
+            + str(board_id) + ".tar.gz /tilera_fs.tar.gz --quit"
+        print cmd
+        path1 = "/tftpboot/tilera_fs_" + str(board_id) + ".tar.gz"
+        utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
+            '--resume', '--net', board_ip, '--upload', path1, \
+            '/tilera_fs.tar.gz', '--quit')
+        cmd = "/usr/local/TileraMDE/bin/tile-monitor --resume --net " \
+            + board_ip + " --run - mount /dev/sda1 /mnt - --wait " \
+            + "--run - tar -xzpf /tilera_fs.tar.gz -C /mnt/ " \
+            + "- --wait --quit"
+        print cmd
+        utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
+            '--resume', '--net', board_ip, '--run', '-', 'mount', \
+            '/dev/sda1', '/mnt', '-', '--wait', '--run', '-', 'tar', \
+            '-xzpf', '/tilera_fs.tar.gz', '-C', '/mnt/', '-', \
+            '--wait', '--quit')
+
+        cmd = "cp /tftpboot/vmlinux_" + str(board_id) + \
+            "_2 /tftpboot/vmlinux_" + str(board_id)
+        print cmd
+        path1 = "/tftpboot/vmlinux_" + str(board_id) + "_2"
+        path2 = "/tftpboot/vmlinux_" + str(board_id)
+        utils.execute('cp', path1, path2)
+        cmd = "/tftpboot/pdu_mgr 10.0.100." + str(pdu_num) + " " \
+            + str(pdu_outlet_num) + " 3 >> pdu_output"
+        print cmd
+        path1 = "10.0.100." + str(pdu_num)
+        utils.execute('/tftpboot/pdu_mgr', path1, str(pdu_outlet_num), \
+            '3', '>>', 'pdu_output')
+        cmd = "sleep 80"
+        print cmd
+        utils.execute('sleep', '80')
+
+        #cmd = "/usr/local/TileraMDE/bin/tile-monitor --resume --net "
+        # + board_ip + " --run - /usr/sbin/sshd - --wait -- ls
+        #| grep bin >> tile_output"
+        cmd = "/usr/local/TileraMDE/bin/tile-monitor --resume --net " \
+            + board_ip + " --run - /usr/sbin/sshd - --wait --quit"
+        print cmd
+        #utils.execute('/usr/local/TileraMDE/bin/tile-monitor',
+        #'--resume', '--net', board_ip, '--run', '-', '/usr/sbin/sshd', \
+        #'-', '--wait', '--', 'ls', '|', 'grep', 'bin', \
+        #'>>', 'tile_output')
+        utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
+            '--resume', '--net', board_ip, '--run', '-', \
+            '/usr/sbin/sshd', '-', '--wait', '--quit')
+
+        #file = open("./tile_output")
+        #out_msg = file.readline()
+        #print "tile_output: " + out_msg
+        #utils.execute('rm', './tile_output')
+        #file.close()
+        #if out_msg.find("bin") < 0:
+        #    cmd = "TILERA_BOARD_#" + str(board_id) + " " \
+        #+ board_ip + " is not ready, out_msg=" + out_msg
+        #    print cmd
+        #    return power_state.NOSTATE
+        #else:
+        cmd = "TILERA_BOARD_#" + str(board_id) + " " + board_ip \
+            + " is ready"
+        print cmd
+        cmd = "rm /tftpboot/vmlinux_" + str(board_id)
+        print cmd
+        path1 = "/tftpboot/vmlinux_" + str(board_id)
+        utils.execute('rm', path1)
+        cmd = "/usr/local/TileraMDE/bin/tile-monitor --resume --net " \
+            + board_ip + " --run - ifconfig xgbe0 hw ether " \
+            + mac_address + " - --wait --run - ifconfig xgbe0 " \
+            + ip_address + " - --wait --quit"
+        print cmd
+        utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
+            '--resume', '--net', board_ip, '--run', '-', \
+            'ifconfig', 'xgbe0', 'hw', 'ether', mac_address, '-', \
+            '--wait', '--run', '-', 'ifconfig', 'xgbe0', ip_address, \
+            '-', '--wait', '--quit')
+        cmd = "/usr/local/TileraMDE/bin/tile-monitor --resume --net " \
+            + board_ip + " --run - iptables -A INPUT -p tcp " \
+            + "! -s 10.0.11.1 --dport 963 -j DROP - --wait " \
+            + "--run - rm -rf /usr/sbin/iptables* - --wait --quit"
+        print cmd
+        utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
+            '--resume', '--net', board_ip, '--run', '-', \
+            'iptables', '-A', 'INPUT', '-p', 'tcp', '!', '-s', \
+            '10.0.11.1', '--dport', '963', '-j', 'DROP', '-', \
+            '--wait', '--run', '-', \
+            'rm', '-rf', '/usr/sbin/iptables*', '-', '--wait', '--quit')
+        return power_state.RUNNING
+
+
+class _fake_dom(object):
+    """Fake domain for Tilera to avoid using tilera"""
+    fake_dom_file = "./test_fake_dom_file"
+    fake_dom_nums = 0
+    domains = []
+    fp = 0
+
+    def __init__(self):
+        self.domains = []
+        print "open %s" % self.fake_dom_file
+        try:
+            self.fp = open(self.fake_dom_file, "r+")
+            print "fp = "
+            print self.fp
+        except IOError:
+            print ("%s file does not exist, but is created\n" \
+                % self.fake_dom_file)
+            self.fp = open(self.fake_dom_file, "w")
+            self.fp.close()
+            self.fp = open(self.fake_dom_file, "r+")
+        self.read_domain_from_file()
+        # (TODO) read pre-existing fake domains
+
+    def read_domain_from_file(self):
+        try:
+            self.domains = pickle.load(self.fp)
+            self.fp.close()
+            self.fp = open(self.fake_dom_file, "w")
+        except EOFError:
+            dom = []
+            self.fp.close()
+            self.fp = open(self.fake_dom_file, "w")
+            print "No domains exist."
+            return
+        print "============= initial domains ==========="
+        print self.domains
+        print "========================================="
+        for dom in self.domains:
+            if dom['status'] != power_state.RUNNING:
+                print "Not running domain: remove"
+                self.domains.remove(dom)
+                continue
+            res = tilera_boards.set_status(dom['board_id'], \
+                                    dom['status'])
+            if res > 0:  # no such board exixts
+                self.fake_dom_nums = self.fake_dom_nums + 1
+            else:
+                print "domain running on an unknown board: discarded"
+                self.domains.remove(dom)
+                continue
+
+        print "--> domains after reading"
+        print self.domains
+
+    def reboot_domain(self, name):
+        fd = self.find_domain(name)
+        if fd == []:
+            raise exception.NotFound("No such domain (%s)" % name)
+        board_ip = tilera_boards.find_ip_w_id(fd['board_id'])  # MK
+
+        try:
+            tilera_boards.deactivate_board(fd['board_id'])
+        except:
+            raise exception.NotFound("Failed power down \
+                                      Tilera board %s" % fd['board_id'])
+        self.change_domain_state(name, power_state.NOSTATE)
+        try:
+            state = tilera_boards.activate_board(fd['board_id'], \
+                board_ip, name, fd['mac_address'], fd['ip_address'])  # MK
+                #board_ip, name, fd['mac_address']) #MK
+                #fd['ip_addr'], name)
+            self.change_domain_state(name, state)
+            return state
+        except:
+            LOG.debug(_("deactivate -> activate fails"))
+            self.destroy_domain(name)
+            raise
+
+    def destroy_domain(self, name):
+        """remove name instance from domains list
+           and power down the corresponding Tilera board"""
+        fd = self.find_domain(name)
+        if fd == []:
+            print "destroy_domain: no such domain"
+            raise exception.NotFound("No such domain %s" % name)
+
+        try:
+            tilera_boards.deactivate_board(fd['board_id'])
+            print "--> after deactivate board"
+            self.domains.remove(fd)
+            print "domains: "
+            print self.domains
+            print "boards: "
+            print tilera_boards.boards
+            self.store_domain()
+            print "after storing domains"
+            print self.domains
+        except:
+            print "what to do?"
+            raise
+
+    def create_domain(self, xml_dict, bpath):
+        """add a domain to domains list
+           and activate a idle Tilera board"""
+        LOG.debug(_("1////////////////////"))  # MK
+        fd = self.find_domain(xml_dict['name'])
+        if fd != []:
+            print 'domain with the same name already exists'
+            raise
+            #MK
+            #raise exception.NotFound("same name already exists")
+        print "create_domain: before get_idle_board"
+
+        board_id = tilera_boards.get_idle_board()
+        if board_id == -1:
+            print ('No idle tilera board exits')
+            raise exception.NotFound("No free boards available")
+
+        #MK
+        board_ip = tilera_boards.find_ip_w_id(board_id)
+
+        new_dom = {'board_id': board_id,
+                    'name': xml_dict['name'],
+                    'memory_kb': xml_dict['memory_kb'], \
+                    'vcpus': xml_dict['vcpus'], \
+                    'mac_address': xml_dict['mac_address'], \
+                    'ip_address': xml_dict['ip_address'], \
+                    'dhcp_server': xml_dict['dhcp_server'], \
+                    'image_id': xml_dict['image_id'], \
+                    'kernel_id': xml_dict['kernel_id'], \
+                    'ramdisk_id': xml_dict['ramdisk_id'], \
+                     'status': power_state.NOSTATE}
+        self.domains.append(new_dom)
+        print new_dom  # MK
+        self.change_domain_state(new_dom['name'], power_state.NOSTATE)
+
+        #MK
+        cmd = "mount -o loop " + bpath + "/root /tftpboot/fs_" \
+            + str(board_id)
+        print cmd
+        path1 = bpath + "/root"
+        path2 = "/tftpboot/fs_" + str(board_id)
+        utils.execute('mount', '-o', 'loop', path1, path2)
+        cmd = "cd /tftpboot/fs_" + str(board_id) + \
+            "; tar -czpf ../tilera_fs_" + str(board_id) + ".tar.gz ."
+        print cmd
+        path1 = "/tftpboot/fs_" + str(board_id)
+        os.chdir(path1)
+        path2 = "../tilera_fs_" + str(board_id) + ".tar.gz"
+        utils.execute('tar', '-czpf', path2, '.')
+        path1 = bpath + "/../../.."
+        os.chdir(path1)
+        cmd = "umount -l /tftpboot/fs_" + str(board_id)
+        print cmd
+        path4 = "/tftpboot/fs_" + str(board_id)
+        utils.execute('umount', '-l', path4)
+        #_MK
+
+        try:
+            state = tilera_boards.activate_board(board_id,
+                board_ip, new_dom['name'], new_dom['mac_address'], \
+                new_dom['ip_address'])  # MK
+                #board_ip, new_dom['name'], new_dom['mac_address']) #MK
+        except:
+            self.domains.remove(new_dom)  # MK
+            tilera_boards.free_board(board_id)
+            raise exception.NotFound("Failed to boot Tilera board %s" \
+                % board_id)
+
+        print "BEFORE last self.change_domain_state +++++++++++++++++"  # MK
+        self.change_domain_state(new_dom['name'], state)
+        return state
+
+    def change_domain_state(self, name, state):
+        l = self.find_domain(name)
+        if l == []:
+            raise exception.NotFound("No such domain exists")
+        i = self.domains.index(l)
+        self.domains[i]['status'] = state
+        print "change_domain_state: to new state %s" % str(state)
+        self.store_domain()
+
+    def store_domain(self):
+        # store fake domains to the file
+        print "store fake domains to the file"
+        print "-------"
+        print self.domains
+        print "-------"
+        print self.fp
+        self.fp.seek(0)
+        pickle.dump(self.domains, self.fp)
+        print "after successful pickle.dump"
+
+    def find_domain(self, name):
+        print "find_domain: self.domains %s" % name
+        print self.domains
+        for item in self.domains:
+            if item['name'] == name:
+                return item
+        print "domain does not exist\n"
+        return []
+
+    def list_domains(self):
+        if self.domains == []:
+            return []
+        return [x['name'] for x in self.domains]
+
+    def get_domain_info(self, instance_name):
+        domain = self.find_domain(instance_name)
+        if domain != []:
+            return [domain['status'], domain['memory_mb'], \
+                    domain['memory_mb'], \
+                    domain['vcpus'], \
+                    100]
+        else:
+            raise exception.NotFound("get_domain_info: No such doamin %s" \
+                                      % instance_name)
+#_MK
 
 
 def get_connection(read_only):
     # These are loaded late so that there's no need to install these
-    # libraries when not using libvirt.
+    # libraries when not using tilera.
     # Cheetah is separate because the unit tests want to load Cheetah,
-    # but not libvirt.
-    global libvirt
+    # but not tilera.
+    #MK
+    #global tilera
+    #if tilera is None:
+    #    tilera = __import__('tilera')
+    #_MK
     global libxml2
-    if libvirt is None:
-        libvirt = __import__('libvirt')
     if libxml2 is None:
         libxml2 = __import__('libxml2')
     _late_load_cheetah()
-    return LibvirtConnection(read_only)
+    return tileraConnection(read_only)
 
 
 def _late_load_cheetah():
@@ -119,18 +596,30 @@ def _get_ip_version(cidr):
         return int(net.version())
 
 
-class LibvirtConnection(object):
+class tileraConnection(object):
 
     def __init__(self, read_only):
-        self.libvirt_uri = self.get_uri()
+        #self.tilera_uri = self.get_uri()
 
-        self.libvirt_xml = open(FLAGS.libvirt_xml_template).read()
+        self.tilera_xml = open(FLAGS.tilera_xml_template).read()
         self.cpuinfo_xml = open(FLAGS.cpuinfo_xml_template).read()
         self._wrapped_conn = None
         self.read_only = read_only
 
+        #MK
         fw_class = utils.import_class(FLAGS.firewall_driver)
-        self.firewall_driver = fw_class(get_connection=self._get_connection)
+        self.tilera_firewall_driver = \
+            fw_class(get_connection=self._get_connection)
+        #self.nwfilter = NWFilterFirewall(self._get_connection)
+
+        #if not FLAGS.tilera_firewall_driver:
+        #    self.tilera_firewall_driver = self.nwfilter
+        #    self.nwfilter.handle_security_groups = True
+        #else:
+        #    self.tilera_firewall_driver \
+        #        = utils.import_object(FLAGS.tilera_firewall_driver)
+        #
+        #_MK
 
     def init_host(self, host):
         # Adopt existing VM's running here
@@ -159,101 +648,38 @@ class LibvirtConnection(object):
             self.firewall_driver.apply_instance_filter(instance)
 
     def _get_connection(self):
-        if not self._wrapped_conn or not self._test_connection():
-            LOG.debug(_('Connecting to libvirt: %s'), self.libvirt_uri)
-            self._wrapped_conn = self._connect(self.libvirt_uri,
-                                               self.read_only)
+        #MK
+        #if not self._wrapped_conn or not self._test_connection():
+        #    LOG.debug(_('Connecting to libvirt: %s'), self.tilera_uri)
+        #    self._wrapped_conn = self._connect(self.tilera_uri,
+        #                                       self.read_only)
+        self._wrapped_conn = fake_doms
+        #_MK
         return self._wrapped_conn
     _conn = property(_get_connection)
 
-    def _test_connection(self):
-        try:
-            self._wrapped_conn.getInfo()
-            return True
-        except libvirt.libvirtError as e:
-            if e.get_error_code() == libvirt.VIR_ERR_SYSTEM_ERROR and \
-               e.get_error_domain() == libvirt.VIR_FROM_REMOTE:
-                LOG.debug(_('Connection to libvirt broke'))
-                return False
-            raise
-
-    #JP Walters: poached this from the one defined below that's used
-    #by the ajax term.  I left the ajax term stuff in place to avoid
-    #unwanted side effects
-    def get_pty_for_instance(self, instance_name):
-        virt_dom = self._conn.lookupByName(instance_name)
-        xml = virt_dom.XMLDesc(0)
-        dom = minidom.parseString(xml)
-        for serial in dom.getElementsByTagName('serial'):
-            if serial.getAttribute('type') == 'pty':
-                source = serial.getElementsByTagName('source')[0]
-                return source.getAttribute('path')
-
-    def get_uri(self):
-        if FLAGS.libvirt_type == 'uml':
-            uri = FLAGS.libvirt_uri or 'uml:///system'
-        elif FLAGS.libvirt_type == 'xen':
-            uri = FLAGS.libvirt_uri or 'xen:///'
-        else:
-            uri = FLAGS.libvirt_uri or 'qemu:///system'
-        return uri
-
-    def _connect(self, uri, read_only):
-        auth = [[libvirt.VIR_CRED_AUTHNAME, libvirt.VIR_CRED_NOECHOPROMPT],
-                'root',
-                None]
-
-        if read_only:
-            return libvirt.openReadOnly(uri)
-        else:
-            return libvirt.openAuth(uri, auth, 0)
+    #def get_uri(self):
+    #    if FLAGS.tilera_type == 'uml':
+    #        uri = FLAGS.tilera_uri or 'uml:///system'
+    #    elif FLAGS.tilera_type == 'xen':
+    #        uri = FLAGS.tilera_uri or 'xen:///'
+    #    else:
+    #        uri = FLAGS.tilera_uri or 'qemu:///system'
+    #    return uri
 
     def list_instances(self):
-        return [self._conn.lookupByID(x).name()
-                for x in self._conn.listDomainsID()]
+        return self._conn.list_domains()  # MK
 
     def destroy(self, instance, cleanup=True):
-        global gvirtus_pids
         try:
-            virt_dom = self._conn.lookupByName(instance['name'])
-            virt_dom.destroy()
+            self._conn.destroy_domain(instance['name'])
+            db.instance_set_state(context.get_admin_context(),
+                                  instance['id'], power_state.SHUTDOWN)
         except Exception as _err:
             pass
             # If the instance is already terminated, we're still happy
 
-        # We'll save this for when we do shutdown,
-        # instead of destroy - but destroy returns immediately
-        timer = utils.LoopingCall(f=None)
-
-        print 'Terminating gvirtus'
-        #JP Walters: retrieve the pid from the hash table
-        local_pid = gvirtus_pids[instance['name']]
-        #JP Walters: send that pid (gvirtus) a SIGTERM.
-        #gvirtus has been modified to catch SIGTERM and
-        #shut down gracefully
-        os.kill(local_pid, signal.SIGINT)
-        #JP Walters: this just ensures that we fully clean up the process.
-        #it avoids zombies
-        os.waitpid(local_pid, 0)
-        #JP Walters: remove the instance:pid mapping from the hash table
-        #to keep the hash table size manageable.
-        del gvirtus_pids[instance['name']]
-        print 'gvirtus dead'
-
-        while True:
-            try:
-                state = self.get_info(instance['name'])['state']
-                db.instance_set_state(context.get_admin_context(),
-                                      instance['id'], state)
-                if state == power_state.SHUTDOWN:
-                    break
-            except Exception:
-                db.instance_set_state(context.get_admin_context(),
-                                      instance['id'],
-                                      power_state.SHUTDOWN)
-                break
-
-        self.firewall_driver.unfilter_instance(instance)
+        #self.firewall_driver.unfilter_instance(instance)
 
         if cleanup:
             self._cleanup(instance)
@@ -270,58 +696,11 @@ class LibvirtConnection(object):
 
     @exception.wrap_exception
     def attach_volume(self, instance_name, device_path, mountpoint):
-        virt_dom = self._conn.lookupByName(instance_name)
-        mount_device = mountpoint.rpartition("/")[2]
-        if device_path.startswith('/dev/'):
-            xml = """<disk type='block'>
-                         <driver name='qemu' type='raw'/>
-                         <source dev='%s'/>
-                         <target dev='%s' bus='virtio'/>
-                     </disk>""" % (device_path, mount_device)
-        elif ':' in device_path:
-            (protocol, name) = device_path.split(':')
-            xml = """<disk type='network'>
-                         <driver name='qemu' type='raw'/>
-                         <source protocol='%s' name='%s'/>
-                         <target dev='%s' bus='virtio'/>
-                     </disk>""" % (protocol,
-                                   name,
-                                   mount_device)
-        else:
-            raise exception.Invalid(_("Invalid device path %s") % device_path)
+        raise exception.APIError("attach_volume not supported for tilera.")
 
-        virt_dom.attachDevice(xml)
-
-    def _get_disk_xml(self, xml, device):
-        """Returns the xml for the disk mounted at device"""
-        try:
-            doc = libxml2.parseDoc(xml)
-        except:
-            return None
-        ctx = doc.xpathNewContext()
-        try:
-            ret = ctx.xpathEval('/domain/devices/disk')
-            for node in ret:
-                for child in node.children:
-                    if child.name == 'target':
-                        if child.prop('dev') == device:
-                            return str(node)
-        finally:
-            if ctx != None:
-                ctx.xpathFreeContext()
-            if doc != None:
-                doc.freeDoc()
-
-    @exception.wrap_exception
     def detach_volume(self, instance_name, mountpoint):
-        virt_dom = self._conn.lookupByName(instance_name)
-        mount_device = mountpoint.rpartition("/")[2]
-        xml = self._get_disk_xml(virt_dom.XMLDesc(0), mount_device)
-        if not xml:
-            raise exception.NotFound(_("No disk at %s") % mount_device)
-        virt_dom.detachDevice(xml)
+        raise exception.APIError("detach_volume not supported for tilera.")
 
-    @exception.wrap_exception
     def snapshot(self, instance, image_id):
         """ Create snapshot from a running VM instance """
         raise NotImplementedError(
@@ -330,117 +709,240 @@ class LibvirtConnection(object):
 
     @exception.wrap_exception
     def reboot(self, instance):
-    #JP Walters: we need to re-instantiate gvirtus, so we need
-    #access to the hash table
-        global gvirtus_pids
-        self.destroy(instance, False)
-        xml = self.to_xml(instance)
-        self._conn.createXML(xml, 0)
         timer = utils.LoopingCall(f=None)
 
         def _wait_for_reboot():
             try:
-                state = self.get_info(instance['name'])['state']
+                state = self._conn.reboot_domain(instance['name'])
                 db.instance_set_state(context.get_admin_context(),
-                                      instance['id'], state)
+                                  instance['id'], state, 'running')
                 if state == power_state.RUNNING:
                     LOG.debug(_('instance %s: rebooted'), instance['name'])
                     timer.stop()
-            except Exception, exn:
-                LOG.exception(_('_wait_for_reboot failed: %s'), exn)
+            except:
+                LOG.exception(_('_wait_for_reboot failed'))
                 db.instance_set_state(context.get_admin_context(),
-                                      instance['id'],
-                                      power_state.SHUTDOWN)
+                              instance['id'],
+                              power_state.SHUTDOWN)
                 timer.stop()
-        #JP Walters: again, find the tty and kick off a gvirtus-backend
-        tty = self.get_pty_for_instance(instance['name'])
-        command_line = '/usr/local/gvirtus/sbin/gvirtus-backend \
-                        /usr/local/gvirtus/etc/gvirtus.properties 0 %s' % (tty)
-
-        args = shlex.split(str(command_line))
-        print args
-        gvirtus_driver = subprocess.Popen(args)
-        gvirtus_pids[instance['name']] = gvirtus_driver.pid
-
         timer.f = _wait_for_reboot
         return timer.start(interval=0.5, now=True)
 
     @exception.wrap_exception
     def pause(self, instance, callback):
-        raise exception.APIError("pause not supported for libvirt.")
+        raise exception.APIError("pause not supported for tilera.")
 
     @exception.wrap_exception
     def unpause(self, instance, callback):
-        raise exception.APIError("unpause not supported for libvirt.")
+        raise exception.APIError("unpause not supported for tilera.")
 
     @exception.wrap_exception
     def suspend(self, instance, callback):
-        raise exception.APIError("suspend not supported for libvirt")
+        raise exception.APIError("suspend not supported for tilera")
 
     @exception.wrap_exception
     def resume(self, instance, callback):
-        raise exception.APIError("resume not supported for libvirt")
+        raise exception.APIError("resume not supported for tilera")
 
     @exception.wrap_exception
-    def rescue(self, instance, callback=None):
+    def rescue(self, instance):
         self.destroy(instance, False)
 
-        xml = self.to_xml(instance, rescue=True)
-        rescue_images = {'image_id': FLAGS.rescue_image_id,
-                         'kernel_id': FLAGS.rescue_kernel_id,
-                         'ramdisk_id': FLAGS.rescue_ramdisk_id}
-        self._create_image(instance, xml, '.rescue', rescue_images)
-        self._conn.createXML(xml, 0)
+        xml_dict = self.to_xml_dict(instance, rescue=True)
+        rescue_images = {'image_id': FLAGS.tilera_rescue_image_id,
+                         'kernel_id': FLAGS.tilera_rescue_kernel_id,
+                         'ramdisk_id': FLAGS.tilera_rescue_ramdisk_id}
+        #self._create_image(instance, xml, '.rescue', rescue_images)
+        #self._conn.createXML(xml, 0)
 
         timer = utils.LoopingCall(f=None)
 
         def _wait_for_rescue():
             try:
-                state = self.get_info(instance['name'])['state']
-                db.instance_set_state(None, instance['id'], state)
+                state = self._conn.reboot_domain(instance['name'])
+                db.instance_set_state(context.get_admin_context(),
+                                  instance['id'], state, 'running')
                 if state == power_state.RUNNING:
                     LOG.debug(_('instance %s: rescued'), instance['name'])
                     timer.stop()
-            except Exception, exn:
-                LOG.exception(_('_wait_for_rescue failed: %s'), exn)
-                db.instance_set_state(None,
-                                      instance['id'],
-                                      power_state.SHUTDOWN)
+            except:
+                LOG.exception(_('_wait_for_rescue failed'))
+                db.instance_set_state(context.get_admin_context(),
+                              instance['id'],
+                              power_state.SHUTDOWN)
                 timer.stop()
-
-        timer.f = _wait_for_rescue
+        timer.f = _wait_for_reboot
         return timer.start(interval=0.5, now=True)
 
     @exception.wrap_exception
-    def unrescue(self, instance, callback=None):
+    def unrescue(self, instance):
         # NOTE(vish): Because reboot destroys and recreates an instance using
         #             the normal xml file, we can just call reboot here
         self.reboot(instance)
 
     @exception.wrap_exception
     def spawn(self, instance):
-#Added by JP Walters, gvirtus_pids is a hash table
-#that maps instances to gvirtus_pids
-        global gvirtus_pids
-        xml = self.to_xml(instance)
+        LOG.debug(_("<============= spawn of tilera =============>"))  # MK
+        xml_dict = self.to_xml_dict(instance)
         db.instance_set_state(context.get_admin_context(),
                               instance['id'],
                               power_state.NOSTATE,
                               'launching')
-        self.firewall_driver.setup_basic_filtering(instance)
-        self.firewall_driver.prepare_instance_filter(instance)
-        self._create_image(instance, xml)
-        self._conn.createXML(xml, 0)
+
+        #self.tilera_firewall_driver.setup_basic_filtering(instance)#MK
+        self.tilera_firewall_driver.prepare_instance_filter(instance)
+        #self._create_image(instance, xml)
+        #self._conn.createXML(xml, 0)
         LOG.debug(_("instance %s: is running"), instance['name'])
-        self.firewall_driver.apply_instance_filter(instance)
+        self.tilera_firewall_driver.apply_instance_filter(instance)
+
+        suffix = ''
+
+        def basepath(fname='', suffix=suffix):
+            return os.path.join(FLAGS.instances_path,
+                                instance['name'],
+                                fname + suffix)
+
+        # ensure directories exist and are writable
+        #utils.execute('mkdir -p %s' % basepath(suffix=''))
+        #utils.execute('chmod 0777 %s' % basepath(suffix=''))
+        utils.execute('mkdir', '-p', basepath(suffix=''))
+        utils.execute('chmod', '0777', basepath(suffix=''))
+
+        LOG.info(_('instance %s: Creating image'), instance['name'])
+        f = open(basepath('tilera.xml'), 'w')
+        #f.write(tilera_xml) #####BUG?
+        f.close()
+
+        # NOTE(vish): No need add the suffix to console.log
+        os.close(os.open(basepath('console.log', ''),
+                         os.O_CREAT | os.O_WRONLY, 0660))
+
+        user = manager.AuthManager().get_user(instance['user_id'])
+        project = manager.AuthManager().get_project(instance['project_id'])
+
+        disk_images = None  # MK
+        if not disk_images:
+            disk_images = {'image_id': instance['image_id'],
+                           'kernel_id': instance['kernel_id'],
+                           'ramdisk_id': instance['ramdisk_id']}
+
+        #if disk_images['kernel_id']:
+        #    fname = '%08x' % int(disk_images['kernel_id'])
+        #    self._cache_image(fn=self._fetch_image,
+        #                      target=basepath('kernel'),
+        #                      fname=fname,
+        #                      image_id=disk_images['kernel_id'],
+        #                      user=user,
+        #                      project=project)
+        #    if disk_images['ramdisk_id']:
+        #        fname = '%08x' % int(disk_images['ramdisk_id'])
+        #        self._cache_image(fn=self._fetch_image,
+        #                          target=basepath('ramdisk'),
+        #                          fname=fname,
+        #                          image_id=disk_images['ramdisk_id'],
+        #                          user=user,
+        #                          project=project)
+
+        #root_fname = '%08x' % int(disk_images['image_id'])
+        #size = FLAGS.minimum_root_size
+        #if instance['instance_type'] == 'm1.tiny' or suffix == '.rescue':
+        #    size = None
+        #    root_fname += "_sm"
+
+        #self._cache_image(fn=self._fetch_image,
+        #                  target=basepath('disk'),
+        #                  fname=root_fname,
+        #                  cow=FLAGS.use_cow_images,
+        #                  image_id=disk_images['image_id'],
+        #                  user=user,
+        #                  project=project,
+        #                  size=size)
+        #type_data = \
+        #    instance_types.get_instance_type(instance['instance_type'])
+
+        #if type_data['local_gb']:
+        #    self._cache_image(fn=self._create_local,
+        #                      target=basepath('disk.local'),
+        #                      fname="local_%s" % type_data['local_gb'],
+        #                      cow=FLAGS.use_cow_images,
+        #                      local_gb=type_data['local_gb'])
+
+        #MK
+        #Test: copying original tilera images
+        #utils.execute('cp /tftpboot/tilera_fs %s/root' % basepath(suffix=''))
+        utils.execute('cp', '/tftpboot/tilera_fs_1G', '/tftpboot/tilera_fs')
+        path_root = basepath(suffix='') + "/root"
+        utils.execute('cp', '/tftpboot/tilera_fs', path_root)
+        #_MK
+
+        #def execute(cmd, process_input=None, check_exit_code=True):
+        #    return utils.execute(cmd=cmd,
+        #                         process_input=process_input,
+        #                         check_exit_code=check_exit_code)
+        ### _END_OF_CHANGE
+
+        # For now, we assume that if we're not using a kernel, we're using a
+        # partitioned disk image where the target partition is the first
+        # partition
+        target_partition = None
+        if not instance['kernel_id']:
+            target_partition = "1"
+
+        key = str(instance['key_data'])
+        net = None
+        network_ref = db.network_get_by_instance(context.get_admin_context(),
+                                                 instance['id'])
+        if network_ref['injected']:
+            admin_context = context.get_admin_context()
+            address = db.instance_get_fixed_address(admin_context, \
+                instance['id'])
+            ra_server = network_ref['ra_server']
+            if not ra_server:
+                ra_server = "fd00::"
+            with open(FLAGS.tilera_injected_network_template) as f:
+                net = f.read() % {'address': address,
+                                  'netmask': network_ref['netmask'],
+                                  'gateway': network_ref['gateway'],
+                                  'broadcast': network_ref['broadcast'],
+                                  'dns': network_ref['dns'],
+                                  'ra_server': ra_server}
+
+        if key or net:
+            inst_name = instance['name']
+            img_id = instance.image_id
+            if key:
+                LOG.info(_('instance %(inst_name)s: injecting key into'
+                        ' image %(img_id)s') % locals())
+            if net:
+                LOG.info(_('instance %(inst_name)s: injecting net into'
+                        ' image %(img_id)s') % locals())
+            try:
+                #MK
+                #disk.inject_data(basepath('disk'), key, net,
+                disk.inject_data(basepath('root'), key, net,
+                                 partition=target_partition,
+                                 nbd=FLAGS.use_cow_images)
+            except Exception as e:
+                # This could be a windows image, or a vmdk format disk
+                LOG.warn(_('instance %(inst_name)s: ignoring error injecting'
+                        ' data into image %(img_id)s (%(e)s)') % locals())
+
+        if FLAGS.tilera_type == 'uml':
+            utils.execute('sudo', 'chown', 'root', basepath('disk'))
+
+        #Back to spawn
+        bpath = basepath(suffix='')
 
         timer = utils.LoopingCall(f=None)
 
         def _wait_for_boot():
             try:
-                state = self.get_info(instance['name'])['state']
+                print xml_dict  # MK
+                state = self._conn.create_domain(xml_dict, bpath)
+                LOG.debug(_('~~~~~~ current state = %s ~~~~~~') % state)  # MK
                 db.instance_set_state(context.get_admin_context(),
-                                      instance['id'], state)
+                                      instance['id'], state, 'running')
                 if state == power_state.RUNNING:
                     LOG.debug(_('instance %s: booted'), instance['name'])
                     timer.stop()
@@ -451,23 +953,7 @@ class LibvirtConnection(object):
                                       instance['id'],
                                       power_state.SHUTDOWN)
                 timer.stop()
-
         timer.f = _wait_for_boot
-    #JP Walters: get the tty that's started.  We'll use this
-    #for our initial gvirtus_driver communication.  Note that
-    #this prevents the use of the ajax terminal since we're
-    #borrowing the tty.
-        tty = self.get_pty_for_instance(instance['name'])
-        command_line = '/usr/local/gvirtus/sbin/gvirtus-backend \
-                        /usr/local/gvirtus/etc/gvirtus.properties 0 %s' % (tty)
-
-        args = shlex.split(str(command_line))
-        print args
-    #JP Walters: kick off gvirtus
-        gvirtus_driver = subprocess.Popen(args)
-    #JP Walters: record the pid in the hash table
-        gvirtus_pids[instance['name']] = gvirtus_driver.pid
-
         return timer.start(interval=0.5, now=True)
 
     def _flush_xen_console(self, virsh_output):
@@ -503,7 +989,7 @@ class LibvirtConnection(object):
 
         utils.execute('sudo', 'chown', os.getuid(), console_log)
 
-        if FLAGS.libvirt_type == 'xen':
+        if FLAGS.tilera_type == 'xen':
             # Xen is special
             virsh_output = utils.execute('virsh', 'ttyconsole',
                                          instance['name'])
@@ -516,46 +1002,49 @@ class LibvirtConnection(object):
 
     @exception.wrap_exception
     def get_ajax_console(self, instance):
-        def get_open_port():
-            start_port, end_port = FLAGS.ajaxterm_portrange.split("-")
-            for i in xrange(0, 100):  # don't loop forever
-                port = random.randint(int(start_port), int(end_port))
-                # netcat will exit with 0 only if the port is in use,
-                # so a nonzero return value implies it is unused
-                cmd = 'netcat', '0.0.0.0', port, '-w', '1'
-                try:
-                    stdout, stderr = utils.execute(*cmd, process_input='')
-                except exception.ProcessExecutionError:
-                    return port
-            raise Exception(_('Unable to find an open port'))
+        #MK
+        raise NotImplementedError()
+        #def get_open_port():
+        #    start_port, end_port = FLAGS.ajaxterm_portrange.split("-")
+        #    for i in xrange(0, 100):  # don't loop forever
+        #        port = random.randint(int(start_port), int(end_port))
+        #        # netcat will exit with 0 only if the port is in use,
+        #        # so a nonzero return value implies it is unused
+        #        cmd = 'netcat', '0.0.0.0', port, '-w', '1'
+        #        try:
+        #            stdout, stderr = utils.execute(*cmd, process_input='')
+        #        except exception.ProcessExecutionError:
+        #            return port
+        #    raise Exception(_('Unable to find an open port'))
 
-        def get_pty_for_instance(instance_name):
-            virt_dom = self._conn.lookupByName(instance_name)
-            xml = virt_dom.XMLDesc(0)
-            dom = minidom.parseString(xml)
+        #def get_pty_for_instance(instance_name):
+        #    virt_dom = self._conn.lookupByName(instance_name)
+        #    xml = virt_dom.XMLDesc(0)
+        #    dom = minidom.parseString(xml)
 
-            for serial in dom.getElementsByTagName('serial'):
-                if serial.getAttribute('type') == 'pty':
-                    source = serial.getElementsByTagName('source')[0]
-                    return source.getAttribute('path')
+        #    for serial in dom.getElementsByTagName('serial'):
+        #        if serial.getAttribute('type') == 'pty':
+        #            source = serial.getElementsByTagName('source')[0]
+        #            return source.getAttribute('path')
+        #port = get_open_port()
+        #token = str(uuid.uuid4())
+        #host = instance['host']
 
-        port = get_open_port()
-        token = str(uuid.uuid4())
-        host = instance['host']
+        #ajaxterm_cmd = 'sudo socat - %s' \
+        #               % get_pty_for_instance(instance['name'])
 
-        ajaxterm_cmd = 'sudo socat - %s' \
-                       % get_pty_for_instance(instance['name'])
+        #cmd = '%s/tools/ajaxterm/ajaxterm.py --command "%s" -t %s -p %s' \
+        #      % (utils.novadir(), ajaxterm_cmd, token, port)
 
-        cmd = '%s/tools/ajaxterm/ajaxterm.py --command "%s" -t %s -p %s' \
-              % (utils.novadir(), ajaxterm_cmd, token, port)
-
-        subprocess.Popen(cmd, shell=True)
-        return {'token': token, 'host': host, 'port': port}
+        #subprocess.Popen(cmd, shell=True)
+        #return {'token': token, 'host': host, 'port': port}
+        #_MK
 
     _image_sems = {}
 
-    @staticmethod
-    def _cache_image(fn, target, fname, cow=False, *args, **kwargs):
+    def _cache_image(self, fn, target, fname, cow=False, *args, **kwargs):
+        #MK
+        raise NotImplementedError()
         """Wrapper for a method that creates an image that caches the image.
 
         This wrapper will save the image into a common store and create a
@@ -569,166 +1058,60 @@ class LibvirtConnection(object):
 
         If cow is True, it will make a CoW image instead of a copy.
         """
-        if not os.path.exists(target):
-            base_dir = os.path.join(FLAGS.instances_path, '_base')
-            if not os.path.exists(base_dir):
-                os.mkdir(base_dir)
-            base = os.path.join(base_dir, fname)
-
-            if fname not in LibvirtConnection._image_sems:
-                LibvirtConnection._image_sems[fname] = semaphore.Semaphore()
-            with LibvirtConnection._image_sems[fname]:
-                if not os.path.exists(base):
-                    fn(target=base, *args, **kwargs)
-            if not LibvirtConnection._image_sems[fname].locked():
-                del LibvirtConnection._image_sems[fname]
-
-            if cow:
-                utils.execute('qemu-img', 'create', '-f', 'qcow2', '-o',
-                              'cluster_size=2M,backing_file=%s' % base,
-                              target)
-            else:
-                utils.execute('cp', base, target)
+        #if not os.path.exists(target):
+        #    base_dir = os.path.join(FLAGS.instances_path, '_base')
+        #    if not os.path.exists(base_dir):
+        #        os.mkdir(base_dir)
+        #        os.chmod(base_dir, 0777)
+        #    base = os.path.join(base_dir, fname)
+        #    if not os.path.exists(base):
+        #        fn(target=base, *args, **kwargs)
+        #    if cow:
+        #        utils.execute('qemu-img create -f qcow2 -o '
+        #                      'cluster_size=2M,backing_file=%s %s'
+        #                      % (base, target))
+        #    else:
+        #        utils.execute('cp %s %s' % (base, target))
 
     def _fetch_image(self, target, image_id, user, project, size=None):
         """Grab image and optionally attempt to resize it"""
-        images.fetch(image_id, target, user, project)
-        if size:
-            disk.extend(target, size)
+        #MK
+        raise NotImplementedError()
+        #images.fetch(image_id, target, user, project)
+        #if size:
+        #    disk.extend(target, size)
 
     def _create_local(self, target, local_gb):
         """Create a blank image of specified size"""
-        utils.execute('truncate', target, '-s', "%dG" % local_gb)
+        #MK
+        raise NotImplementedError()
+        #utils.execute('truncate %s -s %dG' % (target, local_gb))
         # TODO(vish): should we format disk by default?
 
     def _create_image(self, inst, libvirt_xml, suffix='', disk_images=None):
-        # syntactic nicety
-        def basepath(fname='', suffix=suffix):
-            return os.path.join(FLAGS.instances_path,
-                                inst['name'],
-                                fname + suffix)
+        #MK
+        raise NotImplementedError()
 
-        # ensure directories exist and are writable
-        utils.execute('mkdir', '-p', basepath(suffix=''))
-
-        LOG.info(_('instance %s: Creating image'), inst['name'])
-        f = open(basepath('libvirt.xml'), 'w')
-        f.write(libvirt_xml)
-        f.close()
-
-        # NOTE(vish): No need add the suffix to console.log
-        os.close(os.open(basepath('console.log', ''),
-                         os.O_CREAT | os.O_WRONLY, 0660))
-
-        user = manager.AuthManager().get_user(inst['user_id'])
-        project = manager.AuthManager().get_project(inst['project_id'])
-
-        if not disk_images:
-            disk_images = {'image_id': inst['image_id'],
-                           'kernel_id': inst['kernel_id'],
-                           'ramdisk_id': inst['ramdisk_id']}
-
-        if disk_images['kernel_id']:
-            fname = '%08x' % int(disk_images['kernel_id'])
-            self._cache_image(fn=self._fetch_image,
-                              target=basepath('kernel'),
-                              fname=fname,
-                              image_id=disk_images['kernel_id'],
-                              user=user,
-                              project=project)
-            if disk_images['ramdisk_id']:
-                fname = '%08x' % int(disk_images['ramdisk_id'])
-                self._cache_image(fn=self._fetch_image,
-                                  target=basepath('ramdisk'),
-                                  fname=fname,
-                                  image_id=disk_images['ramdisk_id'],
-                                  user=user,
-                                  project=project)
-
-        root_fname = '%08x' % int(disk_images['image_id'])
-        size = FLAGS.minimum_root_size
-        if inst['instance_type'] == 'm1.tiny' or suffix == '.rescue':
-            size = None
-            root_fname += "_sm"
-
-        self._cache_image(fn=self._fetch_image,
-                          target=basepath('disk'),
-                          fname=root_fname,
-                          cow=FLAGS.use_cow_images,
-                          image_id=disk_images['image_id'],
-                          user=user,
-                          project=project,
-                          size=size)
-        type_data = instance_types.get_instance_type(inst['instance_type'])
-
-        if type_data['local_gb']:
-            self._cache_image(fn=self._create_local,
-                              target=basepath('disk.local'),
-                              fname="local_%s" % type_data['local_gb'],
-                              cow=FLAGS.use_cow_images,
-                              local_gb=type_data['local_gb'])
-
-        # For now, we assume that if we're not using a kernel, we're using a
-        # partitioned disk image where the target partition is the first
-        # partition
-        target_partition = None
-        if not inst['kernel_id']:
-            target_partition = "1"
-
-        key = str(inst['key_data'])
-        net = None
-        network_ref = db.network_get_by_instance(context.get_admin_context(),
-                                                 inst['id'])
-        if network_ref['injected']:
-            admin_context = context.get_admin_context()
-            address = db.instance_get_fixed_address(admin_context, inst['id'])
-            ra_server = network_ref['ra_server']
-            if not ra_server:
-                ra_server = "fd00::"
-            with open(FLAGS.injected_network_template) as f:
-                net = f.read() % {'address': address,
-                                  'netmask': network_ref['netmask'],
-                                  'gateway': network_ref['gateway'],
-                                  'broadcast': network_ref['broadcast'],
-                                  'dns': network_ref['dns'],
-                                  'ra_server': ra_server}
-        if key or net:
-            inst_name = inst['name']
-            img_id = inst.image_id
-            if key:
-                LOG.info(_('instance %(inst_name)s: injecting key into'
-                        ' image %(img_id)s') % locals())
-            if net:
-                LOG.info(_('instance %(inst_name)s: injecting net into'
-                        ' image %(img_id)s') % locals())
-            try:
-                disk.inject_data(basepath('disk'), key, net,
-                                 partition=target_partition,
-                                 nbd=FLAGS.use_cow_images)
-            except Exception as e:
-                # This could be a windows image, or a vmdk format disk
-                LOG.warn(_('instance %(inst_name)s: ignoring error injecting'
-                        ' data into image %(img_id)s (%(e)s)') % locals())
-
-        if FLAGS.libvirt_type == 'uml':
-            utils.execute('sudo', 'chown', 'root', basepath('disk'))
-
-    def to_xml(self, instance, rescue=False):
+    def to_xml_dict(self, instance, rescue=False):
         # TODO(termie): cache?
         LOG.debug(_('instance %s: starting toXML method'), instance['name'])
+        network = db.project_get_network(context.get_admin_context(),
+                                         instance['project_id'])
         network = db.network_get_by_instance(context.get_admin_context(),
                                              instance['id'])
         # FIXME(vish): stick this in db
         instance_type = instance['instance_type']
-        # instance_type = test.INSTANCE_TYPES[instance_type]
+        #instance_type = instance_types.INSTANCE_TYPES[instance_type]
         instance_type = instance_types.get_instance_type(instance_type)
         ip_address = db.instance_get_fixed_address(context.get_admin_context(),
                                                    instance['id'])
         # Assume that the gateway also acts as the dhcp server.
         dhcp_server = network['gateway']
         ra_server = network['ra_server']
+        if not ra_server:
+            ra_server = 'fd00::'
 
-        if FLAGS.allow_project_net_traffic:
+        if FLAGS.tilera_allow_project_net_traffic:
             if FLAGS.use_ipv6:
                 net, mask = _get_net_and_mask(network['cidr'])
                 net_v6, prefixlen_v6 = _get_net_and_prefixlen(
@@ -756,7 +1139,7 @@ class LibvirtConnection(object):
         else:
             driver_type = 'raw'
 
-        xml_info = {'type': FLAGS.libvirt_type,
+        xml_info = {'type': FLAGS.tilera_type,
                     'name': instance['name'],
                     'basepath': os.path.join(FLAGS.instances_path,
                                              instance['name']),
@@ -766,35 +1149,41 @@ class LibvirtConnection(object):
                     'mac_address': instance['mac_address'],
                     'ip_address': ip_address,
                     'dhcp_server': dhcp_server,
+                    'ra_server': ra_server,
                     'extra_params': extra_params,
+                    'image_id': instance['image_id'],  # MK
+                    'kernel_id': instance['kernel_id'],  # MK
+                    'ramdisk_id': instance['ramdisk_id'],  # MK
                     'rescue': rescue,
                     'local': instance_type['local_gb'],
                     'driver_type': driver_type}
 
-        if ra_server:
-            xml_info['ra_server'] = ra_server + "/128"
-        if not rescue:
-            if instance['kernel_id']:
-                xml_info['kernel'] = xml_info['basepath'] + "/kernel"
+        #MK
+        #if not rescue:
+        #    if instance['kernel_id']:
+        #        xml_info['kernel'] = xml_info['basepath'] + "/kernel"
 
-            if instance['ramdisk_id']:
-                xml_info['ramdisk'] = xml_info['basepath'] + "/ramdisk"
+        #    if instance['ramdisk_id']:
+        #        xml_info['ramdisk'] = xml_info['basepath'] + "/ramdisk"
 
-            xml_info['disk'] = xml_info['basepath'] + "/disk"
+        #    xml_info['disk'] = xml_info['basepath'] + "/disk"
 
-        xml = str(Template(self.libvirt_xml, searchList=[xml_info]))
+        xml = str(Template(self.tilera_xml, searchList=[xml_info]))
         LOG.debug(_('instance %s: finished toXML method'),
                         instance['name'])
 
-        return xml
+        #return xml
+        #_MK
+        print xml_info
+        return xml_info  # MK
 
     def get_info(self, instance_name):
         try:
-            virt_dom = self._conn.lookupByName(instance_name)
+            (state, max_mem, mem, num_cpu, cpu_time) \
+                = self._conn.get_domain_info(instance_name)
         except:
             raise exception.NotFound(_("Instance %s not found")
                                      % instance_name)
-        (state, max_mem, mem, num_cpu, cpu_time) = virt_dom.info()
         return {'state': state,
                 'max_mem': max_mem,
                 'mem': mem,
@@ -802,8 +1191,7 @@ class LibvirtConnection(object):
                 'cpu_time': cpu_time}
 
     def get_diagnostics(self, instance_name):
-        raise exception.APIError(_("diagnostics are not supported "
-                                   "for libvirt"))
+        raise exception.APIError("diagnostics are not supported for libvirt")
 
     def get_disks(self, instance_name):
         """
@@ -812,40 +1200,43 @@ class LibvirtConnection(object):
 
         Returns a list of all block devices for this domain.
         """
-        domain = self._conn.lookupByName(instance_name)
-        # TODO(devcamcar): Replace libxml2 with etree.
-        xml = domain.XMLDesc(0)
-        doc = None
+        #MK
+        raise NotImplementedError()
+        #domain = self._conn.lookupByName(instance_name)
+        ## TODO(devcamcar): Replace libxml2 with etree.
+        #xml = domain.XMLDesc(0)
+        #doc = None
 
-        try:
-            doc = libxml2.parseDoc(xml)
-        except:
-            return []
+        #try:
+        #    doc = libxml2.parseDoc(xml)
+        #except:
+        #    return []
 
-        ctx = doc.xpathNewContext()
-        disks = []
+        #ctx = doc.xpathNewContext()
+        #disks = []
 
-        try:
-            ret = ctx.xpathEval('/domain/devices/disk')
+        #try:
+        #    ret = ctx.xpathEval('/domain/devices/disk')
 
-            for node in ret:
-                devdst = None
+        #    for node in ret:
+        #        devdst = None
 
-                for child in node.children:
-                    if child.name == 'target':
-                        devdst = child.prop('dev')
+        #        for child in node.children:
+        #            if child.name == 'target':
+        #                devdst = child.prop('dev')
 
-                if devdst == None:
-                    continue
+        #        if devdst == None:
+        #            continue
 
-                disks.append(devdst)
-        finally:
-            if ctx != None:
-                ctx.xpathFreeContext()
-            if doc != None:
-                doc.freeDoc()
+        #        disks.append(devdst)
+        #finally:
+        #    if ctx != None:
+        #        ctx.xpathFreeContext()
+        #    if doc != None:
+        #        doc.freeDoc()
 
-        return disks
+        #return disks
+        #_MK
 
     def get_interfaces(self, instance_name):
         """
@@ -854,40 +1245,43 @@ class LibvirtConnection(object):
 
         Returns a list of all network interfaces for this instance.
         """
-        domain = self._conn.lookupByName(instance_name)
-        # TODO(devcamcar): Replace libxml2 with etree.
-        xml = domain.XMLDesc(0)
-        doc = None
+        #MK
+        raise NotImplementedError()
+        #domain = self._conn.lookupByName(instance_name)
+        ## TODO(devcamcar): Replace libxml2 with etree.
+        #xml = domain.XMLDesc(0)
+        #doc = None
 
-        try:
-            doc = libxml2.parseDoc(xml)
-        except:
-            return []
+        #try:
+        #    doc = libxml2.parseDoc(xml)
+        #except:
+        #    return []
 
-        ctx = doc.xpathNewContext()
-        interfaces = []
+        #ctx = doc.xpathNewContext()
+        #interfaces = []
 
-        try:
-            ret = ctx.xpathEval('/domain/devices/interface')
+        #try:
+        #    ret = ctx.xpathEval('/domain/devices/interface')
 
-            for node in ret:
-                devdst = None
+        #    for node in ret:
+        #        devdst = None
 
-                for child in node.children:
-                    if child.name == 'target':
-                        devdst = child.prop('dev')
+        #        for child in node.children:
+        #            if child.name == 'target':
+        #                devdst = child.prop('dev')
 
-                if devdst == None:
-                    continue
+        #        if devdst == None:
+        #            continue
 
-                interfaces.append(devdst)
-        finally:
-            if ctx != None:
-                ctx.xpathFreeContext()
-            if doc != None:
-                doc.freeDoc()
+        #        interfaces.append(devdst)
+        #finally:
+        #    if ctx != None:
+        #        ctx.xpathFreeContext()
+        #    if doc != None:
+        #        doc.freeDoc()
 
-        return interfaces
+        #return interfaces
+        #_MK
 
     def get_vcpu_total(self):
         """Get vcpu number of physical computer.
@@ -898,7 +1292,10 @@ class LibvirtConnection(object):
 
         # On certain platforms, this will raise a NotImplementedError.
         try:
-            return multiprocessing.cpu_count()
+            #MK
+            #return multiprocessing.cpu_count()
+            return tilera_boards.get_tilera_hw_info('vcpus')  # 10
+            #_MK
         except NotImplementedError:
             LOG.warn(_("Cannot get the number of cpu, because this "
                        "function is not implemented for this platform. "
@@ -912,13 +1309,16 @@ class LibvirtConnection(object):
 
         """
 
-        if sys.platform.upper() != 'LINUX2':
-            return 0
+        #MK
+        #if sys.platform.upper() != 'LINUX2':
+        #    return 0
 
-        meminfo = open('/proc/meminfo').read().split()
-        idx = meminfo.index('MemTotal:')
-        # transforming kb to mb.
-        return int(meminfo[idx + 1]) / 1024
+        #meminfo = open('/proc/meminfo').read().split()
+        #idx = meminfo.index('MemTotal:')
+        ## transforming kb to mb.
+        #return int(meminfo[idx + 1]) / 1024
+        return tilera_boards.get_tilera_hw_info('memory_mb')  # 16218
+        #_MK
 
     def get_local_gb_total(self):
         """Get the total hdd size(GB) of physical computer.
@@ -930,8 +1330,11 @@ class LibvirtConnection(object):
 
         """
 
-        hddinfo = os.statvfs(FLAGS.instances_path)
-        return hddinfo.f_frsize * hddinfo.f_blocks / 1024 / 1024 / 1024
+        #MK
+        #hddinfo = os.statvfs(FLAGS.instances_path)
+        #return hddinfo.f_frsize * hddinfo.f_blocks / 1024 / 1024 / 1024
+        return tilera_boards.get_tilera_hw_info('local_gb')  # 917
+        #_MK
 
     def get_vcpu_used(self):
         """ Get vcpu usage number of physical computer.
@@ -941,9 +1344,13 @@ class LibvirtConnection(object):
         """
 
         total = 0
-        for dom_id in self._conn.listDomainsID():
-            dom = self._conn.lookupByID(dom_id)
-            total += len(dom.vcpus()[1])
+        #MK
+        #for dom_id in self._conn.listDomainsID():
+        #    dom = self._conn.lookupByID(dom_id)
+        #    total += len(dom.vcpus()[1])
+        for dom_id in self._conn.list_domains():
+            total += 1
+        #_MK
         return total
 
     def get_memory_mb_used(self):
@@ -953,15 +1360,19 @@ class LibvirtConnection(object):
 
         """
 
-        if sys.platform.upper() != 'LINUX2':
-            return 0
+        #MK
+        #if sys.platform.upper() != 'LINUX2':
+        #    return 0
 
-        m = open('/proc/meminfo').read().split()
-        idx1 = m.index('MemFree:')
-        idx2 = m.index('Buffers:')
-        idx3 = m.index('Cached:')
-        avail = (int(m[idx1 + 1]) + int(m[idx2 + 1]) + int(m[idx3 + 1])) / 1024
-        return  self.get_memory_mb_total() - avail
+        #m = open('/proc/meminfo').read().split()
+        #idx1 = m.index('MemFree:')
+        #idx2 = m.index('Buffers:')
+        #idx3 = m.index('Cached:')
+        #avail = (int(m[idx1 + 1]) + int(m[idx2 + 1]) \
+        #    + int(m[idx3 + 1])) / 1024
+        #return  self.get_memory_mb_total() - avail
+        return tilera_boards.get_tilera_hw_info('memory_mb_used')  # 476
+        #_MK
 
     def get_local_gb_used(self):
         """Get the free hdd size(GB) of physical computer.
@@ -973,9 +1384,12 @@ class LibvirtConnection(object):
 
         """
 
-        hddinfo = os.statvfs(FLAGS.instances_path)
-        avail = hddinfo.f_frsize * hddinfo.f_bavail / 1024 / 1024 / 1024
-        return self.get_local_gb_total() - avail
+        #MK
+        #hddinfo = os.statvfs(FLAGS.instances_path)
+        #avail = hddinfo.f_frsize * hddinfo.f_bavail / 1024 / 1024 / 1024
+        #return self.get_local_gb_total() - avail
+        return tilera_boards.get_tilera_hw_info('local_gb_used')  # 1
+        #_MK
 
     def get_hypervisor_type(self):
         """Get hypervisor type.
@@ -983,8 +1397,11 @@ class LibvirtConnection(object):
         :returns: hypervisor type (ex. qemu)
 
         """
-
-        return self._conn.getType()
+        #MK
+        #return self._conn.getType()
+        return tilera_boards.get_tilera_hw_info('hypervisor_type')
+        # 'tilera_hv'
+        #_MK
 
     def get_hypervisor_version(self):
         """Get hypervisor version.
@@ -993,7 +1410,10 @@ class LibvirtConnection(object):
 
         """
 
-        return self._conn.getVersion()
+        #MK
+        #return self._conn.getVersion()
+        return tilera_boards.get_tilera_hw_info('hypervisor_version')  # 1
+        #_MK
 
     def get_cpu_info(self):
         """Get cpuinfo information.
@@ -1005,69 +1425,74 @@ class LibvirtConnection(object):
 
         """
 
-        xml = self._conn.getCapabilities()
-        xml = libxml2.parseDoc(xml)
-        nodes = xml.xpathEval('//host/cpu')
-        if len(nodes) != 1:
-            raise exception.Invalid(_("Invalid xml. '<cpu>' must be 1,"
-                                      "but %d\n") % len(nodes)
-                                      + xml.serialize())
+        #MK
+        #xml = self._conn.getCapabilities()
+        #xml = libxml2.parseDoc(xml)
+        #nodes = xml.xpathEval('//host/cpu')
+        #if len(nodes) != 1:
+        #    raise exception.Invalid(_("Invalid xml. '<cpu>' must be 1,"
+        #                              "but %d\n") % len(nodes)
+        #                              + xml.serialize())
 
-        cpu_info = dict()
-
-        arch_nodes = xml.xpathEval('//host/cpu/arch')
-        if arch_nodes:
-            cpu_info['arch'] = arch_nodes[0].getContent()
-
-        model_nodes = xml.xpathEval('//host/cpu/model')
-        if model_nodes:
-            cpu_info['model'] = model_nodes[0].getContent()
-
-        vendor_nodes = xml.xpathEval('//host/cpu/vendor')
-        if vendor_nodes:
-            cpu_info['vendor'] = vendor_nodes[0].getContent()
-
-        topology_nodes = xml.xpathEval('//host/cpu/topology')
-        topology = dict()
-        if topology_nodes:
-            topology_node = topology_nodes[0].get_properties()
-            while topology_node:
-                name = topology_node.get_name()
-                topology[name] = topology_node.getContent()
-                topology_node = topology_node.get_next()
-
-            keys = ['cores', 'sockets', 'threads']
-            tkeys = topology.keys()
-            if set(tkeys) != set(keys):
-                ks = ', '.join(keys)
-                raise exception.Invalid(_("Invalid xml: topology"
-                                          "(%(topology)s) must have "
-                                          "%(ks)s") % locals())
-
-        feature_nodes = xml.xpathEval('//host/cpu/feature')
-        features = list()
-        for nodes in feature_nodes:
-            features.append(nodes.get_properties().getContent())
-
-        cpu_info['topology'] = topology
-        cpu_info['features'] = features
-        return utils.dumps(cpu_info)
+        #cpu_info = dict()
+        #arch_nodes = xml.xpathEval('//host/cpu/arch')
+        #if arch_nodes:
+        #    cpu_info['arch'] = arch_nodes[0].getContent()
+        #model_nodes = xml.xpathEval('//host/cpu/model')
+        #if model_nodes:
+        #    cpu_info['model'] = model_nodes[0].getContent()
+        #vendor_nodes = xml.xpathEval('//host/cpu/vendor')
+        #if vendor_nodes:
+        #    cpu_info['vendor'] = vendor_nodes[0].getContent()
+        #topology_nodes = xml.xpathEval('//host/cpu/topology')
+        #topology = dict()
+        #if topology_nodes:
+        #    topology_node = topology_nodes[0].get_properties()
+        #    while topology_node:
+        #        name = topology_node.get_name()
+        #        topology[name] = topology_node.getContent()
+        #        topology_node = topology_node.get_next()
+        #
+        #    keys = ['cores', 'sockets', 'threads']
+        #    tkeys = topology.keys()
+        #    if set(tkeys) != set(keys):
+        #        ks = ', '.join(keys)
+        #        raise exception.Invalid(_("Invalid xml: topology"
+        #                             "(%(topology)s) must have "
+        #                             "%(ks)s") % locals())
+        #
+        #feature_nodes = xml.xpathEval('//host/cpu/feature')
+        #
+        #features = list()
+        #for nodes in feature_nodes:
+        #    features.append(nodes.get_properties().getContent())
+        #cpu_info['topology'] = topology
+        #cpu_info['features'] = features
+        #return utils.dumps(cpu_info)
+        return tilera_boards.get_tilera_hw_info('cpu_info')  # 'TILEPro64'
+        #_MK
 
     def block_stats(self, instance_name, disk):
         """
         Note that this function takes an instance name, not an Instance, so
         that it can be called by monitor.
         """
-        domain = self._conn.lookupByName(instance_name)
-        return domain.blockStats(disk)
+        #MK
+        raise NotImplementedError()
+        #domain = self._conn.lookupByName(instance_name)
+        #return domain.blockStats(disk)
+        #_MK
 
     def interface_stats(self, instance_name, interface):
         """
         Note that this function takes an instance name, not an Instance, so
         that it can be called by monitor.
         """
-        domain = self._conn.lookupByName(instance_name)
-        return domain.interfaceStats(interface)
+        #MK
+        raise NotImplementedError()
+        #domain = self._conn.lookupByName(instance_name)
+        #return domain.interfaceStats(interface)
+        #_MK
 
     def get_console_pool_info(self, console_type):
         #TODO(mdragon): console proxy should be implemented for libvirt,
@@ -1078,10 +1503,12 @@ class LibvirtConnection(object):
                  'password': 'fakepassword'}
 
     def refresh_security_group_rules(self, security_group_id):
-        self.firewall_driver.refresh_security_group_rules(security_group_id)
+        self.tilera_firewall_driver.\
+            refresh_security_group_rules(security_group_id)
 
     def refresh_security_group_members(self, security_group_id):
-        self.firewall_driver.refresh_security_group_members(security_group_id)
+        self.tilera_firewall_driver.\
+            refresh_security_group_members(security_group_id)
 
     def update_available_resource(self, ctxt, host):
         """Updates compute manager resource info on ComputeNode table.
@@ -1113,8 +1540,8 @@ class LibvirtConnection(object):
                'cpu_info': self.get_cpu_info(),
                #RLK
                'cpu_arch': FLAGS.cpu_arch,
-               'xpu_arch': 'fermi',
-               'xpus': 1,
+               'xpu_arch': FLAGS.xpu_arch,
+               'xpus': FLAGS.xpus,
                'xpu_info': FLAGS.xpu_info,
                'net_arch': FLAGS.net_arch,
                'net_info': FLAGS.net_info,
@@ -1844,3 +2271,9 @@ class IptablesFirewallDriver(FirewallDriver):
         network = db.network_get_by_instance(context.get_admin_context(),
                                              instance['id'])
         return network['cidr_v6']
+
+
+#MK
+tilera_boards = _tilera_board()
+fake_doms = _fake_dom()
+#_MK
