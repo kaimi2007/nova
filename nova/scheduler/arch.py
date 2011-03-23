@@ -37,7 +37,7 @@ class ArchitectureScheduler(driver.Scheduler):
 
     def hosts_up_with_arch(self, context, topic, instance_id):
         """Return the list of hosts that have a running service
-        for topic and arch (if defined).
+        for cpu_arch and xpu_arch.
         """
 
         if instance_id is None:
@@ -63,19 +63,19 @@ class ArchitectureScheduler(driver.Scheduler):
         """
         compute_nodes = db.compute_node_get_all_by_arch(context,
                 instances[0].cpu_arch, instances[0].xpu_arch)
-        LOG.debug(_("##\tRLK - compute_nodes[0].service_id %d"),
-            compute_nodes[0].service_id)
         LOG.debug(_("##\tRLK - compute_nodes.length %d"), len(compute_nodes))
-        for node in compute_nodes:
-            LOG.debug(_("##\tRLK - found matching compute_node.id %s"),
-                    node.id)
-        compute_node = compute_nodes[int(random.random() * len(compute_nodes))]
         services = db.service_get_all_by_topic(context, topic)
-        LOG.debug(_("##\tRLK - services %s"), services)
-        return [service.host
-                for service in services
-                if self.service_is_up(service)
-                and service.id == compute_node.service_id]
+        hosts = []
+        for compute_node in compute_nodes:
+            LOG.debug(_("##\tRLK - found matching compute_node.id = %s"),
+                    compute_node.id)
+            for service in services:
+                if (self.service_is_up(service)
+                        and service.id == compute_node.service_id):
+                    LOG.debug(_("##\tRLK - found matching service.id = %s"),
+                        service.id)
+                    hosts.append(service.host)
+        return hosts
 
     def schedule(self, context, topic, *_args, **_kwargs):
         """Picks a host that is up at random in selected

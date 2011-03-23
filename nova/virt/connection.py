@@ -25,7 +25,6 @@ from nova import flags
 from nova import log as logging
 from nova.virt import fake
 from nova.virt import libvirt_conn
-from nova.virt import libvirt_conn_gpu
 from nova.virt import xenapi_conn
 from nova.virt import hyperv
 
@@ -64,15 +63,15 @@ def get_connection(read_only=False):
 #    t = connection_type
     if t == 'fake':
         conn = fake.get_connection(read_only)
-    elif t == 'libvirt':
+    elif t == 'libvirt' or t == 'gpu':
         conn = libvirt_conn.get_connection(read_only)
     elif t == 'xenapi':
         conn = xenapi_conn.get_connection(read_only)
     elif t == 'hyperv':
         conn = hyperv.get_connection(read_only)
-    elif t == 'gpu':
-        print 'Starting with GPU support'
-        conn = libvirt_conn_gpu.get_connection(read_only)
+#    elif t == 'gpu':
+#        print 'Starting with GPU support'
+#        conn = libvirt_conn_gpu.get_connection(read_only)
     #MK
     elif t == 'tilera':
         print 'Starting with Tilera support'
