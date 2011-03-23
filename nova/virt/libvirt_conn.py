@@ -365,7 +365,8 @@ class LibvirtConnection(object):
             #JP Walters: again, find the tty and kick off a gvirtus-backend
             tty = self.get_pty_for_instance(instance['name'])
             command_line = '/usr/local/gvirtus/sbin/gvirtus-backend \
-                            /usr/local/gvirtus/etc/gvirtus.properties 0 %s' % (tty)
+                            /usr/local/gvirtus/etc/gvirtus.properties 0 %s' \
+                            % (tty)
 
             args = shlex.split(str(command_line))
             print args
@@ -473,7 +474,8 @@ class LibvirtConnection(object):
             #borrowing the tty.
             tty = self.get_pty_for_instance(instance['name'])
             command_line = '/usr/local/gvirtus/sbin/gvirtus-backend \
-                            /usr/local/gvirtus/etc/gvirtus.properties 0 %s' % (tty)
+                            /usr/local/gvirtus/etc/gvirtus.properties 0 %s' \
+                            % (tty)
 
             args = shlex.split(str(command_line))
             print args
