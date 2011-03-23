@@ -77,7 +77,6 @@ class ArchitectureScheduler(driver.Scheduler):
                     hosts.append(service.host)
         return hosts
 
-
     def schedule(self, context, topic, *_args, **_kwargs):
         """Picks a host that is up at random in selected
         arch (if defined).
