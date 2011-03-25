@@ -161,6 +161,13 @@ class _tilera_board(object):
                 return 1
         return 0
 
+    def check_idle_board(self):
+        """check an idle board"""
+        for item in self.boards:
+            if item['status'] == 0:
+                return item['board_id']
+        return -1
+
     def get_idle_board(self):
         """get an idle board"""
         for item in self.boards:
@@ -254,6 +261,7 @@ class _tilera_board(object):
         utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
             '--resume', '--net', board_ip, '--upload', path1, \
             '/tilera_fs.tar.gz', '--quit')
+        utils.execute('rm', path1)
         cmd = "/usr/local/TileraMDE/bin/tile-monitor --resume --net " \
             + board_ip + " --run - mount /dev/sda1 /mnt - --wait " \
             + "--run - tar -xzpf /tilera_fs.tar.gz -C /mnt/ " \
@@ -326,14 +334,16 @@ class _tilera_board(object):
         cmd = "/usr/local/TileraMDE/bin/tile-monitor --resume --net " \
             + board_ip + " --run - iptables -A INPUT -p tcp " \
             + "! -s 10.0.11.1 --dport 963 -j DROP - --wait " \
-            + "--run - rm -rf /usr/sbin/iptables* - --wait --quit"
+            + "--quit"
+            #+ "--run - rm -rf /usr/sbin/iptables* - --wait \
         print cmd
         utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
             '--resume', '--net', board_ip, '--run', '-', \
             'iptables', '-A', 'INPUT', '-p', 'tcp', '!', '-s', \
-            '10.0.11.1', '--dport', '963', '-j', 'DROP', '-', \
-            '--wait', '--run', '-', \
-            'rm', '-rf', '/usr/sbin/iptables*', '-', '--wait', '--quit')
+            '10.0.11.1', '--dport', '963', '-j', 'DROP', '-', '--wait', \
+            #'--run', '-', 'rm', '-rf', '/usr/sbin/iptables*', \
+            #'-', '--wait', \
+            '--quit')
         return power_state.RUNNING
 
 
@@ -346,6 +356,7 @@ class _fake_dom(object):
 
     def __init__(self):
         self.domains = []
+        utils.execute('rm', self.fake_dom_file)
         print "open %s" % self.fake_dom_file
         try:
             self.fp = open(self.fake_dom_file, "r+")
@@ -874,10 +885,10 @@ class tileraConnection(object):
 
         #MK
         #Test: copying original tilera images
-        #utils.execute('cp /tftpboot/tilera_fs %s/root' % basepath(suffix=''))
-        utils.execute('cp', '/tftpboot/tilera_fs_1G', '/tftpboot/tilera_fs')
+        board_id = tilera_boards.check_idle_board()
+        path_fs = "/tftpboot/tilera_fs_" + str(board_id)
         path_root = basepath(suffix='') + "/root"
-        utils.execute('cp', '/tftpboot/tilera_fs', path_root)
+        utils.execute('cp', path_fs, path_root)
         #_MK
 
         #def execute(cmd, process_input=None, check_exit_code=True):
