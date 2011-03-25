@@ -161,6 +161,13 @@ class _tilera_board(object):
                 return 1
         return 0
 
+    def check_idle_board(self):
+        """check an idle board"""
+        for item in self.boards:
+            if item['status'] == 0:
+                return item['board_id']
+        return -1
+
     def get_idle_board(self):
         """get an idle board"""
         for item in self.boards:
@@ -878,10 +885,10 @@ class tileraConnection(object):
 
         #MK
         #Test: copying original tilera images
-        #utils.execute('cp /tftpboot/tilera_fs %s/root' % basepath(suffix=''))
-        utils.execute('cp', '/tftpboot/tilera_fs_1G', '/tftpboot/tilera_fs')
+        board_id = tilera_boards.check_idle_board()
+        path_fs = "/tftpboot/tilera_fs_" + str(board_id)
         path_root = basepath(suffix='') + "/root"
-        utils.execute('cp', '/tftpboot/tilera_fs', path_root)
+        utils.execute('cp', path_fs, path_root)
         #_MK
 
         #def execute(cmd, process_input=None, check_exit_code=True):
