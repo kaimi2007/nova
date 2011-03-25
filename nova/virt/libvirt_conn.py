@@ -236,7 +236,7 @@ class LibvirtConnection(object):
             os.kill(local_pid, signal.SIGINT)
             #JP Walters: this just ensures that we fully clean up the process.
             #it avoids zombies
-            os.waitpid(local_pid, 0)
+            os.waitpid(local_pid, os.WNOHANG)
             #JP Walters: remove the instance:pid mapping from the hash table
             #to keep the hash table size manageable.
             del gvirtus_pids[instance['name']]

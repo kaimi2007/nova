@@ -552,8 +552,9 @@ class _fake_dom(object):
                     domain['vcpus'], \
                     100]
         else:
-            raise exception.NotFound("get_domain_info: No such doamin %s" \
-                                      % instance_name)
+            return [power_state.NOSTATE, '', '', '', '']
+            #raise exception.NotFound("get_domain_info: No such doamin %s" \
+            #                          % instance_name)
 #_MK
 
 
