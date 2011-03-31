@@ -23,10 +23,13 @@ import sys
 
 from nova import flags
 from nova import log as logging
+from nova import utils
+from nova.virt import driver
 from nova.virt import fake
-from nova.virt import libvirt_conn
-from nova.virt import xenapi_conn
 from nova.virt import hyperv
+from nova.virt import libvirt_conn
+from nova.virt import vmwareapi_conn
+from nova.virt import xenapi_conn
 
 LOG = logging.getLogger("nova.virt.connection")
 FLAGS = flags.FLAGS
@@ -72,15 +75,16 @@ def get_connection(read_only=False):
 #    elif t == 'gpu':
 #        print 'Starting with GPU support'
 #        conn = libvirt_conn_gpu.get_connection(read_only)
-    #MK
     elif t == 'tilera':
         print 'Starting with Tilera support'
         conn = tilera.get_connection(read_only)
-    #_MK
+    elif t == 'vmwareapi':
+        conn = vmwareapi_conn.get_connection(read_only)
+>>>>>>> MERGE-SOURCE
     else:
         raise Exception('Unknown connection type "%s"' % t)
 
     if conn is None:
         LOG.error(_('Failed to open connection to the hypervisor'))
         sys.exit(1)
-    return conn
+    return utils.check_isinstance(conn, driver.ComputeDriver)

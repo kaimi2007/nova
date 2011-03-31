@@ -205,7 +205,7 @@ class CloudController(object):
 
     def _describe_availability_zones(self, context, **kwargs):
         ctxt = context.elevated()
-        enabled_services = db.service_get_all(ctxt)
+        enabled_services = db.service_get_all(ctxt, False)
         disabled_services = db.service_get_all(ctxt, True)
         available_zones = []
         for zone in [service.availability_zone for service
@@ -230,7 +230,7 @@ class CloudController(object):
         rv = {'availabilityZoneInfo': [{'zoneName': 'nova',
                                         'zoneState': 'available'}]}
 
-        services = db.service_get_all(context)
+        services = db.service_get_all(context, False)
         now = datetime.datetime.utcnow()
         hosts = []
         for host in [service['host'] for service in services]:
@@ -545,12 +545,19 @@ class CloudController(object):
         return self.compute_api.get_ajax_console(context,
                                                  instance_id=instance_id)
 
+    def get_vnc_console(self, context, instance_id, **kwargs):
+        """Returns vnc browser url.  Used by OS dashboard."""
+        ec2_id = instance_id
+        instance_id = ec2utils.ec2_id_to_id(ec2_id)
+        return self.compute_api.get_vnc_console(context,
+                                                instance_id=instance_id)
+
     def describe_volumes(self, context, volume_id=None, **kwargs):
         if volume_id:
             volumes = []
             for ec2_id in volume_id:
                 internal_id = ec2utils.ec2_id_to_id(ec2_id)
-                volume = self.volume_api.get(context, internal_id)
+                volume = self.volume_api.get(context, volume_id=internal_id)
                 volumes.append(volume)
         else:
             volumes = self.volume_api.get_all(context)
@@ -594,9 +601,11 @@ class CloudController(object):
 
     def create_volume(self, context, size, **kwargs):
         LOG.audit(_("Create volume of %s GB"), size, context=context)
-        volume = self.volume_api.create(context, size,
-                                        kwargs.get('display_name'),
-                                        kwargs.get('display_description'))
+        volume = self.volume_api.create(
+                context,
+                size=size,
+                name=kwargs.get('display_name'),
+                description=kwargs.get('display_description'))
         # TODO(vish): Instance should be None at db layer instead of
         #             trying to lazy load, but for now we turn it into
         #             a dict to avoid an error.
@@ -615,7 +624,9 @@ class CloudController(object):
             if field in kwargs:
                 changes[field] = kwargs[field]
         if changes:
-            self.volume_api.update(context, volume_id, kwargs)
+            self.volume_api.update(context,
+                                   volume_id=volume_id,
+                                   fields=changes)
         return True
 
     def attach_volume(self, context, volume_id, instance_id, device, **kwargs):
@@ -628,7 +639,7 @@ class CloudController(object):
                                        instance_id=instance_id,
                                        volume_id=volume_id,
                                        device=device)
-        volume = self.volume_api.get(context, volume_id)
+        volume = self.volume_api.get(context, volume_id=volume_id)
         return {'attachTime': volume['attach_time'],
                 'device': volume['mountpoint'],
                 'instanceId': ec2utils.id_to_ec2_id(instance_id),
@@ -639,7 +650,7 @@ class CloudController(object):
     def detach_volume(self, context, volume_id, **kwargs):
         volume_id = ec2utils.ec2_id_to_id(volume_id)
         LOG.audit(_("Detach volume %s"), volume_id, context=context)
-        volume = self.volume_api.get(context, volume_id)
+        volume = self.volume_api.get(context, volume_id=volume_id)
         instance = self.compute_api.detach_volume(context, volume_id=volume_id)
         return {'attachTime': volume['attach_time'],
                 'device': volume['mountpoint'],
@@ -780,7 +791,7 @@ class CloudController(object):
 
     def release_address(self, context, public_ip, **kwargs):
         LOG.audit(_("Release address %s"), public_ip, context=context)
-        self.network_api.release_floating_ip(context, public_ip)
+        self.network_api.release_floating_ip(context, address=public_ip)
         return {'releaseResponse': ["Address released."]}
 
     def associate_address(self, context, instance_id, public_ip, **kwargs):
@@ -794,7 +805,7 @@ class CloudController(object):
 
     def disassociate_address(self, context, public_ip, **kwargs):
         LOG.audit(_("Disassociate address %s"), public_ip, context=context)
-        self.network_api.disassociate_floating_ip(context, public_ip)
+        self.network_api.disassociate_floating_ip(context, address=public_ip)
         return {'disassociateResponse': ["Address disassociated."]}
 
     def run_instances(self, context, **kwargs):
@@ -898,6 +909,8 @@ class CloudController(object):
         i['imageOwnerId'] = image['properties'].get('owner_id')
         i['imageLocation'] = image['properties'].get('image_location')
         i['imageState'] = image['properties'].get('image_state')
+        i['displayName'] = image.get('name')
+        i['description'] = image.get('description')
         i['type'] = image_type
         i['isPublic'] = str(image['properties'].get('is_public', '')) == 'True'
         i['architecture'] = image['properties'].get('architecture')

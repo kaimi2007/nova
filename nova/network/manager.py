@@ -73,6 +73,8 @@ flags.DEFINE_string('flat_interface', None,
 flags.DEFINE_string('flat_network_dhcp_start', '10.0.0.2',
                     'Dhcp start for FlatDhcp')
 flags.DEFINE_integer('vlan_start', 100, 'First VLAN for private networks')
+flags.DEFINE_string('vlan_interface', 'eth0',
+                    'network device for vlans')
 flags.DEFINE_integer('num_networks', 1, 'Number of networks to support')
 flags.DEFINE_string('vpn_ip', '$my_ip',
                     'Public IP for the cloudpipe VPN servers')
@@ -105,7 +107,7 @@ class AddressAlreadyAllocated(exception.Error):
     pass
 
 
-class NetworkManager(manager.Manager):
+class NetworkManager(manager.SchedulerDependentManager):
     """Implements common network manager functionality.
 
     This class must be subclassed to support specific topologies.
@@ -116,7 +118,8 @@ class NetworkManager(manager.Manager):
         if not network_driver:
             network_driver = FLAGS.network_driver
         self.driver = utils.import_object(network_driver)
-        super(NetworkManager, self).__init__(*args, **kwargs)
+        super(NetworkManager, self).__init__(service_name='network',
+                                                *args, **kwargs)
 
     def init_host(self):
         """Do any initialization that needs to be run if this is a
