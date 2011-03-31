@@ -80,7 +80,6 @@ def get_connection(read_only=False):
         conn = tilera.get_connection(read_only)
     elif t == 'vmwareapi':
         conn = vmwareapi_conn.get_connection(read_only)
->>>>>>> MERGE-SOURCE
     else:
         raise Exception('Unknown connection type "%s"' % t)
 
