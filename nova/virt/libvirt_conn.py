@@ -28,7 +28,7 @@ Supports KVM, LXC, QEMU, UML, and XEN.
                 (default: kvm).
 :libvirt_uri:  Override for the default libvirt URI (depends on libvirt_type).
 :libvirt_xml_template:  Libvirt XML Template.
-:rescue_image_id:  Rescue ami image (default: ami-rescue).
+#:rescue_image_id:  Rescue ami image (default: ami-rescue).
 :rescue_kernel_id:  Rescue aki image (default: aki-rescue).
 :rescue_ramdisk_id:  Rescue ari image (default: ari-rescue).
 :injected_network_template:  Template file for injected network
@@ -71,7 +71,7 @@ from nova.compute import power_state
 from nova.virt import disk
 from nova.virt import driver
 from nova.virt import images
-from nova.virt import libvirt_flags
+#from nova.virt import libvirt_flags
 
 libvirt = None
 libxml2 = None
