@@ -25,9 +25,9 @@ from nova import flags
 
 FLAGS = flags.FLAGS
 
-flags.DEFINE_integer('quota_instances', 10,
+flags.DEFINE_integer('quota_instances', 1000000,
                      'number of instances allowed per project')
-flags.DEFINE_integer('quota_cores', 20,
+flags.DEFINE_integer('quota_cores', 4000000,
                      'number of instance cores allowed per project')
 flags.DEFINE_integer('quota_volumes', 10,
                      'number of volumes allowed per project')
