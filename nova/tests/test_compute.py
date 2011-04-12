@@ -65,6 +65,7 @@ class ComputeTestCase(test.TestCase):
         self.user = self.manager.create_user('fake', 'fake', 'fake')
         self.project = self.manager.create_project('fake', 'fake', 'fake')
         self.context = context.RequestContext('fake', 'fake', False)
+        self.invalid_flavorid = 999 
 
         def fake_show(meh, context, id):
             return {'id': 1, 'properties': {'kernel_id': 1, 'ramdisk_id': 1}}
@@ -349,7 +350,7 @@ class ComputeTestCase(test.TestCase):
         self.compute.run_instance(self.context, instance_id)
 
         self.assertRaises(exception.NotFound, self.compute_api.resize,
-                context, instance_id, 200)
+                context, instance_id, self.invalid_flavorid)
 
         self.compute.terminate_instance(context, instance_id)
 
