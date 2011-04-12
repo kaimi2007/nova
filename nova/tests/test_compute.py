@@ -65,7 +65,7 @@ class ComputeTestCase(test.TestCase):
         self.user = self.manager.create_user('fake', 'fake', 'fake')
         self.project = self.manager.create_project('fake', 'fake', 'fake')
         self.context = context.RequestContext('fake', 'fake', False)
-        self.invalid_flavorid = 999 
+        self.invalid_flavorid = 999
 
         def fake_show(meh, context, id):
             return {'id': 1, 'properties': {'kernel_id': 1, 'ramdisk_id': 1}}
