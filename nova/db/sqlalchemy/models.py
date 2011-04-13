@@ -216,7 +216,7 @@ class Instance(BASE, NovaBase):
     hostname = Column(String(255))
     host = Column(String(255))  # , ForeignKey('hosts.id'))
 
-    instance_type = Column(String(255))
+    instance_type_id = Column(String(255))
     cpu_arch = Column(String(255), default='x86_64')
     cpu_info = Column(String(255), default='')
     xpu_arch = Column(String(255), default='')
@@ -290,6 +290,12 @@ class InstanceTypes(BASE, NovaBase):
     net_arch = Column(String(255), default='')
     net_info = Column(String(255), default='')
     net_mbps = Column(Integer, default=0)
+
+    instances = relationship(Instance,
+                           backref=backref('instance_type', uselist=False),
+                           foreign_keys=id,
+                           primaryjoin='and_(Instance.instance_type_id == '
+                                       'InstanceTypes.id)')
 
 
 class Volume(BASE, NovaBase):
