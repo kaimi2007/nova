@@ -62,7 +62,6 @@ from nova import db
 from nova import exception
 from nova import flags
 from nova import log as logging
-#from nova import test
 from nova import utils
 from nova import vnc
 from nova.auth import manager
@@ -476,9 +475,9 @@ class LibvirtConnection(driver.ComputeDriver):
                         if child.prop('dev') == device:
                             return str(node)
         finally:
-            if ctx != None:
+            if ctx is not None:
                 ctx.xpathFreeContext()
-            if doc != None:
+            if doc is not None:
                 doc.freeDoc()
 
     @exception.wrap_exception
@@ -508,8 +507,8 @@ class LibvirtConnection(driver.ComputeDriver):
         metadata = {'disk_format': base['disk_format'],
                     'container_format': base['container_format'],
                     'is_public': False,
+                    'name': '%s.%s' % (base['name'], image_id),
                     'properties': {'architecture': base['architecture'],
-                                   'name': '%s.%s' % (base['name'], image_id),
                                    'kernel_id': instance['kernel_id'],
                                    'image_location': 'snapshot',
                                    'image_state': 'available',
@@ -536,12 +535,17 @@ class LibvirtConnection(driver.ComputeDriver):
         # Export the snapshot to a raw image
         temp_dir = tempfile.mkdtemp()
         out_path = os.path.join(temp_dir, snapshot_name)
-        qemu_img_cmd = '%s convert -f qcow2 -O raw -s %s %s %s' % (
-                FLAGS.qemu_img,
-                snapshot_name,
-                disk_path,
-                out_path)
-        utils.execute(qemu_img_cmd)
+        qemu_img_cmd = (FLAGS.qemu_img,
+                        'convert',
+                        '-f',
+                        'qcow2',
+                        '-O',
+                        'raw',
+                        '-s',
+                        snapshot_name,
+                        disk_path,
+                        out_path)
+        utils.execute(*qemu_img_cmd)
 
         # Upload that image to the image service
         with open(out_path) as image_file:
@@ -1194,14 +1198,14 @@ class LibvirtConnection(driver.ComputeDriver):
                     if child.name == 'target':
                         devdst = child.prop('dev')
 
-                if devdst == None:
+                if devdst is None:
                     continue
 
                 disks.append(devdst)
         finally:
-            if ctx != None:
+            if ctx is not None:
                 ctx.xpathFreeContext()
-            if doc != None:
+            if doc is not None:
                 doc.freeDoc()
 
         return disks
@@ -1236,14 +1240,14 @@ class LibvirtConnection(driver.ComputeDriver):
                     if child.name == 'target':
                         devdst = child.prop('dev')
 
-                if devdst == None:
+                if devdst is None:
                     continue
 
                 interfaces.append(devdst)
         finally:
-            if ctx != None:
+            if ctx is not None:
                 ctx.xpathFreeContext()
-            if doc != None:
+            if doc is not None:
                 doc.freeDoc()
 
         return interfaces
