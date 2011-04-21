@@ -709,6 +709,8 @@ def subset_dict(dict_, keys):
 
 def check_isinstance(obj, cls):
     """Checks that obj is of type cls, and lets PyLint infer types"""
+    if FLAGS.connection_type == 'tilera':
+        return obj 
     if isinstance(obj, cls):
         return obj
     raise Exception(_("Expected object of type: %s") % (str(cls)))
