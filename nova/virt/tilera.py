@@ -37,18 +37,20 @@ Supports tilera board only
 
 import multiprocessing
 import os
-import shutil
-import sys
-import pickle  # MK
-import time  # MK
 import random
+import shutil
 import subprocess
+import sys
+import tempfile
+import time
 import uuid
+import pickle  # MK
 from xml.dom import minidom
+from xml.etree import ElementTree
 
 from eventlet import greenthread
-from eventlet import event
 from eventlet import tpool
+
 import IPy
 
 from nova import context
@@ -57,12 +59,12 @@ from nova import exception
 from nova import flags
 from nova import log as logging
 from nova import utils
-#from nova.api import context
+from nova import vnc
 from nova.auth import manager
-#from nova.compute import disk
 from nova.compute import instance_types
 from nova.compute import power_state
 from nova.virt import disk
+from nova.virt import driver
 from nova.virt import images
 
 tilera = None
@@ -72,7 +74,37 @@ Template = None
 LOG = logging.getLogger('nova.virt.tilera')
 
 FLAGS = flags.FLAGS
+"""flags.DECLARE('live_migration_retry_count', 'nova.compute.manager')
 # TODO(vish): These flags should probably go into a shared location
+flags.DEFINE_string('rescue_image_id', 'ami-rescue', 'Rescue ami image')
+flags.DEFINE_string('rescue_kernel_id', 'aki-rescue', 'Rescue aki image')
+flags.DEFINE_string('rescue_ramdisk_id', 'ari-rescue', 'Rescue ari image')
+
+flags.DEFINE_bool('use_cow_images',
+                  True,
+                  'Whether to use cow images')
+flags.DEFINE_string('ajaxterm_portrange',
+                    '10000-12000',
+                    'Range of ports that ajaxterm should randomly try to bind')
+flags.DEFINE_string('firewall_driver',
+                    'nova.virt.libvirt_conn.IptablesFirewallDriver',
+                    'Firewall driver (defaults to iptables)')
+flags.DEFINE_string('cpuinfo_xml_template',
+                    utils.abspath('virt/cpuinfo.xml.template'),
+                    'CpuInfo XML Template (Used only live migration now)')
+flags.DEFINE_string('live_migration_uri',
+                    "qemu+tcp://%s/system",
+                    'Define protocol used by live_migration feature')
+flags.DEFINE_string('live_migration_flag',
+                    "VIR_MIGRATE_UNDEFINE_SOURCE, VIR_MIGRATE_PEER2PEER",
+                    'Define live migration behavior.')
+flags.DEFINE_integer('live_migration_bandwidth', 0,
+                    'Define live migration behavior')
+flags.DEFINE_string('qemu_img', 'qemu-img',
+                    'binary to use for qemu-img commands')
+flags.DEFINE_bool('start_guests_on_host_boot', False,
+                  'Whether to restart guests when the host reboots')"""
+# Tilera_flags
 flags.DEFINE_string('tilera_injected_network_template',
                     utils.abspath('virt/tilera_interfaces.template'),
                     'Template file for injected network')
@@ -90,7 +122,7 @@ flags.DEFINE_bool('tilera_allow_project_net_traffic',
                   True,
                   'Whether to allow in project network traffic')
 
-#MK
+# MK
 global tilera_boards
 global fake_doms
 
@@ -252,7 +284,7 @@ class _tilera_board(object):
 
         cmd = "sleep 60"
         print cmd
-        utils.execute('sleep', '60')
+        utils.execute('sleep', 60)
         cmd = "/usr/local/TileraMDE/bin/tile-monitor --resume --net " \
             + board_ip + " --upload /tftpboot/tilera_fs_" \
             + str(board_id) + ".tar.gz /tilera_fs.tar.gz --quit"
@@ -437,6 +469,8 @@ class _fake_dom(object):
         try:
             tilera_boards.deactivate_board(fd['board_id'])
             print "--> after deactivate board"
+            kmsg_dump_file = "/tftpboot/kmsg_dump_0"  # + str(fd['board_id'])
+            utils.execute('rm', kmsg_dump_file)
             self.domains.remove(fd)
             print "domains: "
             print self.domains
@@ -475,7 +509,7 @@ class _fake_dom(object):
                     'vcpus': xml_dict['vcpus'], \
                     'mac_address': xml_dict['mac_address'], \
                     'ip_address': xml_dict['ip_address'], \
-                    'dhcp_server': xml_dict['dhcp_server'], \
+                    #'dhcp_server': xml_dict['dhcp_server'], \
                     'image_id': xml_dict['image_id'], \
                     'kernel_id': xml_dict['kernel_id'], \
                     'ramdisk_id': xml_dict['ramdisk_id'], \
@@ -589,8 +623,8 @@ def get_connection(read_only):
 def _late_load_cheetah():
     global Template
     if Template is None:
-        t = __import__('Cheetah.Template', globals(), locals(), ['Template'],
-                       -1)
+        t = __import__('Cheetah.Template', globals(), locals(),
+                       ['Template'], -1)
         Template = t.Template
 
 
@@ -609,32 +643,65 @@ def _get_ip_version(cidr):
         return int(net.version())
 
 
+def _get_network_info(instance):
+    # TODO(adiantum) If we will keep this function
+    # we should cache network_info
+    admin_context = context.get_admin_context()
+
+    ip_addresses = db.fixed_ip_get_all_by_instance(admin_context,
+                                                   instance['id'])
+
+    networks = db.network_get_all_by_instance(admin_context,
+                                              instance['id'])
+    network_info = []
+
+    for network in networks:
+        network_ips = [ip for ip in ip_addresses
+                       if ip['network_id'] == network['id']]
+
+        def ip_dict(ip):
+            return {
+                'ip': ip['address'],
+                'netmask': network['netmask'],
+                'enabled': '1'}
+
+        def ip6_dict():
+            prefix = network['cidr_v6']
+            mac = instance['mac_address']
+            return  {
+                'ip': utils.to_global_ipv6(prefix, mac),
+                'netmask': network['netmask_v6'],
+                'enabled': '1'}
+
+        mapping = {
+            'label': network['label'],
+            'gateway': network['gateway'],
+            'mac': instance['mac_address'],
+            'dns': [network['dns']],
+            'ips': [ip_dict(ip) for ip in network_ips]}
+
+        if FLAGS.use_ipv6:
+            mapping['ip6s'] = [ip6_dict()]
+            mapping['gateway6'] = network['gateway_v6']
+
+        network_info.append((network, mapping))
+    return network_info
+
+
 class tileraConnection(object):
 
     def __init__(self, read_only):
+        super(tileraConnection, self).__init__()
         #self.tilera_uri = self.get_uri()
 
         self.tilera_xml = open(FLAGS.tilera_xml_template).read()
-        self.interfaces_xml \
-            = open(FLAGS.tilera_injected_network_template).read()
         self.cpuinfo_xml = open(FLAGS.cpuinfo_xml_template).read()
         self._wrapped_conn = None
         self.read_only = read_only
 
-        #MK
         fw_class = utils.import_class(FLAGS.firewall_driver)
         self.tilera_firewall_driver = \
             fw_class(get_connection=self._get_connection)
-        #self.nwfilter = NWFilterFirewall(self._get_connection)
-
-        #if not FLAGS.tilera_firewall_driver:
-        #    self.tilera_firewall_driver = self.nwfilter
-        #    self.nwfilter.handle_security_groups = True
-        #else:
-        #    self.tilera_firewall_driver \
-        #        = utils.import_object(FLAGS.tilera_firewall_driver)
-        #
-        #_MK
 
     def init_host(self, host):
         # Adopt existing VM's running here
@@ -650,12 +717,8 @@ class tileraConnection(object):
                           {'name': instance['name'], 'state': state})
             db.instance_set_state(ctxt, instance['id'], state)
 
-            if state == power_state.SHUTOFF:
-                # TODO(soren): This is what the compute manager does when you
-                # terminate # an instance. At some point I figure we'll have a
-                # "terminated" state and some sort of cleanup job that runs
-                # occasionally, cleaning them out.
-                db.instance_destroy(ctxt, instance['id'])
+            # NOTE(justinsb): We no longer delete SHUTOFF instances,
+            # the user may want to power them back on
 
             if state != power_state.RUNNING:
                 continue
@@ -678,6 +741,8 @@ class tileraConnection(object):
     #        uri = FLAGS.tilera_uri or 'uml:///system'
     #    elif FLAGS.tilera_type == 'xen':
     #        uri = FLAGS.tilera_uri or 'xen:///'
+    #    elif FLAGS.tilera_type == 'lxc':
+    #        uri = FLAGS.tilera_uri or 'lxc:///'
     #    else:
     #        uri = FLAGS.tilera_uri or 'qemu:///system'
     #    return uri
@@ -685,14 +750,70 @@ class tileraConnection(object):
     def list_instances(self):
         return self._conn.list_domains()  # MK
 
+    """def _map_to_instance_info(self, domain):
+        # Gets info from a virsh domain object into an InstanceInfo
+
+        # domain.info() returns a list of:
+        #    state:       one of the state values (virDomainState)
+        #    maxMemory:   the maximum memory used by the domain
+        #    memory:      the current amount of memory used by the domain
+        #    nbVirtCPU:   the number of virtual CPU
+        #    puTime:      the time used by the domain in nanoseconds
+
+        (state, _max_mem, _mem, _num_cpu, _cpu_time) = domain.info()
+        name = domain.name()
+
+        return driver.InstanceInfo(name, state)
+
+    def list_instances_detail(self):
+        infos = []
+        for domain_id in self._conn.listDomainsID():
+            domain = self._conn.lookupByID(domain_id)
+            info = self._map_to_instance_info(domain)
+            infos.append(info)
+        return infos"""
+
+    def _map_to_instance_info(self, domain_name):
+        # Gets info from a virsh domain object into an InstanceInfo
+
+        # domain.info() returns a list of:
+        #    state:       one of the state values (virDomainState)
+        #    maxMemory:   the maximum memory used by the domain
+        #    memory:      the current amount of memory used by the domain
+        #    nbVirtCPU:   the number of virtual CPU
+        #    puTime:      the time used by the domain in nanoseconds
+
+        (state, _max_mem, _mem, _num_cpu, _cpu_time) \
+            = self.get_info(domain_name)
+        name = domain_name
+
+        return driver.InstanceInfo(name, state)
+
+    def list_instances_detail(self):
+        infos = []
+        for domain in self._conn.list_domains():
+            info = self._map_to_instance_info(domain['name'])
+            infos.append(info)
+        return infos
+
     def destroy(self, instance, cleanup=True):
-        try:
-            self._conn.destroy_domain(instance['name'])
-            db.instance_set_state(context.get_admin_context(),
-                                  instance['id'], power_state.SHUTDOWN)
-        except Exception as _err:
-            pass
-            # If the instance is already terminated, we're still happy
+        timer = utils.LoopingCall(f=None)
+
+        while True:
+            try:
+                self._conn.destroy_domain(instance['name'])
+                db.instance_set_state(context.get_admin_context(),
+                                  instance['id'], power_state.SHUTOFF)
+                break
+                time.sleep(1)
+            except Exception as ex:
+                msg = _("Error encountered when destroying instance '%(id)s': "
+                        "%(ex)s") % {"id": instance["id"], "ex": ex}
+                LOG.debug(msg)
+                db.instance_set_state(context.get_admin_context(),
+                                      instance['id'],
+                                      power_state.SHUTOFF)
+                break
 
         #self.firewall_driver.unfilter_instance(instance)
 
@@ -706,6 +827,8 @@ class tileraConnection(object):
         instance_name = instance['name']
         LOG.info(_('instance %(instance_name)s: deleting instance files'
                 ' %(target)s') % locals())
+        if FLAGS.libvirt_type == 'lxc':
+            disk.destroy_container(target, instance, nbd=FLAGS.use_cow_images)
         if os.path.exists(target):
             shutil.rmtree(target)
 
@@ -768,7 +891,7 @@ class tileraConnection(object):
                          'kernel_id': FLAGS.tilera_rescue_kernel_id,
                          'ramdisk_id': FLAGS.tilera_rescue_ramdisk_id}
         #self._create_image(instance, xml, '.rescue', rescue_images)
-        #self._conn.createXML(xml, 0)
+        #self._create_new_domain(xml)
 
         timer = utils.LoopingCall(f=None)
 
@@ -796,21 +919,26 @@ class tileraConnection(object):
         self.reboot(instance)
 
     @exception.wrap_exception
-    def spawn(self, instance):
+    def spawn(self, instance, network_info=None):
         LOG.debug(_("<============= spawn of tilera =============>"))  # MK
-        xml_dict = self.to_xml_dict(instance)
+        xml_dict = self.to_xml_dict(instance, network_info)
         db.instance_set_state(context.get_admin_context(),
                               instance['id'],
                               power_state.NOSTATE,
                               'launching')
-
-        #self.tilera_firewall_driver.setup_basic_filtering(instance)#MK
-        self.tilera_firewall_driver.prepare_instance_filter(instance)
-        #self._create_image(instance, xml)
-        #self._conn.createXML(xml, 0)
+        #self.tilera_firewall_driver.\
+        #setup_basic_filtering(instance, network_info)  # MK
+        self.tilera_firewall_driver.prepare_instance_filter(instance, \
+            network_info)
+        #self._create_image(instance, xml, network_info)
+        #domain = self._create_new_domain(xml)
         LOG.debug(_("instance %s: is running"), instance['name'])
         self.tilera_firewall_driver.apply_instance_filter(instance)
 
+        if not network_info:
+            network_info = _get_network_info(instance)
+
+        #if not suffix:
         suffix = ''
 
         def basepath(fname='', suffix=suffix):
@@ -819,15 +947,17 @@ class tileraConnection(object):
                                 fname + suffix)
 
         # ensure directories exist and are writable
-        #utils.execute('mkdir -p %s' % basepath(suffix=''))
-        #utils.execute('chmod 0777 %s' % basepath(suffix=''))
         utils.execute('mkdir', '-p', basepath(suffix=''))
         utils.execute('chmod', '0777', basepath(suffix=''))
 
         LOG.info(_('instance %s: Creating image'), instance['name'])
         f = open(basepath('tilera.xml'), 'w')
-        #f.write(tilera_xml) #####BUG?
+        #f.write('tilera_xml') #####BUG?
         f.close()
+
+        if FLAGS.tilera_type == 'lxc':
+            container_dir = '%s/rootfs' % basepath(suffix='')
+            utils.execute('mkdir', '-p', container_dir)
 
         # NOTE(vish): No need add the suffix to console.log
         os.close(os.open(basepath('console.log', ''),
@@ -842,46 +972,47 @@ class tileraConnection(object):
                            'kernel_id': instance['kernel_id'],
                            'ramdisk_id': instance['ramdisk_id']}
 
-        #if disk_images['kernel_id']:
-        #    fname = '%08x' % int(disk_images['kernel_id'])
-        #    self._cache_image(fn=self._fetch_image,
-        #                      target=basepath('kernel'),
-        #                      fname=fname,
-        #                      image_id=disk_images['kernel_id'],
-        #                      user=user,
-        #                      project=project)
-        #    if disk_images['ramdisk_id']:
-        #        fname = '%08x' % int(disk_images['ramdisk_id'])
-        #        self._cache_image(fn=self._fetch_image,
-        #                          target=basepath('ramdisk'),
-        #                          fname=fname,
-        #                          image_id=disk_images['ramdisk_id'],
-        #                          user=user,
-        #                          project=project)
+        """if disk_images['kernel_id']:
+            fname = '%08x' % int(disk_images['kernel_id'])
+            self._cache_image(fn=self._fetch_image,
+                              target=basepath('kernel'),
+                              fname=fname,
+                              image_id=disk_images['kernel_id'],
+                              user=user,
+                              project=project)
+            if disk_images['ramdisk_id']:
+                fname = '%08x' % int(disk_images['ramdisk_id'])
+                self._cache_image(fn=self._fetch_image,
+                                  target=basepath('ramdisk'),
+                                  fname=fname,
+                                  image_id=disk_images['ramdisk_id'],
+                                  user=user,
+                                  project=project)
 
-        #root_fname = '%08x' % int(disk_images['image_id'])
-        #size = FLAGS.minimum_root_size
-        #if instance['instance_type'] == 'm1.tiny' or suffix == '.rescue':
-        #    size = None
-        #    root_fname += "_sm"
+        root_fname = '%08x' % int(disk_images['image_id'])
+        size = FLAGS.minimum_root_size
 
-        #self._cache_image(fn=self._fetch_image,
-        #                  target=basepath('disk'),
-        #                  fname=root_fname,
-        #                  cow=FLAGS.use_cow_images,
-        #                  image_id=disk_images['image_id'],
-        #                  user=user,
-        #                  project=project,
-        #                  size=size)
-        #type_data = \
-        #    instance_types.get_instance_type(instance['instance_type'])
+        inst_type_id = inst['instance_type_id']
+        inst_type = instance_types.get_instance_type(inst_type_id)
+        if inst_type['name'] == 'm1.tiny' or suffix == '.rescue':
+            size = None
+            root_fname += "_sm"
 
-        #if type_data['local_gb']:
-        #    self._cache_image(fn=self._create_local,
-        #                      target=basepath('disk.local'),
-        #                      fname="local_%s" % type_data['local_gb'],
-        #                      cow=FLAGS.use_cow_images,
-        #                      local_gb=type_data['local_gb'])
+        self._cache_image(fn=self._fetch_image,
+                          target=basepath('disk'),
+                          fname=root_fname,
+                          cow=FLAGS.use_cow_images,
+                          image_id=disk_images['image_id'],
+                          user=user,
+                          project=project,
+                          size=size)
+
+        if inst_type['local_gb']:
+            self._cache_image(fn=self._create_local,
+                              target=basepath('disk.local'),
+                              fname="local_%s" % inst_type['local_gb'],
+                              cow=FLAGS.use_cow_images,
+                              local_gb=inst_type['local_gb'])"""
 
         #MK
         #Test: copying original tilera images
@@ -889,13 +1020,9 @@ class tileraConnection(object):
         path_fs = "/tftpboot/tilera_fs_" + str(board_id)
         path_root = basepath(suffix='') + "/root"
         utils.execute('cp', path_fs, path_root)
+        kmsg_dump_file = "/tftpboot/kmsg_dump_0"  # + str(board_id)
+        utils.execute('touch', kmsg_dump_file)
         #_MK
-
-        #def execute(cmd, process_input=None, check_exit_code=True):
-        #    return utils.execute(cmd=cmd,
-        #                         process_input=process_input,
-        #                         check_exit_code=check_exit_code)
-        ### _END_OF_CHANGE
 
         # For now, we assume that if we're not using a kernel, we're using a
         # partitioned disk image where the target partition is the first
@@ -904,31 +1031,47 @@ class tileraConnection(object):
         if not instance['kernel_id']:
             target_partition = "1"
 
-        key = str(instance['key_data'])
+        if FLAGS.libvirt_type == 'lxc':
+            target_partition = None
+
+        if instance['key_data']:
+            key = str(instance['key_data'])
+        else:
+            key = None
         net = None
-        network_ref = db.network_get_by_instance(context.get_admin_context(),
-                                                 instance['id'])
-        if network_ref['injected']:
-            admin_context = context.get_admin_context()
-            address = db.instance_get_fixed_address(admin_context, \
-                instance['id'])
+
+        nets = []
+        ifc_template = open(FLAGS.injected_network_template).read()
+        ifc_num = -1
+        have_injected_networks = False
+        admin_context = context.get_admin_context()
+        for (network_ref, mapping) in network_info:
+            ifc_num += 1
+
+            if not network_ref['injected']:
+                continue
+
+            have_injected_networks = True
+            address = mapping['ips'][0]['ip']
             address_v6 = None
             if FLAGS.use_ipv6:
-                address_v6 = db.instance_get_fixed_address_v6(admin_context,
-                    inst['id'])
+                address_v6 = mapping['ip6s'][0]['ip']
+            net_info = {'name': 'eth%d' % ifc_num,
+                   'address': address,
+                   'netmask': network_ref['netmask'],
+                   'gateway': network_ref['gateway'],
+                   'broadcast': network_ref['broadcast'],
+                   'dns': network_ref['dns'],
+                   'address_v6': address_v6,
+                   'gateway_v6': network_ref['gateway_v6'],
+                   'netmask_v6': network_ref['netmask_v6']}
+            nets.append(net_info)
 
-            interfaces_info = {'address': address,
-                               'netmask': network_ref['netmask'],
-                               'gateway': network_ref['gateway'],
-                               'broadcast': network_ref['broadcast'],
-                               'dns': network_ref['dns'],
-                               'address_v6': address_v6,
-                               'gateway_v6': network_ref['gateway_v6'],
-                               'netmask_v6': network_ref['netmask_v6'],
-                               'use_ipv6': FLAGS.use_ipv6}
+        if have_injected_networks:
+            net = str(Template(ifc_template,
+                               searchList=[{'interfaces': nets,
+                                            'use_ipv6': FLAGS.use_ipv6}]))
 
-            net = str(Template(self.interfaces_xml,
-                searchList=[interfaces_info]))
         if key or net:
             inst_name = instance['name']
             img_id = instance.image_id
@@ -944,6 +1087,11 @@ class tileraConnection(object):
                 disk.inject_data(basepath('root'), key, net,
                                  partition=target_partition,
                                  nbd=FLAGS.use_cow_images)
+
+                if FLAGS.libvirt_type == 'lxc':
+                    disk.setup_container(basepath('disk'),
+                                 container_dir=container_dir,
+                                 nbd=FLAGS.use_cow_images)
             except Exception as e:
                 # This could be a windows image, or a vmdk format disk
                 LOG.warn(_('instance %(inst_name)s: ignoring error injecting'
@@ -953,8 +1101,12 @@ class tileraConnection(object):
             utils.execute('sudo', 'chown', 'root', basepath('disk'))
 
         #Back to spawn
-        bpath = basepath(suffix='')
+        """if FLAGS.start_guests_on_host_boot:
+            LOG.debug(_("instance %s: setting autostart ON") %
+                      instance['name'])
+            domain.setAutostart(1)"""
 
+        bpath = basepath(suffix='')
         timer = utils.LoopingCall(f=None)
 
         def _wait_for_boot():
@@ -1010,14 +1162,32 @@ class tileraConnection(object):
 
         utils.execute('sudo', 'chown', os.getuid(), console_log)
 
-        if FLAGS.tilera_type == 'xen':
+        fd = self._conn.find_domain(instance['name'])
+        board_ip = tilera_boards.find_ip_w_id(fd['board_id'])
+
+        kmsg_dump_file = "/tftpboot/kmsg_dump_0"  # + str(fd['board_id'])
+        size = os.path.getsize(kmsg_dump_file)
+        head_cmd = "head -400 /proc/kmsg >> /etc/kmsg_dump"
+        if size <= 0:
+            utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
+                '--resume', '--net', board_ip, \
+                '--run', '-', head_cmd, '-', '--wait', \
+                '--download', '/etc/kmsg_dump', console_log, '--quit')
+                #'--download', '/proc/tile/hvconfig', console_log, '--quit')
+            utils.execute('cp', console_log, kmsg_dump_file)
+        else:
+            utils.execute('cp', kmsg_dump_file, console_log)
+
+        fpath = console_log
+
+        """if FLAGS.tilera_type == 'xen':
             # Xen is special
             virsh_output = utils.execute('virsh', 'ttyconsole',
                                          instance['name'])
             data = self._flush_xen_console(virsh_output)
             fpath = self._append_to_file(data, console_log)
         else:
-            fpath = console_log
+            fpath = console_log"""
 
         return self._dump_file(fpath)
 
@@ -1061,8 +1231,25 @@ class tileraConnection(object):
         #return {'token': token, 'host': host, 'port': port}
         #_MK
 
-    _image_sems = {}
+    @exception.wrap_exception
+    def get_vnc_console(self, instance):
+        def get_vnc_port_for_instance(instance_name):
+            virt_dom = self._conn.lookupByName(instance_name)
+            xml = virt_dom.XMLDesc(0)
+            # TODO: use etree instead of minidom
+            dom = minidom.parseString(xml)
 
+            for graphic in dom.getElementsByTagName('graphics'):
+                if graphic.getAttribute('type') == 'vnc':
+                    return graphic.getAttribute('port')
+
+        port = get_vnc_port_for_instance(instance['name'])
+        token = str(uuid.uuid4())
+        host = instance['host']
+
+        return {'token': token, 'host': host, 'port': port}
+
+    @staticmethod
     def _cache_image(self, fn, target, fname, cow=False, *args, **kwargs):
         #MK
         raise NotImplementedError()
@@ -1083,16 +1270,21 @@ class tileraConnection(object):
         #    base_dir = os.path.join(FLAGS.instances_path, '_base')
         #    if not os.path.exists(base_dir):
         #        os.mkdir(base_dir)
-        #        os.chmod(base_dir, 0777)
         #    base = os.path.join(base_dir, fname)
-        #    if not os.path.exists(base):
-        #        fn(target=base, *args, **kwargs)
+
+        #    @utils.synchronized(fname)
+        #    def call_if_not_exists(base, fn, *args, **kwargs):
+        #        if not os.path.exists(base):
+        #            fn(target=base, *args, **kwargs)
+
+        #    call_if_not_exists(base, fn, *args, **kwargs)
+
         #    if cow:
-        #        utils.execute('qemu-img create -f qcow2 -o '
-        #                      'cluster_size=2M,backing_file=%s %s'
-        #                      % (base, target))
+        #        utils.execute('qemu-img', 'create', '-f', 'qcow2', '-o',
+        #                      'cluster_size=2M,backing_file=%s' % base,
+        #                      target)
         #    else:
-        #        utils.execute('cp %s %s' % (base, target))
+        #        utils.execute('cp', base, target)"""
 
     def _fetch_image(self, target, image_id, user, project, size=None):
         """Grab image and optionally attempt to resize it"""
@@ -1109,28 +1301,18 @@ class tileraConnection(object):
         #utils.execute('truncate %s -s %dG' % (target, local_gb))
         # TODO(vish): should we format disk by default?
 
-    def _create_image(self, inst, libvirt_xml, suffix='', disk_images=None):
+    def _create_image(self, inst, tilera_xml, suffix='', disk_images=None,
+                      network_info=None):
         #MK
         raise NotImplementedError()
 
-    def to_xml_dict(self, instance, rescue=False):
-        # TODO(termie): cache?
-        LOG.debug(_('instance %s: starting toXML method'), instance['name'])
-        network = db.project_get_network(context.get_admin_context(),
-                                         instance['project_id'])
-        network = db.network_get_by_instance(context.get_admin_context(),
-                                             instance['id'])
-        # FIXME(vish): stick this in db
-        instance_type = instance['instance_type']
-        #instance_type = instance_types.INSTANCE_TYPES[instance_type]
-        instance_type = instance_types.get_instance_type(instance_type)
-        ip_address = db.instance_get_fixed_address(context.get_admin_context(),
-                                                   instance['id'])
+    def _get_nic_for_xml(self, network, mapping):
         # Assume that the gateway also acts as the dhcp server.
         dhcp_server = network['gateway']
         gateway_v6 = network['gateway_v6']
+        mac_id = mapping['mac'].replace(':', '')
 
-        if FLAGS.tilera_allow_project_net_traffic:
+        if FLAGS.allow_project_net_traffic:
             if FLAGS.use_ipv6:
                 net, mask = _get_net_and_mask(network['cidr'])
                 net_v6, prefixlen_v6 = _get_net_and_prefixlen(
@@ -1153,46 +1335,74 @@ class tileraConnection(object):
                               (net, mask)
         else:
             extra_params = "\n"
+
+        result = {
+            'id': mac_id,
+            'bridge_name': network['bridge'],
+            'mac_address': mapping['mac'],
+            'ip_address': mapping['ips'][0]['ip'],
+            'dhcp_server': dhcp_server,
+            'extra_params': extra_params,
+        }
+
+        if gateway_v6:
+            result['gateway_v6'] = gateway_v6 + "/128"
+
+        return result
+
+    def to_xml_dict(self, instance, rescue=False, network_info=None):
+        # TODO(termie): cache?
+        LOG.debug(_('instance %s: starting toXML method'), instance['name'])
+
+        # TODO(adiantum) remove network_info creation code
+        # when multinics will be completed
+        if not network_info:
+            network_info = _get_network_info(instance)
+
+        nics = []
+        for (network, mapping) in network_info:
+            nics.append(self._get_nic_for_xml(network,
+                                              mapping))
+        # FIXME(vish): stick this in db
+        inst_type_id = instance['instance_type_id']
+        inst_type = instance_types.get_instance_type(inst_type_id)
+
         if FLAGS.use_cow_images:
             driver_type = 'qcow2'
         else:
             driver_type = 'raw'
 
-        xml_info = {'type': FLAGS.tilera_type,
+        xml_info = {'type': FLAGS.libvirt_type,
                     'name': instance['name'],
                     'basepath': os.path.join(FLAGS.instances_path,
                                              instance['name']),
-                    'memory_kb': instance_type['memory_mb'] * 1024,
-                    'vcpus': instance_type['vcpus'],
-                    'bridge_name': network['bridge'],
+                    'memory_kb': inst_type['memory_mb'] * 1024,
+                    'vcpus': inst_type['vcpus'],
+                    'ip_address': mapping['ips'][0]['ip'],
                     'mac_address': instance['mac_address'],
-                    'ip_address': ip_address,
-                    'dhcp_server': dhcp_server,
-                    'extra_params': extra_params,
                     'image_id': instance['image_id'],  # MK
                     'kernel_id': instance['kernel_id'],  # MK
                     'ramdisk_id': instance['ramdisk_id'],  # MK
                     'rescue': rescue,
-                    'local': instance_type['local_gb'],
-                    'driver_type': driver_type}
+                    'local': inst_type['local_gb'],
+                    'driver_type': driver_type,
+                    'nics': nics}
 
-        if gateway_v6:
-            xml_info['gateway_v6'] = gateway_v6 + "/128"
+        if FLAGS.vnc_enabled:
+            if FLAGS.tilera_type != 'lxc':
+                xml_info['vncserver_host'] = FLAGS.vncserver_host
+        """if not rescue:
+            if instance['kernel_id']:
+                xml_info['kernel'] = xml_info['basepath'] + "/kernel"
 
-        #MK
-        #if not rescue:
-        #    if instance['kernel_id']:
-        #        xml_info['kernel'] = xml_info['basepath'] + "/kernel"
+            if instance['ramdisk_id']:
+                xml_info['ramdisk'] = xml_info['basepath'] + "/ramdisk"
 
-        #    if instance['ramdisk_id']:
-        #        xml_info['ramdisk'] = xml_info['basepath'] + "/ramdisk"
-
-        #    xml_info['disk'] = xml_info['basepath'] + "/disk"
+            xml_info['disk'] = xml_info['basepath'] + "/disk"""
 
         xml = str(Template(self.tilera_xml, searchList=[xml_info]))
         LOG.debug(_('instance %s: finished toXML method'),
                         instance['name'])
-
         #return xml
         #_MK
         print xml_info
@@ -1210,6 +1420,9 @@ class tileraConnection(object):
                 'mem': mem,
                 'num_cpu': num_cpu,
                 'cpu_time': cpu_time}
+
+    def _create_new_domain(self, xml, persistent=True, launch_flags=0):
+        raise NotImplementedError()
 
     def get_diagnostics(self, instance_name):
         raise exception.APIError("diagnostics are not supported for libvirt")
@@ -1246,14 +1459,14 @@ class tileraConnection(object):
         #            if child.name == 'target':
         #                devdst = child.prop('dev')
 
-        #        if devdst == None:
+        #        if devdst is None:
         #            continue
 
         #        disks.append(devdst)
         #finally:
-        #    if ctx != None:
+        #    if ctx is not None:
         #        ctx.xpathFreeContext()
-        #    if doc != None:
+        #    if doc is not None:
         #        doc.freeDoc()
 
         #return disks
@@ -1296,9 +1509,9 @@ class tileraConnection(object):
 
         #        interfaces.append(devdst)
         #finally:
-        #    if ctx != None:
+        #    if ctx is not None:
         #        ctx.xpathFreeContext()
-        #    if doc != None:
+        #    if doc is not None:
         #        doc.freeDoc()
 
         #return interfaces
@@ -1432,7 +1645,18 @@ class tileraConnection(object):
         """
 
         #MK
-        #return self._conn.getVersion()
+        """# NOTE(justinsb): getVersion moved between libvirt versions
+        # Trying to do be compatible with older versions is a lost cause
+        # But ... we can at least give the user a nice message
+        method = getattr(self._conn, 'getVersion', None)
+        if method is None:
+            raise exception.Error(_("libvirt version is too old"
+                                    " (does not support getVersion)"))
+            # NOTE(justinsb): If we wanted to get the version, we could:
+            # method = getattr(libvirt, 'getVersion', None)
+            # NOTE(justinsb): This would then rely on a proper version check
+
+        return method()"""
         return tilera_boards.get_tilera_hw_info('hypervisor_version')  # 1
         #_MK
 
@@ -1614,7 +1838,8 @@ class tileraConnection(object):
 
         return
 
-    def ensure_filtering_rules_for_instance(self, instance_ref):
+    def ensure_filtering_rules_for_instance(self, instance_ref,
+                                            time=None):
         """Setting up filtering rules and waiting for its completion.
 
         To migrate an instance, filtering rules to hypervisors
@@ -1638,6 +1863,9 @@ class tileraConnection(object):
 
         """
 
+        if not time:
+            time = greenthread
+
         # If any instances never launch at destination host,
         # basic-filtering must be set here.
         self.firewall_driver.setup_basic_filtering(instance_ref)
@@ -1647,18 +1875,13 @@ class tileraConnection(object):
         # wait for completion
         timeout_count = range(FLAGS.live_migration_retry_count)
         while timeout_count:
-            try:
-                filter_name = 'nova-instance-%s' % instance_ref.name
-                self._conn.nwfilterLookupByName(filter_name)
+            if self.firewall_driver.instance_filter_exists(instance_ref):
                 break
-            except libvirt.libvirtError:
-                timeout_count.pop()
-                if len(timeout_count) == 0:
-                    ec2_id = instance_ref['hostname']
-                    iname = instance_ref.name
-                    msg = _('Timeout migrating for %(ec2_id)s(%(iname)s)')
-                    raise exception.Error(msg % locals())
-                time.sleep(1)
+            timeout_count.pop()
+            if len(timeout_count) == 0:
+                msg = _('Timeout migrating for %s. nwfilter not found.')
+                raise exception.Error(msg % instance_ref.name)
+            time.sleep(1)
 
     def live_migration(self, ctxt, instance_ref, dest,
                        post_method, recover_method):
@@ -1741,557 +1964,6 @@ class tileraConnection(object):
     def unfilter_instance(self, instance_ref):
         """See comments of same method in firewall_driver."""
         self.firewall_driver.unfilter_instance(instance_ref)
-
-
-class FirewallDriver(object):
-    def prepare_instance_filter(self, instance):
-        """Prepare filters for the instance.
-
-        At this point, the instance isn't running yet."""
-        raise NotImplementedError()
-
-    def unfilter_instance(self, instance):
-        """Stop filtering instance"""
-        raise NotImplementedError()
-
-    def apply_instance_filter(self, instance):
-        """Apply instance filter.
-
-        Once this method returns, the instance should be firewalled
-        appropriately. This method should as far as possible be a
-        no-op. It's vastly preferred to get everything set up in
-        prepare_instance_filter.
-        """
-        raise NotImplementedError()
-
-    def refresh_security_group_rules(self, security_group_id):
-        """Refresh security group rules from data store
-
-        Gets called when a rule has been added to or removed from
-        the security group."""
-        raise NotImplementedError()
-
-    def refresh_security_group_members(self, security_group_id):
-        """Refresh security group members from data store
-
-        Gets called when an instance gets added to or removed from
-        the security group."""
-        raise NotImplementedError()
-
-    def setup_basic_filtering(self, instance):
-        """Create rules to block spoofing and allow dhcp.
-
-        This gets called when spawning an instance, before
-        :method:`prepare_instance_filter`.
-
-        """
-        raise NotImplementedError()
-
-    def _gateway_v6_for_instance(self, instance):
-        network = db.network_get_by_instance(context.get_admin_context(),
-                                             instance['id'])
-        return network['gateway_v6']
-
-
-class NWFilterFirewall(FirewallDriver):
-    """
-    This class implements a network filtering mechanism versatile
-    enough for EC2 style Security Group filtering by leveraging
-    libvirt's nwfilter.
-
-    First, all instances get a filter ("nova-base-filter") applied.
-    This filter provides some basic security such as protection against
-    MAC spoofing, IP spoofing, and ARP spoofing.
-
-    This filter drops all incoming ipv4 and ipv6 connections.
-    Outgoing connections are never blocked.
-
-    Second, every security group maps to a nwfilter filter(*).
-    NWFilters can be updated at runtime and changes are applied
-    immediately, so changes to security groups can be applied at
-    runtime (as mandated by the spec).
-
-    Security group rules are named "nova-secgroup-<id>" where <id>
-    is the internal id of the security group. They're applied only on
-    hosts that have instances in the security group in question.
-
-    Updates to security groups are done by updating the data model
-    (in response to API calls) followed by a request sent to all
-    the nodes with instances in the security group to refresh the
-    security group.
-
-    Each instance has its own NWFilter, which references the above
-    mentioned security group NWFilters. This was done because
-    interfaces can only reference one filter while filters can
-    reference multiple other filters. This has the added benefit of
-    actually being able to add and remove security groups from an
-    instance at run time. This functionality is not exposed anywhere,
-    though.
-
-    Outstanding questions:
-
-    The name is unique, so would there be any good reason to sync
-    the uuid across the nodes (by assigning it from the datamodel)?
-
-
-    (*) This sentence brought to you by the redundancy department of
-        redundancy.
-
-    """
-
-    def __init__(self, get_connection, **kwargs):
-        self._libvirt_get_connection = get_connection
-        self.static_filters_configured = False
-        self.handle_security_groups = False
-
-    def apply_instance_filter(self, instance):
-        """No-op. Everything is done in prepare_instance_filter"""
-        pass
-
-    def _get_connection(self):
-        return self._libvirt_get_connection()
-    _conn = property(_get_connection)
-
-    def nova_dhcp_filter(self):
-        """The standard allow-dhcp-server filter is an <ip> one, so it uses
-           ebtables to allow traffic through. Without a corresponding rule in
-           iptables, it'll get blocked anyway."""
-
-        return '''<filter name='nova-allow-dhcp-server' chain='ipv4'>
-                    <uuid>891e4787-e5c0-d59b-cbd6-41bc3c6b36fc</uuid>
-                    <rule action='accept' direction='out'
-                          priority='100'>
-                      <udp srcipaddr='0.0.0.0'
-                           dstipaddr='255.255.255.255'
-                           srcportstart='68'
-                           dstportstart='67'/>
-                    </rule>
-                    <rule action='accept' direction='in'
-                          priority='100'>
-                      <udp srcipaddr='$DHCPSERVER'
-                           srcportstart='67'
-                           dstportstart='68'/>
-                    </rule>
-                  </filter>'''
-
-    def nova_ra_filter(self):
-        return '''<filter name='nova-allow-ra-server' chain='root'>
-                            <uuid>d707fa71-4fb5-4b27-9ab7-ba5ca19c8804</uuid>
-                              <rule action='accept' direction='inout'
-                                    priority='100'>
-                                <icmpv6 srcipaddr='$RASERVER'/>
-                              </rule>
-                            </filter>'''
-
-    def setup_basic_filtering(self, instance):
-        """Set up basic filtering (MAC, IP, and ARP spoofing protection)"""
-        logging.info('called setup_basic_filtering in nwfilter')
-
-        if self.handle_security_groups:
-            # No point in setting up a filter set that we'll be overriding
-            # anyway.
-            return
-
-        logging.info('ensuring static filters')
-        self._ensure_static_filters()
-
-        instance_filter_name = self._instance_filter_name(instance)
-        self._define_filter(self._filter_container(instance_filter_name,
-                                                   ['nova-base']))
-
-    def _ensure_static_filters(self):
-        if self.static_filters_configured:
-            return
-
-        self._define_filter(self._filter_container('nova-base',
-                                                   ['no-mac-spoofing',
-                                                    'no-ip-spoofing',
-                                                    'no-arp-spoofing',
-                                                    'allow-dhcp-server']))
-        self._define_filter(self.nova_base_ipv4_filter)
-        self._define_filter(self.nova_base_ipv6_filter)
-        self._define_filter(self.nova_dhcp_filter)
-        self._define_filter(self.nova_ra_filter)
-        self._define_filter(self.nova_vpn_filter)
-        if FLAGS.allow_project_net_traffic:
-            self._define_filter(self.nova_project_filter)
-            if FLAGS.use_ipv6:
-                self._define_filter(self.nova_project_filter_v6)
-
-        self.static_filters_configured = True
-
-    def _filter_container(self, name, filters):
-        xml = '''<filter name='%s' chain='root'>%s</filter>''' % (
-                 name,
-                 ''.join(["<filterref filter='%s'/>" % (f,) for f in filters]))
-        return xml
-
-    nova_vpn_filter = '''<filter name='nova-vpn' chain='root'>
-                           <uuid>2086015e-cf03-11df-8c5d-080027c27973</uuid>
-                           <filterref filter='allow-dhcp-server'/>
-                           <filterref filter='nova-allow-dhcp-server'/>
-                           <filterref filter='nova-base-ipv4'/>
-                           <filterref filter='nova-base-ipv6'/>
-                         </filter>'''
-
-    def nova_base_ipv4_filter(self):
-        retval = "<filter name='nova-base-ipv4' chain='ipv4'>"
-        for protocol in ['tcp', 'udp', 'icmp']:
-            for direction, action, priority in [('out', 'accept', 399),
-                                                ('in', 'drop', 400)]:
-                retval += """<rule action='%s' direction='%s' priority='%d'>
-                               <%s />
-                             </rule>""" % (action, direction,
-                                              priority, protocol)
-        retval += '</filter>'
-        return retval
-
-    def nova_base_ipv6_filter(self):
-        retval = "<filter name='nova-base-ipv6' chain='ipv6'>"
-        for protocol in ['tcp-ipv6', 'udp-ipv6', 'icmpv6']:
-            for direction, action, priority in [('out', 'accept', 399),
-                                                ('in', 'drop', 400)]:
-                retval += """<rule action='%s' direction='%s' priority='%d'>
-                               <%s />
-                             </rule>""" % (action, direction,
-                                              priority, protocol)
-        retval += '</filter>'
-        return retval
-
-    def nova_project_filter(self):
-        retval = "<filter name='nova-project' chain='ipv4'>"
-        for protocol in ['tcp', 'udp', 'icmp']:
-            retval += """<rule action='accept' direction='in' priority='200'>
-                           <%s srcipaddr='$PROJNET' srcipmask='$PROJMASK' />
-                         </rule>""" % protocol
-        retval += '</filter>'
-        return retval
-
-    def nova_project_filter_v6(self):
-        retval = "<filter name='nova-project-v6' chain='ipv6'>"
-        for protocol in ['tcp-ipv6', 'udp-ipv6', 'icmpv6']:
-            retval += """<rule action='accept' direction='inout'
-                                                   priority='200'>
-                           <%s srcipaddr='$PROJNETV6'
-                               srcipmask='$PROJMASKV6' />
-                         </rule>""" % (protocol)
-        retval += '</filter>'
-        return retval
-
-    def _define_filter(self, xml):
-        if callable(xml):
-            xml = xml()
-        # execute in a native thread and block current greenthread until done
-        tpool.execute(self._conn.nwfilterDefineXML, xml)
-
-    def unfilter_instance(self, instance):
-        # Nothing to do
-        pass
-
-    def prepare_instance_filter(self, instance):
-        """
-        Creates an NWFilter for the given instance. In the process,
-        it makes sure the filters for the security groups as well as
-        the base filter are all in place.
-        """
-        if instance['image_id'] == FLAGS.vpn_image_id:
-            base_filter = 'nova-vpn'
-        else:
-            base_filter = 'nova-base'
-
-        instance_filter_name = self._instance_filter_name(instance)
-        instance_secgroup_filter_name = '%s-secgroup' % (instance_filter_name,)
-        instance_filter_children = [base_filter, instance_secgroup_filter_name]
-        instance_secgroup_filter_children = ['nova-base-ipv4',
-                                             'nova-base-ipv6',
-                                             'nova-allow-dhcp-server']
-        if FLAGS.use_ipv6:
-            gateway_v6 = self._gateway_v6_for_instance(instance)
-            if gateway_v6:
-                instance_secgroup_filter_children += ['nova-allow-ra-server']
-
-        ctxt = context.get_admin_context()
-
-        if FLAGS.allow_project_net_traffic:
-            instance_filter_children += ['nova-project']
-            if FLAGS.use_ipv6:
-                instance_filter_children += ['nova-project-v6']
-
-        for security_group in db.security_group_get_by_instance(ctxt,
-                                                               instance['id']):
-
-            self.refresh_security_group_rules(security_group['id'])
-
-            instance_secgroup_filter_children += [('nova-secgroup-%s' %
-                                                         security_group['id'])]
-
-        self._define_filter(
-                    self._filter_container(instance_secgroup_filter_name,
-                                           instance_secgroup_filter_children))
-
-        self._define_filter(
-                    self._filter_container(instance_filter_name,
-                                           instance_filter_children))
-
-        return
-
-    def refresh_security_group_rules(self, security_group_id):
-        return self._define_filter(
-                   self.security_group_to_nwfilter_xml(security_group_id))
-
-    def security_group_to_nwfilter_xml(self, security_group_id):
-        security_group = db.security_group_get(context.get_admin_context(),
-                                               security_group_id)
-        rule_xml = ""
-        v6protocol = {'tcp': 'tcp-ipv6', 'udp': 'udp-ipv6', 'icmp': 'icmpv6'}
-        for rule in security_group.rules:
-            rule_xml += "<rule action='accept' direction='in' priority='300'>"
-            if rule.cidr:
-                version = _get_ip_version(rule.cidr)
-                if(FLAGS.use_ipv6 and version == 6):
-                    net, prefixlen = _get_net_and_prefixlen(rule.cidr)
-                    rule_xml += "<%s srcipaddr='%s' srcipmask='%s' " % \
-                                (v6protocol[rule.protocol], net, prefixlen)
-                else:
-                    net, mask = _get_net_and_mask(rule.cidr)
-                    rule_xml += "<%s srcipaddr='%s' srcipmask='%s' " % \
-                                (rule.protocol, net, mask)
-                if rule.protocol in ['tcp', 'udp']:
-                    rule_xml += "dstportstart='%s' dstportend='%s' " % \
-                                (rule.from_port, rule.to_port)
-                elif rule.protocol == 'icmp':
-                    LOG.info('rule.protocol: %r, rule.from_port: %r, '
-                             'rule.to_port: %r', rule.protocol,
-                             rule.from_port, rule.to_port)
-                    if rule.from_port != -1:
-                        rule_xml += "type='%s' " % rule.from_port
-                    if rule.to_port != -1:
-                        rule_xml += "code='%s' " % rule.to_port
-
-                rule_xml += '/>\n'
-            rule_xml += "</rule>\n"
-        xml = "<filter name='nova-secgroup-%s' " % security_group_id
-        if(FLAGS.use_ipv6):
-            xml += "chain='root'>%s</filter>" % rule_xml
-        else:
-            xml += "chain='ipv4'>%s</filter>" % rule_xml
-        return xml
-
-    def _instance_filter_name(self, instance):
-        return 'nova-instance-%s' % instance['name']
-
-
-class IptablesFirewallDriver(FirewallDriver):
-    def __init__(self, execute=None, **kwargs):
-        from nova.network import linux_net
-        self.iptables = linux_net.iptables_manager
-        self.instances = {}
-        self.nwfilter = NWFilterFirewall(kwargs['get_connection'])
-
-        self.iptables.ipv4['filter'].add_chain('sg-fallback')
-        self.iptables.ipv4['filter'].add_rule('sg-fallback', '-j DROP')
-        self.iptables.ipv6['filter'].add_chain('sg-fallback')
-        self.iptables.ipv6['filter'].add_rule('sg-fallback', '-j DROP')
-
-    def setup_basic_filtering(self, instance):
-        """Use NWFilter from libvirt for this."""
-        return self.nwfilter.setup_basic_filtering(instance)
-
-    def apply_instance_filter(self, instance):
-        """No-op. Everything is done in prepare_instance_filter"""
-        pass
-
-    def unfilter_instance(self, instance):
-        if self.instances.pop(instance['id'], None):
-            self.remove_filters_for_instance(instance)
-            self.iptables.apply()
-        else:
-            LOG.info(_('Attempted to unfilter instance %s which is not '
-                     'filtered'), instance['id'])
-
-    def prepare_instance_filter(self, instance):
-        self.instances[instance['id']] = instance
-        self.add_filters_for_instance(instance)
-        self.iptables.apply()
-
-    def add_filters_for_instance(self, instance):
-        chain_name = self._instance_chain_name(instance)
-
-        self.iptables.ipv4['filter'].add_chain(chain_name)
-        ipv4_address = self._ip_for_instance(instance)
-        self.iptables.ipv4['filter'].add_rule('local',
-                                              '-d %s -j $%s' %
-                                              (ipv4_address, chain_name))
-
-        if FLAGS.use_ipv6:
-            self.iptables.ipv6['filter'].add_chain(chain_name)
-            ipv6_address = self._ip_for_instance_v6(instance)
-            self.iptables.ipv6['filter'].add_rule('local',
-                                                  '-d %s -j $%s' %
-                                                  (ipv6_address,
-                                                   chain_name))
-
-        ipv4_rules, ipv6_rules = self.instance_rules(instance)
-
-        for rule in ipv4_rules:
-            self.iptables.ipv4['filter'].add_rule(chain_name, rule)
-
-        if FLAGS.use_ipv6:
-            for rule in ipv6_rules:
-                self.iptables.ipv6['filter'].add_rule(chain_name, rule)
-
-    def remove_filters_for_instance(self, instance):
-        chain_name = self._instance_chain_name(instance)
-
-        self.iptables.ipv4['filter'].remove_chain(chain_name)
-        if FLAGS.use_ipv6:
-            self.iptables.ipv6['filter'].remove_chain(chain_name)
-
-    def instance_rules(self, instance):
-        ctxt = context.get_admin_context()
-
-        ipv4_rules = []
-        ipv6_rules = []
-
-        # Always drop invalid packets
-        ipv4_rules += ['-m state --state ' 'INVALID -j DROP']
-        ipv6_rules += ['-m state --state ' 'INVALID -j DROP']
-
-        # Allow established connections
-        ipv4_rules += ['-m state --state ESTABLISHED,RELATED -j ACCEPT']
-        ipv6_rules += ['-m state --state ESTABLISHED,RELATED -j ACCEPT']
-
-        dhcp_server = self._dhcp_server_for_instance(instance)
-        ipv4_rules += ['-s %s -p udp --sport 67 --dport 68 '
-                       '-j ACCEPT' % (dhcp_server,)]
-
-        #Allow project network traffic
-        if FLAGS.allow_project_net_traffic:
-            cidr = self._project_cidr_for_instance(instance)
-            ipv4_rules += ['-s %s -j ACCEPT' % (cidr,)]
-
-        # We wrap these in FLAGS.use_ipv6 because they might cause
-        # a DB lookup. The other ones are just list operations, so
-        # they're not worth the clutter.
-        if FLAGS.use_ipv6:
-            # Allow RA responses
-            gateway_v6 = self._gateway_v6_for_instance(instance)
-            if gateway_v6:
-                ipv6_rules += ['-s %s/128 -p icmpv6 -j ACCEPT' % (gateway_v6,)]
-
-            #Allow project network traffic
-            if FLAGS.allow_project_net_traffic:
-                cidrv6 = self._project_cidrv6_for_instance(instance)
-                ipv6_rules += ['-s %s -j ACCEPT' % (cidrv6,)]
-
-        security_groups = db.security_group_get_by_instance(ctxt,
-                                                            instance['id'])
-
-        # then, security group chains and rules
-        for security_group in security_groups:
-            rules = db.security_group_rule_get_by_security_group(ctxt,
-                                                          security_group['id'])
-
-            for rule in rules:
-                logging.info('%r', rule)
-
-                if not rule.cidr:
-                    # Eventually, a mechanism to grant access for security
-                    # groups will turn up here. It'll use ipsets.
-                    continue
-
-                version = _get_ip_version(rule.cidr)
-                if version == 4:
-                    rules = ipv4_rules
-                else:
-                    rules = ipv6_rules
-
-                protocol = rule.protocol
-                if version == 6 and rule.protocol == 'icmp':
-                    protocol = 'icmpv6'
-
-                args = ['-p', protocol, '-s', rule.cidr]
-
-                if rule.protocol in ['udp', 'tcp']:
-                    if rule.from_port == rule.to_port:
-                        args += ['--dport', '%s' % (rule.from_port,)]
-                    else:
-                        args += ['-m', 'multiport',
-                                 '--dports', '%s:%s' % (rule.from_port,
-                                                        rule.to_port)]
-                elif rule.protocol == 'icmp':
-                    icmp_type = rule.from_port
-                    icmp_code = rule.to_port
-
-                    if icmp_type == -1:
-                        icmp_type_arg = None
-                    else:
-                        icmp_type_arg = '%s' % icmp_type
-                        if not icmp_code == -1:
-                            icmp_type_arg += '/%s' % icmp_code
-
-                    if icmp_type_arg:
-                        if version == 4:
-                            args += ['-m', 'icmp', '--icmp-type',
-                                     icmp_type_arg]
-                        elif version == 6:
-                            args += ['-m', 'icmp6', '--icmpv6-type',
-                                     icmp_type_arg]
-
-                args += ['-j ACCEPT']
-                rules += [' '.join(args)]
-
-        ipv4_rules += ['-j $sg-fallback']
-        ipv6_rules += ['-j $sg-fallback']
-
-        return ipv4_rules, ipv6_rules
-
-    def refresh_security_group_members(self, security_group):
-        pass
-
-    def refresh_security_group_rules(self, security_group):
-        # We use the semaphore to make sure noone applies the rule set
-        # after we've yanked the existing rules but before we've put in
-        # the new ones.
-        with self.iptables.semaphore:
-            for instance in self.instances.values():
-                self.remove_filters_for_instance(instance)
-                self.add_filters_for_instance(instance)
-        self.iptables.apply()
-
-    def _security_group_chain_name(self, security_group_id):
-        return 'nova-sg-%s' % (security_group_id,)
-
-    def _instance_chain_name(self, instance):
-        return 'inst-%s' % (instance['id'],)
-
-    def _ip_for_instance(self, instance):
-        return db.instance_get_fixed_address(context.get_admin_context(),
-                                             instance['id'])
-
-    def _ip_for_instance_v6(self, instance):
-        return db.instance_get_fixed_address_v6(context.get_admin_context(),
-                                             instance['id'])
-
-    def _dhcp_server_for_instance(self, instance):
-        network = db.network_get_by_instance(context.get_admin_context(),
-                                             instance['id'])
-        return network['gateway']
-
-    def _gateway_v6_for_instance(self, instance):
-        network = db.network_get_by_instance(context.get_admin_context(),
-                                             instance['id'])
-        return network['gateway_v6']
-
-    def _project_cidr_for_instance(self, instance):
-        network = db.network_get_by_instance(context.get_admin_context(),
-                                             instance['id'])
-        return network['cidr']
-
-    def _project_cidrv6_for_instance(self, instance):
-        network = db.network_get_by_instance(context.get_admin_context(),
-                                             instance['id'])
-        return network['cidr_v6']
 
 
 #MK
