@@ -88,7 +88,6 @@ flags.DEFINE_bool('auto_assign_floating_ip', False,
                   'Autoassigning floating ip to VM')
 
 
-
 LOG = logging.getLogger('nova.compute.manager')
 
 

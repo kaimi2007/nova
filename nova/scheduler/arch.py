@@ -77,23 +77,26 @@ class ArchitectureScheduler(driver.Scheduler):
 
                     # JSUH: Check resource availability
 
-	            host = service.host
-                    compute_ref = db.service_get_all_compute_by_host(context, host)
+                    host = service.host
+                    compute_ref = db.service_get_all_compute_by_host(
+                                    context, host)
                     compute_ref = compute_ref[0]
 
                     # Getting physical resource information
                     compute_node_ref = compute_ref['compute_node'][0]
-                    resource = {'vcpus': compute_node_ref['vcpus'],
-                                'memory_mb': compute_node_ref['memory_mb'],
-                                'local_gb': compute_node_ref['local_gb'],
-                                'vcpus_used': compute_node_ref['vcpus_used'],
-                                'memory_mb_used': compute_node_ref['memory_mb_used'],
-                                'local_gb_used': compute_node_ref['local_gb_used']}
+                    resource = {
+                     'vcpus': compute_node_ref['vcpus'],
+                     'memory_mb': compute_node_ref['memory_mb'],
+                     'local_gb': compute_node_ref['local_gb'],
+                     'vcpus_used': compute_node_ref['vcpus_used'],
+                     'memory_mb_used': compute_node_ref['memory_mb_used'],
+                     'local_gb_used': compute_node_ref['local_gb_used']}
 
                     # Getting usage resource information
                     usage = {}
-                    instance_refs = db.instance_get_all_by_host(context,
-                                                                compute_ref['host'])
+                    instance_refs = \
+                     db.instance_get_all_by_host(context,
+                                                 compute_ref['host'])
                     LOG.debug(_("##\tJSUH - instance_ref = %s"), instance_refs)
                     if instance_refs:
                         LOG.debug(_("##\tJSUH - instance_ref = true"))
@@ -101,40 +104,50 @@ class ArchitectureScheduler(driver.Scheduler):
                         project_ids = list(set(project_ids))
                         for project_id in project_ids:
                             LOG.debug(_("##\tJSUH - proj id = %s"), project_id)
-                            vcpus = db.instance_get_vcpu_sum_by_host_and_project(context,
-                                                                                 host,
-                                                                                 project_id)
-                            mem = db.instance_get_memory_sum_by_host_and_project(context,
-                                                                                 host,
-                                                                                 project_id)
-                            hdd = db.instance_get_disk_sum_by_host_and_project(context,
-                                                                               host,
-                                                                               project_id)
+                            vcpus = db.\
+                             instance_get_vcpu_sum_by_host_and_project(
+                                context, host, project_id)
+                            mem = db.\
+                             instance_get_memory_sum_by_host_and_project(
+                              context, host, project_id)
+                            hdd = db.\
+                             instance_get_disk_sum_by_host_and_project(
+                              context, host, project_id)
                             LOG.debug(_("##\tJSUH - vcpu used = %s"), vcpus)
-                            LOG.debug(_("##\tJSUH - vpu-available  = %s"), resource['vcpus'] )
-                            LOG.debug(_("##\tJSUH - vpu-needed  = %s"), instances[0].vcpus)
-                            LOG.debug(_("##\tJSUH - mem used = %s"), mem )
-                            LOG.debug(_("##\tJSUH - mem-available  = %s"), resource['memory_mb'] )
-                            LOG.debug(_("##\tJSUH - mem-needed  = %s"), instances[0].memory_mb)
-                            LOG.debug(_("##\tJSUH - hdd used = %s"), hdd )
+                            LOG.debug(_("##\tJSUH - vpu-available  = %s"),
+                                      resource['vcpus'])
+                            LOG.debug(_("##\tJSUH - vpu-needed  = %s"),
+                                      instances[0].vcpus)
+                            LOG.debug(_("##\tJSUH - mem used = %s"),
+                                      mem)
+                            LOG.debug(_("##\tJSUH - mem-available  = %s"),
+                                      resource['memory_mb'])
+                            LOG.debug(_("##\tJSUH - mem-needed  = %s"),
+                                      instances[0].memory_mb)
+                            LOG.debug(_("##\tJSUH - hdd used = %s"), hdd)
 
                             append_decision = 0
-                            if (vcpus + instances[0].vcpus) > resource['vcpus']:
+                            if (vcpus + instances[0].vcpus) > \
+                               resource['vcpus']:
                                 append_decision = 1
-                                LOG.debug(_("##\tJSUH - no more allowed due to lack of vcpus"))
-                            if (mem + instances[0].memory_mb) > resource['memory_mb']:
+                                LOG.debug(_("##\tJSUH - no more allowed" + \
+                                            " due to lack of vcpus"))
+                            if (mem + instances[0].memory_mb) > \
+                               resource['memory_mb']:
                                 append_decision = 1
-                                LOG.debug(_("##\tJSUH - no more allowed due to lack of memory"))
+                                LOG.debug(_("##\tJSUH - no more allowed" + \
+                                " due to lack of memory"))
 
                             if append_decision == 1:
                                 hosts.append(service.host)
                                 LOG.debug(_("##\tJSUH - appended"))
-                            else: # cannot allow
-                                db.instance_destroy(context,instance_id)
-                                LOG.debug(_("##\tJSUH - inst id= %s deleted"), instance_id)
+                            else:  # cannot allow
+                                db.instance_destroy(context, instance_id)
+                                LOG.debug(_("##\tJSUH - inst id= %s deleted"),
+                                          instance_id)
                     else:
                         hosts.append(service.host)
-       
+
                     # JSUH: end
 
         LOG.debug(_("##\tJSUH - hosts = %s"), hosts)

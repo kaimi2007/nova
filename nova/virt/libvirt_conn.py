@@ -554,7 +554,7 @@ class LibvirtConnection(driver.ComputeDriver):
         #access to the hash table
         if FLAGS.connection_type == 'gpu':
             global gvirtus_pids
-            
+
         virt_dom = self._conn.lookupByName(instance['name'])
         # NOTE(itoumsn): Use XML delived from the running instance
         # instead of using to_xml(instance). This is almost the ultimate
