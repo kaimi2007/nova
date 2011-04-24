@@ -451,7 +451,7 @@ class LibvirtConnTestCase(test.TestCase):
 
         self.mox.ReplayAll()
         conn = libvirt_conn.LibvirtConnection(False)
-        self.assertRaises(exception.Invalid,
+        self.assertRaises(exception.ComputeServiceUnavailable,
                           conn.update_available_resource,
                           self.context, 'dummy')
 
@@ -549,6 +549,43 @@ class LibvirtConnTestCase(test.TestCase):
         db.volume_destroy(self.context, volume_ref['id'])
         db.instance_destroy(self.context, instance_ref['id'])
 
+    def test_spawn_with_network_info(self):
+        # Skip if non-libvirt environment
+        if not self.lazy_load_library_exists():
+            return
+
+        # Preparing mocks
+        def fake_none(self, instance):
+            return
+
+        self.create_fake_libvirt_mock()
+        instance = db.instance_create(self.context, self.test_instance)
+
+        # Start test
+        self.mox.ReplayAll()
+        conn = libvirt_conn.LibvirtConnection(False)
+        conn.firewall_driver.setattr('setup_basic_filtering', fake_none)
+        conn.firewall_driver.setattr('prepare_instance_filter', fake_none)
+
+        network = db.project_get_network(context.get_admin_context(),
+                                         self.project.id)
+        ip_dict = {'ip': self.test_ip,
+                   'netmask': network['netmask'],
+                   'enabled': '1'}
+        mapping = {'label': network['label'],
+                   'gateway': network['gateway'],
+                   'mac': instance['mac_address'],
+                   'dns': [network['dns']],
+                   'ips': [ip_dict]}
+        network_info = [(network, mapping)]
+
+        try:
+            conn.spawn(instance, network_info)
+        except Exception, e:
+            count = (0 <= e.message.find('Unexpected method call'))
+
+        self.assertTrue(count)
+
     def tearDown(self):
         self.manager.delete_project(self.project)
         self.manager.delete_user(self.user)
@@ -618,7 +655,8 @@ class IptablesFirewallTestCase(test.TestCase):
         instance_ref = db.instance_create(self.context,
                                           {'user_id': 'fake',
                                           'project_id': 'fake',
-                                          'mac_address': '56:12:12:12:12:12'})
+                                          'mac_address': '56:12:12:12:12:12',
+                                          'instance_type_id': 1})
         ip = '10.11.12.13'
 
         network_ref = db.project_get_network(self.context,
@@ -841,7 +879,8 @@ class NWFilterTestCase(test.TestCase):
         instance_ref = db.instance_create(self.context,
                                           {'user_id': 'fake',
                                           'project_id': 'fake',
-                                          'mac_address': '00:A0:C9:14:C8:29'})
+                                          'mac_address': '00:A0:C9:14:C8:29',
+                                          'instance_type_id': 1})
         inst_id = instance_ref['id']
 
         ip = '10.11.12.13'
