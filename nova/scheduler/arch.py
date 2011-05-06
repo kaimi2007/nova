@@ -77,7 +77,7 @@ class ArchitectureScheduler(driver.Scheduler):
 
                     # JSUH: Check resource availability
 
-	            host = service.host
+                    host = service.host
                     compute_ref = db.service_get_all_compute_by_host(
                         context, host)
                     compute_ref = compute_ref[0]
@@ -105,25 +105,27 @@ class ArchitectureScheduler(driver.Scheduler):
                         for project_id in project_ids:
                             LOG.debug(_("##\tJSUH - proj id = %s"), project_id)
                             vcpus = \
-                                db.instance_get_vcpu_sum_by_host_and_project(context,
-                                host, project_id)
-                            mem = db.instance_get_memory_sum_by_host_and_project(context,
-                                host, project_id)
-                            hdd = db.instance_get_disk_sum_by_host_and_project(context,
-                                host, project_id)
+                                db.instance_get_vcpu_sum_by_host_and_project(
+                                context, host, project_id)
+                            mem = \
+                                db.instance_get_memory_sum_by_host_and_project(
+                                context, host, project_id)
+                            hdd = \
+                                db.instance_get_disk_sum_by_host_and_project(
+                                context, host, project_id)
                             LOG.debug(_("##\tJSUH - vcpu used = %s"), vcpus)
                             LOG.debug(_("##\tJSUH - vpu total  = %s"),
-                                resource['vcpus'] )
+                                resource['vcpus'])
                             LOG.debug(_("##\tJSUH - vpu needed  = %s"),
                                 instances[0].vcpus)
-                            LOG.debug(_("##\tJSUH - mem used = %s"), mem )
+                            LOG.debug(_("##\tJSUH - mem used = %s"), mem)
                             LOG.debug(_("##\tJSUH - mem total  = %s"),
-                                resource['memory_mb'] )
+                                resource['memory_mb'])
                             LOG.debug(_("##\tJSUH - mem needed  = %s"),
                                 instances[0].memory_mb)
-                            LOG.debug(_("##\tJSUH - hdd used = %s"), hdd )
+                            LOG.debug(_("##\tJSUH - hdd used = %s"), hdd)
                             LOG.debug(_("##\tJSUH - hdd total  = %s"),
-                                resource['local_gb'] )
+                                resource['local_gb'])
                             LOG.debug(_("##\tJSUH - hdd needed  = %s"),
                                 instances[0].local_gb)
 
@@ -144,22 +146,22 @@ class ArchitectureScheduler(driver.Scheduler):
                             if append_decision == 1:
                                 hosts.append(service.host)
                                 LOG.debug(_("##\tJSUH - appended"))
-                            else: # cannot allow
+                            else:  # cannot allow
                                 db.instance_destroy(context, instance_id)
                                 LOG.debug(_("##\tJSUH - inst id= %s deleted"),
                                  instance_id)
                     else:
                         LOG.debug(_("##\tJSUH - no previous instance_ref"))
                         LOG.debug(_("##\tJSUH - vpu total  = %s"),
-                                 resource['vcpus'] )
+                                 resource['vcpus'])
                         LOG.debug(_("##\tJSUH - vpu needed  = %s"),
                                  instances[0].vcpus)
                         LOG.debug(_("##\tJSUH - mem total  = %s"),
-                                 resource['memory_mb'] )
+                                 resource['memory_mb'])
                         LOG.debug(_("##\tJSUH - mem needed  = %s"),
                                  instances[0].memory_mb)
                         LOG.debug(_("##\tJSUH - hdd total  = %s"),
-                                 resource['local_gb'] )
+                                 resource['local_gb'])
                         LOG.debug(_("##\tJSUH - hdd needed  = %s"),
                                  instances[0].local_gb)
 
@@ -177,8 +179,8 @@ class ArchitectureScheduler(driver.Scheduler):
                         if append_decision == 1:
                             hosts.append(service.host)
                             LOG.debug(_("##\tJSUH - appended"))
-                        else: # cannot allow
-                            db.instance_destroy(context,instance_id)
+                        else:  # cannot allow
+                            db.instance_destroy(context, instance_id)
                             LOG.debug(_("##\tJSUH - inst id= %s deleted"),
                                 instance_id)
                     # JSUH: end
