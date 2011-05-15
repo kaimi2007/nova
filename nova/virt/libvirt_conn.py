@@ -226,6 +226,14 @@ class LibvirtConnection(driver.ComputeDriver):
 
         fw_class = utils.import_class(FLAGS.firewall_driver)
         self.firewall_driver = fw_class(get_connection=self._get_connection)
+        self._host_state = None
+#        self.session = None
+
+    @property
+    def HostState(self):
+        if not self._host_state:
+            self._host_state = HostState(self.read_only)
+        return self._host_state
 
     def init_host(self, host):
         # Adopt existing VM's running here
@@ -1669,12 +1677,35 @@ class LibvirtConnection(driver.ComputeDriver):
         self.firewall_driver.unfilter_instance(instance_ref)
 
     def update_host_status(self):
-        """See xenapi_conn.py implementation."""
-        pass
+        """Update the status info of the host, and return those values
+            to the calling program."""
+        return self.HostState.update_status()
 
     def get_host_stats(self, refresh=False):
-        """See xenapi_conn.py implementation."""
-        pass
+        """Return the current state of the host. If 'refresh' is
+           True, run the update first."""
+        print 'Updating!'
+        return self.HostState.get_host_stats(refresh=refresh)
+#        """See xenapi_conn.py implementation."""
+#        print 'UPDATING!'
+#        data = {'vcpus': self.get_vcpu_total(),
+#               'memory_mb': self.get_memory_mb_total(),
+#               'local_gb': self.get_local_gb_total(),
+#               'vcpus_used': self.get_vcpu_used(),
+#               'memory_mb_used': self.get_memory_mb_used(),
+#               'local_gb_used': self.get_local_gb_used(),
+#               'hypervisor_type': self.get_hypervisor_type(),
+#               'hypervisor_version': self.get_hypervisor_version(),
+#               'cpu_info': self.get_cpu_info(),
+#               #RLK
+#               'cpu_arch': FLAGS.cpu_arch,
+#               'xpu_arch': FLAGS.xpu_arch,
+#               'xpus': FLAGS.xpus,
+#               'xpu_info': FLAGS.xpu_info,
+#               'net_arch': FLAGS.net_arch,
+#               'net_info': FLAGS.net_info,
+#               'net_mbps': FLAGS.net_mbps}
+#        return data
 
 
 class FirewallDriver(object):
@@ -2270,3 +2301,67 @@ class IptablesFirewallDriver(FirewallDriver):
 
     def _instance_chain_name(self, instance):
         return 'inst-%s' % (instance['id'],)
+
+
+class HostState(object):
+    """Manages information about the XenServer host this compute
+    node is running on.
+    """
+    def __init__(self, read_only):
+        super(HostState, self).__init__()
+        self.read_only = read_only
+        self._stats = {}
+        self.update_status()
+
+    def get_host_stats(self, refresh=False):
+        """Return the current state of the host. If 'refresh' is
+        True, run the update first.
+        """
+        if refresh:
+            self.update_status()
+        return self._stats
+
+    def update_status(self):
+        """Since under Xenserver, a compute node runs on a given host,
+        we can get host status information using xenapi.
+        """
+#        data = {'vcpus': self.get_vcpu_total(),
+#               'memory_mb': self.get_memory_mb_total(),
+#               'local_gb': self.get_local_gb_total(),
+#               'vcpus_used': self.get_vcpu_used(),
+#               'memory_mb_used': self.get_memory_mb_used(),
+#               'local_gb_used': self.get_local_gb_used(),
+#               'hypervisor_type': self.get_hypervisor_type(),
+#               'hypervisor_version': self.get_hypervisor_version(),
+#               'cpu_info': self.get_cpu_info(),
+#               #RLK
+#               'cpu_arch': FLAGS.cpu_arch,
+#               'xpu_arch': FLAGS.xpu_arch,
+#               'xpus': FLAGS.xpus,
+#               'xpu_info': FLAGS.xpu_info,
+#               'net_arch': FLAGS.net_arch,
+#               'net_info': FLAGS.net_info,
+#               'net_mbps': FLAGS.net_mbps}
+        LOG.debug(_("Updating host stats"))
+        print 'Updating statistics!!'
+        connection = get_connection(self.read_only)
+        data = {}
+        data["vcpus"] = connection.get_vcpu_total()
+        data["vcpus_used"] = connection.get_vcpu_used()
+        data["cpu_info"] = connection.get_cpu_info()
+        data["cpu_arch"] = FLAGS.cpu_arch
+        data["xpus"] = FLAGS.xpus
+        data["xpu_arch"] = FLAGS.xpu_arch
+        data["xpu_info"] = FLAGS.xpu_info
+        data["net_arch"] = FLAGS.net_arch
+        data["net_info"] = FLAGS.net_info
+        data["net_mbps"] = FLAGS.net_mbps
+        data["disk_total"] = connection.get_local_gb_total()
+        data["disk_used"] = connection.get_local_gb_used()
+        data["disk_available"] = data["disk_total"] - data["disk_used"]
+        data["host_memory_total"] = connection.get_memory_mb_total()
+        data["host_memory_free"] = data["host_memory_total"] - \
+            connection.get_memory_mb_used()
+        data["hypervisor_type"] = connection.get_hypervisor_type()
+        data["hypervisor_version"] = connection.get_hypervisor_version()
+        self._stats = data
