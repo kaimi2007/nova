@@ -118,6 +118,11 @@ class ArchitectureScheduler(driver.Scheduler):
                                 resource['vcpus'])
                             LOG.debug(_("##\tJSUH - vpu needed  = %s"),
                                 instances[0].vcpus)
+                            LOG.debug(_("##\tJSUH - xpu used = %s"), xpus)
+                            LOG.debug(_("##\tJSUH - xpu total  = %s"),
+                                resource['xpus'])
+                            LOG.debug(_("##\tJSUH - xpu needed  = %s"),
+                                instances[0].xpus)
                             LOG.debug(_("##\tJSUH - mem used = %s"), mem)
                             LOG.debug(_("##\tJSUH - mem total  = %s"),
                                 resource['memory_mb'])
@@ -133,29 +138,38 @@ class ArchitectureScheduler(driver.Scheduler):
                             if (vcpus + instances[0].vcpus) > \
                                 resource['vcpus']:
                                 append_decision = 0
-                                LOG.debug(_("##\tJSUH - lack of vcpus"))
+                                LOG.debug(_("##\tJSUH *** LACK of vcpus"))
+                            if (xpus + instances[0].xpus) > \
+                                resource['xpus']:
+                                append_decision = 0
+                                LOG.debug(_("##\tJSUH *** LACK of xpus"))
+                            if (xpus + instances[0].xpus) > \
+                                resource['xpus']:
+                                append_decision = 0
                             if (mem + instances[0].memory_mb) > \
                                  resource['memory_mb']:
                                 append_decision = 0
-                                LOG.debug(_("##\tJSUH - lack of memory"))
+                                LOG.debug(_("##\tJSUH *** LACK of memory"))
                             if (hdd + instances[0].local_gb) > \
                                  resource['local_gb']:
                                 append_decision = 0
-                                LOG.debug(_("##\tJSUH - lack of hard disk"))
+                                LOG.debug(_("##\tJSUH *** LACK of hard disk"))
 
                             if append_decision == 1:
                                 hosts.append(service.host)
                                 LOG.debug(_("##\tJSUH - appended"))
-                            else:  # cannot allow
-                                db.instance_destroy(context, instance_id)
-                                LOG.debug(_("##\tJSUH - inst id= %s deleted"),
-                                 instance_id)
+#                            else:  # cannot allow
+#                                db.instance_destroy(context, instance_id)
+#                                LOG.debug(_("##\tJSUH - inst id= %s deleted"),
+#                                 instance_id)
                     else:
                         LOG.debug(_("##\tJSUH - no previous instance_ref"))
                         LOG.debug(_("##\tJSUH - vpu total  = %s"),
                                  resource['vcpus'])
                         LOG.debug(_("##\tJSUH - vpu needed  = %s"),
                                  instances[0].vcpus)
+                        LOG.debug(_("##\tJSUH - xpu needed  = %s"),
+                                instances[0].xpus)
                         LOG.debug(_("##\tJSUH - mem total  = %s"),
                                  resource['memory_mb'])
                         LOG.debug(_("##\tJSUH - mem needed  = %s"),
@@ -168,22 +182,24 @@ class ArchitectureScheduler(driver.Scheduler):
                         append_decision = 1
                         if (instances[0].vcpus) > resource['vcpus']:
                             append_decision = 0
-                            LOG.debug(_("##\tJSUH - lack of vcpus"))
+                            LOG.debug(_("##\tJSUH *** LACK of vcpus"))
+                        if (instances[0].xpus) > resource['xpus']:
+                            append_decision = 0
+                            LOG.debug(_("##\tJSUH *** LACK of xpus"))
                         if (instances[0].memory_mb) > resource['memory_mb']:
                             append_decision = 0
-                            LOG.debug(_("##\tJSUH - lack of memory"))
+                            LOG.debug(_("##\tJSUH *** LACK of memory"))
                         if (instances[0].local_gb) > resource['local_gb']:
                             append_decision = 0
-                            LOG.debug(_("##\tJSUH - lack of hard disk"))
+                            LOG.debug(_("##\tJSUH *** LACK of hard disk"))
 
                         if append_decision == 1:
                             hosts.append(service.host)
                             LOG.debug(_("##\tJSUH - appended"))
-                        else:  # cannot allow
-                            db.instance_destroy(context, instance_id)
-                            LOG.debug(_("##\tJSUH - inst id= %s deleted"),
-                                instance_id)
-                    # JSUH: end
+#                        else:  # cannot allow
+#                            db.instance_destroy(context, instance_id)
+#                            LOG.debug(_("##\tJSUH - inst id= %s deleted"),
+#                                instance_id)
 
         LOG.debug(_("##\tJSUH - hosts = %s"), hosts)
         return hosts
