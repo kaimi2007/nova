@@ -2322,6 +2322,9 @@ class HostState(object):
         return self._stats
 
     def update_status(self):
+        if FLAGS.connection_type == 'gpu':
+            global gvirtus_pids
+            print 'using %d GPUs' %len(gvirtus_pids)
         """Since under Xenserver, a compute node runs on a given host,
         we can get host status information using xenapi.
         """
@@ -2352,6 +2355,7 @@ class HostState(object):
         data["cpu_arch"] = FLAGS.cpu_arch
         data["xpus"] = FLAGS.xpus
         data["xpu_arch"] = FLAGS.xpu_arch
+        data["xpus_used"] = len(gvirtus_pids)
         data["xpu_info"] = FLAGS.xpu_info
         data["net_arch"] = FLAGS.net_arch
         data["net_info"] = FLAGS.net_info
