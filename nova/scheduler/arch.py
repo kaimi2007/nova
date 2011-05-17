@@ -35,171 +35,137 @@ from nova import db
 class ArchitectureScheduler(driver.Scheduler):
     """Implements Scheduler as a random node selector."""
 
-    def hosts_up_with_arch(self, context, topic, instance_id):
+#    def hosts_up_with_arch(self, context, topic, instance_id):
+    def hosts_up_with_arch(self, context, topic,  \
+        wanted_cpu_arch, wanted_vcpus, wanted_xpu_arch, wanted_xpus, 
+        wanted_memory_mb, wanted_local_gb):
+
         """Return the list of hosts that have a running service
         for cpu_arch and xpu_arch.
         """
 
-        if instance_id is None:
-            return self.hosts_up(context, topic)
+#        if instance_id is None:
+#            return self.hosts_up(context, topic)
 
-        instances = db.instance_get_all_by_instance_id(context,
-                                                       instance_id)
-        LOG.debug(_("##\tRLK - instances %s"),
-                  instances)
+#        """Figure out what is requested for cpu_arch and xpu_arch.
+#        """
+#        instances = db.instance_get_all_by_instance_id(context,
+#                                                       instance_id)
+
+#        LOG.debug(_("##\tRLK - instances %s"), instances)
+#        LOG.debug(_("##\tRLK - instance.id %s"), instances[0].id)
+#        LOG.debug(_("##\tRLK - instance.cpu_arch %s"), instances[0].cpu_arch)
+#        LOG.debug(_("##\tRLK - instance.xpu_arch %s"), instances[0].xpu_arch)
 
         services = db.service_get_all_by_topic(context, topic)
+        LOG.debug(_("##\tRLK - services %s"), services)
 
-        LOG.debug(_("##\tRLK - services %s"),
-                  services)
-        LOG.debug(_("##\tRLK - instance.id %s"),
-                  instances[0].id)
-        LOG.debug(_("##\tRLK - instance.cpu_arch %s"),
-                  instances[0].cpu_arch)
-        LOG.debug(_("##\tRLK - instance.xpu_arch %s"),
-                  instances[0].xpu_arch)
         """Select all compute_node available where cpu_arch and xpu_arch
         match the instance available.
         """
-        compute_nodes = db.compute_node_get_all_by_arch(context,
-                instances[0].cpu_arch, instances[0].xpu_arch)
-        LOG.debug(_("##\tRLK - compute_nodes.length %d"), len(compute_nodes))
-        services = db.service_get_all_by_topic(context, topic)
+#        compute_nodes = db.compute_node_get_all_by_arch(context,
+#                instances[0].cpu_arch, instances[0].xpu_arch)
+#        LOG.debug(_("##\tRLK - compute_nodes.length %d"), len(compute_nodes))
+#        services = db.service_get_all_by_topic(context, topic)
+
         hosts = []
-        for compute_node in compute_nodes:
-            LOG.debug(_("##\tRLK - found matching compute_node.id = %s"),
-                    compute_node.id)
-            for service in services:
-                if (self.service_is_up(service)
-                        and service.id == compute_node.service_id):
-                    LOG.debug(_("##\tRLK - found matching service.id = %s"),
-                        service.id)
+
+#        wanted_cpu_arch = instances[0].cpu_arch
+#        wanted_xpu_arch = instances[0].xpu_arch
+#        wanted_memory_mb = instances[0].memory_mb
+#        wanted_local_gb = instances[0].local_gb
+        LOG.debug(_("##\tJSUH - wanted-cpu-arch=%s"), wanted_cpu_arch)
+        LOG.debug(_("##\tJSUH - wanted-xpu-arch=%s"), wanted_xpu_arch)
+        LOG.debug(_("##\tJSUH - wanted-vcpus=%s"), wanted_vcpus)
+        LOG.debug(_("##\tJSUH - wanted-xpus=%s"), wanted_xpus)
+        LOG.debug(_("##\tJSUH - wanted-memory=%s"), wanted_memory_mb)
+        LOG.debug(_("##\tJSUH - wanted-hard=%s"), wanted_local_gb)
+
+        """Get capability from zone_manager and match cpu_arch and xpu_arch, 
+        """
+        cap = self.zone_manager.get_zone_capabilities(context)
+        LOG.debug(_("##\tJSUH - cap=%s"), cap)
+
+#        for host, host_dict in cap.iteritems():
+#            LOG.debug(_("##\tJSUH - host=%s"), host)
+#            LOG.debug(_("##\tJSUH - host-dc=%s"), host_dict)
+#            for service_name, service_dict in host_dict.iteritems():
+#                LOG.debug(_("##\tJSUH - servname=%s"), service_name)
+#                LOG.debug(_("##\tJSUH - servnval=%s"), service_dict)
+#                for cap, value in service_dict.iteritems():
+#                    LOG.debug(_("##\tJSUH - cap=%s"), cap)
+#                    LOG.debug(_("##\tJSUH - val=%s"), value)
+
+        for host, host_dict_cap in cap.iteritems():
+#            LOG.debug(_("##\tJSUH - host=%s"), host)
+            for service_name_cap, service_dict_cap in \
+                host_dict_cap.iteritems():
+                if (service_name_cap != 'compute'):
+                    continue
+#                LOG.debug(_("##\tJSUH - matching servname=%s"), service_name_cap)
+#                LOG.debug(_("##\tJSUH - servnval=%s"), service_dict_cap)
+
+                resource_cap = {}
+                for cap, value in service_dict_cap.iteritems():
+#                    LOG.debug(_("##\tJSUH - cap=%s"), cap)
+#                    LOG.debug(_("##\tJSUH - val=%s"), value)
+                    resource_cap[cap] = value
+
+                if (wanted_cpu_arch == resource_cap['cpu_arch'] 
+                    and wanted_xpu_arch == resource_cap['xpu_arch']):
+
+                    LOG.debug(_("##\tJSUH - ***** found  **********="))
+#                    for key, val in resource.iteritems():
+#                        LOG.debug(_("##\tJSUH - cap=%s"), cap)
+#                        LOG.debug(_("##\tJSUH - val=%s"), value)
 
                     # JSUH: Check resource availability
-
-                    host = service.host
-                    compute_ref = db.service_get_all_compute_by_host(
-                        context, host)
-                    compute_ref = compute_ref[0]
-
-                    # Getting physical resource information
-                    compute_node_ref = compute_ref['compute_node'][0]
-                    resource = {'vcpus': compute_node_ref['vcpus'],
-                                'memory_mb': compute_node_ref['memory_mb'],
-                                'local_gb': compute_node_ref['local_gb'],
-                                'vcpus_used': compute_node_ref['vcpus_used'],
-                                'memory_mb_used':
-                                    compute_node_ref['memory_mb_used'],
-                                'local_gb_used':
-                                    compute_node_ref['local_gb_used']}
+                    resource = {'vcpus': resource_cap['vcpus'],
+                                'xpus': resource_cap['xpus'] - resource_cap['xpus_used'],
+                                'memory_mb': resource_cap['host_memory_free'],
+                                'local_gb': resource_cap['disk_total'] 
+                                    - resource_cap['disk_used']}
 
                     # Getting usage resource information
-                    usage = {}
-                    instance_refs = db.instance_get_all_by_host(context,
-                        compute_ref['host'])
-                    LOG.debug(_("##\tJSUH - instance_ref = %s"), instance_refs)
-                    if instance_refs:
-                        LOG.debug(_("##\tJSUH - instance_ref = true"))
-                        project_ids = [i['project_id'] for i in instance_refs]
-                        project_ids = list(set(project_ids))
-                        for project_id in project_ids:
-                            LOG.debug(_("##\tJSUH - proj id = %s"), project_id)
-                            vcpus = \
-                                db.instance_get_vcpu_sum_by_host_and_project(
-                                context, host, project_id)
-                            mem = \
-                                db.instance_get_memory_sum_by_host_and_project(
-                                context, host, project_id)
-                            hdd = \
-                                db.instance_get_disk_sum_by_host_and_project(
-                                context, host, project_id)
-                            LOG.debug(_("##\tJSUH - vcpu used = %s"), vcpus)
-                            LOG.debug(_("##\tJSUH - vpu total  = %s"),
-                                resource['vcpus'])
-                            LOG.debug(_("##\tJSUH - vpu needed  = %s"),
-                                instances[0].vcpus)
-                            LOG.debug(_("##\tJSUH - xpu used = %s"), xpus)
-                            LOG.debug(_("##\tJSUH - xpu total  = %s"),
-                                resource['xpus'])
-                            LOG.debug(_("##\tJSUH - xpu needed  = %s"),
-                                instances[0].xpus)
-                            LOG.debug(_("##\tJSUH - mem used = %s"), mem)
-                            LOG.debug(_("##\tJSUH - mem total  = %s"),
-                                resource['memory_mb'])
-                            LOG.debug(_("##\tJSUH - mem needed  = %s"),
-                                instances[0].memory_mb)
-                            LOG.debug(_("##\tJSUH - hdd used = %s"), hdd)
-                            LOG.debug(_("##\tJSUH - hdd total  = %s"),
-                                resource['local_gb'])
-                            LOG.debug(_("##\tJSUH - hdd needed  = %s"),
-                                instances[0].local_gb)
+                    LOG.debug(_("##\tJSUH - vpu total  = %s"),
+                             resource['vcpus'] )
+                    LOG.debug(_("##\tJSUH - vpu needed  = %s"),
+                             wanted_vcpus)
+                    LOG.debug(_("##\tJSUH - xpu total  = %s"),
+                             resource['xpus'] )
+                    LOG.debug(_("##\tJSUH - xpu needed  = %s"),
+                            wanted_xpus)
+                    LOG.debug(_("##\tJSUH - mem total  = %s"),
+                             resource['memory_mb'] )
+                    LOG.debug(_("##\tJSUH - mem needed  = %s"),
+                             wanted_memory_mb)
+                    LOG.debug(_("##\tJSUH - hdd total  = %s"),
+                             resource['local_gb'] )
+                    LOG.debug(_("##\tJSUH - hdd needed  = %s"),
+                             wanted_local_gb)
 
-                            append_decision = 1
-                            if (vcpus + instances[0].vcpus) > \
-                                resource['vcpus']:
-                                append_decision = 0
-                                LOG.debug(_("##\tJSUH *** LACK of vcpus"))
-                            if (xpus + instances[0].xpus) > \
-                                resource['xpus']:
-                                append_decision = 0
-                                LOG.debug(_("##\tJSUH *** LACK of xpus"))
-                            if (xpus + instances[0].xpus) > \
-                                resource['xpus']:
-                                append_decision = 0
-                            if (mem + instances[0].memory_mb) > \
-                                 resource['memory_mb']:
-                                append_decision = 0
-                                LOG.debug(_("##\tJSUH *** LACK of memory"))
-                            if (hdd + instances[0].local_gb) > \
-                                 resource['local_gb']:
-                                append_decision = 0
-                                LOG.debug(_("##\tJSUH *** LACK of hard disk"))
+                    append_decision = 1
+                    if wanted_vcpus > resource['vcpus']:
+                        append_decision = 0
+                        LOG.debug(_("##\tJSUH *** LACK of vcpus"))
+                    if wanted_xpus > resource['xpus']:
+                        append_decision = 0
+                        LOG.debug(_("##\tJSUH *** LACK of xpus"))
+                    if wanted_memory_mb > resource['memory_mb']:
+                        append_decision = 0
+                        LOG.debug(_("##\tJSUH *** LACK of memory"))
+                    if wanted_local_gb > resource['local_gb']:
+                        append_decision = 0
+                        LOG.debug(_("##\tJSUH *** LACK of hard disk"))
 
-                            if append_decision == 1:
-                                hosts.append(service.host)
-                                LOG.debug(_("##\tJSUH - appended"))
-#                            else:  # cannot allow
-#                                db.instance_destroy(context, instance_id)
-#                                LOG.debug(_("##\tJSUH - inst id= %s deleted"),
-#                                 instance_id)
-                    else:
-                        LOG.debug(_("##\tJSUH - no previous instance_ref"))
-                        LOG.debug(_("##\tJSUH - vpu total  = %s"),
-                                 resource['vcpus'])
-                        LOG.debug(_("##\tJSUH - vpu needed  = %s"),
-                                 instances[0].vcpus)
-                        LOG.debug(_("##\tJSUH - xpu needed  = %s"),
-                                instances[0].xpus)
-                        LOG.debug(_("##\tJSUH - mem total  = %s"),
-                                 resource['memory_mb'])
-                        LOG.debug(_("##\tJSUH - mem needed  = %s"),
-                                 instances[0].memory_mb)
-                        LOG.debug(_("##\tJSUH - hdd total  = %s"),
-                                 resource['local_gb'])
-                        LOG.debug(_("##\tJSUH - hdd needed  = %s"),
-                                 instances[0].local_gb)
-
-                        append_decision = 1
-                        if (instances[0].vcpus) > resource['vcpus']:
-                            append_decision = 0
-                            LOG.debug(_("##\tJSUH *** LACK of vcpus"))
-                        if (instances[0].xpus) > resource['xpus']:
-                            append_decision = 0
-                            LOG.debug(_("##\tJSUH *** LACK of xpus"))
-                        if (instances[0].memory_mb) > resource['memory_mb']:
-                            append_decision = 0
-                            LOG.debug(_("##\tJSUH *** LACK of memory"))
-                        if (instances[0].local_gb) > resource['local_gb']:
-                            append_decision = 0
-                            LOG.debug(_("##\tJSUH *** LACK of hard disk"))
-
-                        if append_decision == 1:
-                            hosts.append(service.host)
-                            LOG.debug(_("##\tJSUH - appended"))
-#                        else:  # cannot allow
-#                            db.instance_destroy(context, instance_id)
-#                            LOG.debug(_("##\tJSUH - inst id= %s deleted"),
-#                                instance_id)
+                    if append_decision == 1:
+                        hosts.append(host)
+                        LOG.debug(_("##\tJSUH - appended"))
+#                    else: # cannot allow
+#                        db.instance_destroy(context,instance_id)
+#                        LOG.debug(_("##\tJSUH - inst id= %s deleted"),
+#                            instance_id)
+                    # JSUH: end
 
         LOG.debug(_("##\tJSUH - hosts = %s"), hosts)
         return hosts
@@ -209,9 +175,18 @@ class ArchitectureScheduler(driver.Scheduler):
         arch (if defined).
         """
 
-        instance_id = _kwargs.get('instance_id')
-        LOG.debug(_("##\tRLK - instance_id %s"), instance_id)
-        hosts = self.hosts_up_with_arch(context, topic, instance_id)
+#        instance_id = _kwargs.get('instance_id')
+        wanted_cpu_arch = _kwargs.get('wanted_cpu_arch')
+        wanted_xpu_arch = _kwargs.get('wanted_xpu_arch')
+        wanted_vcpus = _kwargs.get('wanted_vcpus')
+        wanted_xpus = _kwargs.get('wanted_xpus')
+        wanted_memory_mb = _kwargs.get('wanted_memory_mb')
+        wanted_local_gb = _kwargs.get('wanted_local_gb')
+#        LOG.debug(_("##\tRLK - instance_id %s"), instance_id)
+#        hosts = self.hosts_up_with_arch(context, topic, instance_id)
+        hosts = self.hosts_up_with_arch(context, topic, wanted_cpu_arch, 
+            wanted_vcpus, wanted_xpu_arch, wanted_xpus, wanted_memory_mb, 
+            wanted_local_gb)
 # JSUH
 #        if not hosts:
 #            raise driver.NoValidHost(_("No hosts found with instance_id %s"

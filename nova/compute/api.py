@@ -259,11 +259,25 @@ class API(base.Base):
             uid = context.user_id
             LOG.debug(_("Casting to scheduler for %(pid)s/%(uid)s's"
                     " instance %(instance_id)s") % locals())
+
+            wanted_cpu_arch = instance_type['cpu_arch']
+            wanted_xpu_arch = instance_type['xpu_arch']
+            wanted_vcpus = instance_type['vcpus']
+            wanted_xpus = instance_type['xpus']
+            wanted_memory_mb = instance_type['memory_mb']
+            wanted_local_gb = instance_type['local_gb']
+
             rpc.cast(context,
                      FLAGS.scheduler_topic,
                      {"method": "run_instance",
                       "args": {"topic": FLAGS.compute_topic,
-                               "instance_id": instance_id,
+#                               "instance_id": instance_id,
+                               "wanted_cpu_arch": wanted_cpu_arch,
+                               "wanted_xpu_arch": wanted_xpu_arch,
+                               "wanted_vcpus": wanted_vcpus,
+                               "wanted_xpus": wanted_xpus,
+                               "wanted_memory_mb": wanted_memory_mb,
+                               "wanted_local_gb": wanted_local_gb,
                                "availability_zone": availability_zone,
                                "injected_files": injected_files}})
 
