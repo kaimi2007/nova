@@ -2324,7 +2324,7 @@ class HostState(object):
     def update_status(self):
         if FLAGS.connection_type == 'gpu':
             global gvirtus_pids
-            print 'using %d GPUs' %len(gvirtus_pids)
+            print 'using %d GPUs' % len(gvirtus_pids)
         """Since under Xenserver, a compute node runs on a given host,
         we can get host status information using xenapi.
         """

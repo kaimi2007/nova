@@ -524,6 +524,13 @@ def instance_get_vcpu_sum_by_host_and_project(context, hostname, proj_id):
                                                           proj_id)
 
 
+def instance_get_xpu_sum_by_host_and_project(context, hostname, proj_id):
+    """Get instances.vcpus by host and project."""
+    return IMPL.instance_get_xpu_sum_by_host_and_project(context,
+                                                          hostname,
+                                                          proj_id)
+
+
 def instance_get_memory_sum_by_host_and_project(context, hostname, proj_id):
     """Get amount of memory by host and project."""
     return IMPL.instance_get_memory_sum_by_host_and_project(context,
