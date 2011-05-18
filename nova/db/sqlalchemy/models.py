@@ -216,7 +216,7 @@ class Instance(BASE, NovaBase):
     hostname = Column(String(255))
     host = Column(String(255))  # , ForeignKey('hosts.id'))
 
-    instance_type_id = Column(String(255))
+    instance_type_id = Column(Integer)
     cpu_arch = Column(String(255), default='x86_64')
     cpu_info = Column(String(255), default='')
     xpu_arch = Column(String(255), default='')
@@ -336,18 +336,20 @@ class Volume(BASE, NovaBase):
 
 
 class Quota(BASE, NovaBase):
-    """Represents quota overrides for a project."""
+    """Represents a single quota override for a project.
+
+    If there is no row for a given project id and resource, then
+    the default for the deployment is used. If the row is present
+    but the hard limit is Null, then the resource is unlimited.
+    """
+
     __tablename__ = 'quotas'
     id = Column(Integer, primary_key=True)
 
-    project_id = Column(String(255))
+    project_id = Column(String(255), index=True)
 
-    instances = Column(Integer)
-    cores = Column(Integer)
-    volumes = Column(Integer)
-    gigabytes = Column(Integer)
-    floating_ips = Column(Integer)
-    metadata_items = Column(Integer)
+    resource = Column(String(255))
+    hard_limit = Column(Integer, nullable=True)
 
 
 class ExportDevice(BASE, NovaBase):
@@ -516,7 +518,7 @@ class AuthToken(BASE, NovaBase):
     __tablename__ = 'auth_tokens'
     token_hash = Column(String(255), primary_key=True)
     user_id = Column(String(255))
-    server_manageent_url = Column(String(255))
+    server_management_url = Column(String(255))
     storage_url = Column(String(255))
     cdn_management_url = Column(String(255))
 
