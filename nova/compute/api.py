@@ -271,7 +271,7 @@ class API(base.Base):
                      FLAGS.scheduler_topic,
                      {"method": "run_instance",
                       "args": {"topic": FLAGS.compute_topic,
-#                               "instance_id": instance_id,
+                               "instance_id": instance_id,
                                "wanted_cpu_arch": wanted_cpu_arch,
                                "wanted_xpu_arch": wanted_xpu_arch,
                                "wanted_vcpus": wanted_vcpus,

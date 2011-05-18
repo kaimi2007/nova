@@ -37,7 +37,7 @@ class ArchitectureScheduler(driver.Scheduler):
 
 #    def hosts_up_with_arch(self, context, topic, instance_id):
     def hosts_up_with_arch(self, context, topic,  \
-        wanted_cpu_arch, wanted_vcpus, wanted_xpu_arch, wanted_xpus, 
+        wanted_cpu_arch, wanted_vcpus, wanted_xpu_arch, wanted_xpus,
         wanted_memory_mb, wanted_local_gb):
 
         """Return the list of hosts that have a running service
@@ -81,7 +81,7 @@ class ArchitectureScheduler(driver.Scheduler):
         LOG.debug(_("##\tJSUH - wanted-memory=%s"), wanted_memory_mb)
         LOG.debug(_("##\tJSUH - wanted-hard=%s"), wanted_local_gb)
 
-        """Get capability from zone_manager and match cpu_arch and xpu_arch, 
+        """Get capability from zone_manager and match cpu_arch and xpu_arch,
         """
         cap = self.zone_manager.get_zone_capabilities(context)
         LOG.debug(_("##\tJSUH - cap=%s"), cap)
@@ -102,7 +102,7 @@ class ArchitectureScheduler(driver.Scheduler):
                 host_dict_cap.iteritems():
                 if (service_name_cap != 'compute'):
                     continue
-#                LOG.debug(_("##\tJSUH - matching servname=%s"), service_name_cap)
+#                LOG.debug(_("##\tJSUH - servname=%s"), service_name_cap)
 #                LOG.debug(_("##\tJSUH - servnval=%s"), service_dict_cap)
 
                 resource_cap = {}
@@ -111,7 +111,7 @@ class ArchitectureScheduler(driver.Scheduler):
 #                    LOG.debug(_("##\tJSUH - val=%s"), value)
                     resource_cap[cap] = value
 
-                if (wanted_cpu_arch == resource_cap['cpu_arch'] 
+                if (wanted_cpu_arch == resource_cap['cpu_arch']
                     and wanted_xpu_arch == resource_cap['xpu_arch']):
 
                     LOG.debug(_("##\tJSUH - ***** found  **********="))
@@ -121,26 +121,27 @@ class ArchitectureScheduler(driver.Scheduler):
 
                     # JSUH: Check resource availability
                     resource = {'vcpus': resource_cap['vcpus'],
-                                'xpus': resource_cap['xpus'] - resource_cap['xpus_used'],
+                                'xpus': resource_cap['xpus'] \
+                                    - resource_cap['xpus_used'],
                                 'memory_mb': resource_cap['host_memory_free'],
-                                'local_gb': resource_cap['disk_total'] 
+                                'local_gb': resource_cap['disk_total']
                                     - resource_cap['disk_used']}
 
                     # Getting usage resource information
                     LOG.debug(_("##\tJSUH - vpu total  = %s"),
-                             resource['vcpus'] )
+                             resource['vcpus'])
                     LOG.debug(_("##\tJSUH - vpu needed  = %s"),
                              wanted_vcpus)
                     LOG.debug(_("##\tJSUH - xpu total  = %s"),
-                             resource['xpus'] )
+                             resource['xpus'])
                     LOG.debug(_("##\tJSUH - xpu needed  = %s"),
                             wanted_xpus)
                     LOG.debug(_("##\tJSUH - mem total  = %s"),
-                             resource['memory_mb'] )
+                             resource['memory_mb'])
                     LOG.debug(_("##\tJSUH - mem needed  = %s"),
                              wanted_memory_mb)
                     LOG.debug(_("##\tJSUH - hdd total  = %s"),
-                             resource['local_gb'] )
+                             resource['local_gb'])
                     LOG.debug(_("##\tJSUH - hdd needed  = %s"),
                              wanted_local_gb)
 
@@ -184,8 +185,8 @@ class ArchitectureScheduler(driver.Scheduler):
         wanted_local_gb = _kwargs.get('wanted_local_gb')
 #        LOG.debug(_("##\tRLK - instance_id %s"), instance_id)
 #        hosts = self.hosts_up_with_arch(context, topic, instance_id)
-        hosts = self.hosts_up_with_arch(context, topic, wanted_cpu_arch, 
-            wanted_vcpus, wanted_xpu_arch, wanted_xpus, wanted_memory_mb, 
+        hosts = self.hosts_up_with_arch(context, topic, wanted_cpu_arch,
+            wanted_vcpus, wanted_xpu_arch, wanted_xpus, wanted_memory_mb,
             wanted_local_gb)
 # JSUH
 #        if not hosts:
