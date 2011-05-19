@@ -2355,7 +2355,8 @@ class HostState(object):
         data["cpu_arch"] = FLAGS.cpu_arch
         data["xpus"] = FLAGS.xpus
         data["xpu_arch"] = FLAGS.xpu_arch
-        data["xpus_used"] = len(gvirtus_pids)
+        if FLAGS.connection_type == 'gpu':
+            data["xpus_used"] = len(gvirtus_pids)
         data["xpu_info"] = FLAGS.xpu_info
         data["net_arch"] = FLAGS.net_arch
         data["net_info"] = FLAGS.net_info
