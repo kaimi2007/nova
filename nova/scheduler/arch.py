@@ -111,62 +111,106 @@ class ArchitectureScheduler(driver.Scheduler):
 #                    LOG.debug(_("##\tJSUH - val=%s"), value)
                     resource_cap[cap] = value
 
-                if (wanted_cpu_arch == resource_cap['cpu_arch']
-                    and wanted_xpu_arch == resource_cap['xpu_arch']):
+                if (wanted_cpu_arch == resource_cap['cpu_arch']):
+                    if (wanted_xpu_arch == resource_cap['xpu_arch']):
 
-                    LOG.debug(_("##\tJSUH - ***** found  **********="))
-#                    for key, val in resource.iteritems():
-#                        LOG.debug(_("##\tJSUH - cap=%s"), cap)
-#                        LOG.debug(_("##\tJSUH - val=%s"), value)
+                        LOG.debug(_("##\tJSUH - ***** found  **********="))
+#                        for key, val in resource.iteritems():
+#                            LOG.debug(_("##\tJSUH - cap=%s"), cap)
+#                            LOG.debug(_("##\tJSUH - val=%s"), value)
 
-                    # JSUH: Check resource availability
-                    resource = {'vcpus': resource_cap['vcpus'],
-                                'xpus': resource_cap['xpus'] \
-                                    - resource_cap['xpus_used'],
-                                'memory_mb': resource_cap['host_memory_free'],
-                                'local_gb': resource_cap['disk_total']
-                                    - resource_cap['disk_used']}
+                        # JSUH: Check resource availability
+                        resource = {'vcpus': resource_cap['vcpus'],
+                                    'xpus': resource_cap['xpus'] \
+                                        - resource_cap['xpus_used'],
+                                    'memory_mb':
+                                        resource_cap['host_memory_free'],
+                                    'local_gb': resource_cap['disk_total']
+                                        - resource_cap['disk_used']}
 
-                    # Getting usage resource information
-                    LOG.debug(_("##\tJSUH - vpu total  = %s"),
-                             resource['vcpus'])
-                    LOG.debug(_("##\tJSUH - vpu needed  = %s"),
-                             wanted_vcpus)
-                    LOG.debug(_("##\tJSUH - xpu total  = %s"),
-                             resource['xpus'])
-                    LOG.debug(_("##\tJSUH - xpu needed  = %s"),
-                            wanted_xpus)
-                    LOG.debug(_("##\tJSUH - mem total  = %s"),
-                             resource['memory_mb'])
-                    LOG.debug(_("##\tJSUH - mem needed  = %s"),
-                             wanted_memory_mb)
-                    LOG.debug(_("##\tJSUH - hdd total  = %s"),
-                             resource['local_gb'])
-                    LOG.debug(_("##\tJSUH - hdd needed  = %s"),
-                             wanted_local_gb)
+                        # Getting usage resource information
+                        LOG.debug(_("##\tJSUH - vpu total  = %s"),
+                                 resource['vcpus'])
+                        LOG.debug(_("##\tJSUH - vpu needed  = %s"),
+                                 wanted_vcpus)
+                        LOG.debug(_("##\tJSUH - xpu total  = %s"),
+                                 resource['xpus'])
+                        LOG.debug(_("##\tJSUH - xpu needed  = %s"),
+                                wanted_xpus)
+                        LOG.debug(_("##\tJSUH - mem total  = %s"),
+                                 resource['memory_mb'])
+                        LOG.debug(_("##\tJSUH - mem needed  = %s"),
+                                 wanted_memory_mb)
+                        LOG.debug(_("##\tJSUH - hdd total  = %s"),
+                                 resource['local_gb'])
+                        LOG.debug(_("##\tJSUH - hdd needed  = %s"),
+                                 wanted_local_gb)
 
-                    append_decision = 1
-                    if wanted_vcpus > resource['vcpus']:
-                        append_decision = 0
-                        LOG.debug(_("##\tJSUH *** LACK of vcpus"))
-                    if wanted_xpus > resource['xpus']:
-                        append_decision = 0
-                        LOG.debug(_("##\tJSUH *** LACK of xpus"))
-                    if wanted_memory_mb > resource['memory_mb']:
-                        append_decision = 0
-                        LOG.debug(_("##\tJSUH *** LACK of memory"))
-                    if wanted_local_gb > resource['local_gb']:
-                        append_decision = 0
-                        LOG.debug(_("##\tJSUH *** LACK of hard disk"))
+                        append_decision = 1
+                        if wanted_vcpus > resource['vcpus']:
+                            append_decision = 0
+                            LOG.debug(_("##\tJSUH *** LACK of vcpus"))
+                        if wanted_xpus > resource['xpus']:
+                            append_decision = 0
+                            LOG.debug(_("##\tJSUH *** LACK of xpus"))
+                        if wanted_memory_mb > resource['memory_mb']:
+                            append_decision = 0
+                            LOG.debug(_("##\tJSUH *** LACK of memory"))
+                        if wanted_local_gb > resource['local_gb']:
+                            append_decision = 0
+                            LOG.debug(_("##\tJSUH *** LACK of hard disk"))
 
-                    if append_decision == 1:
-                        hosts.append(host)
-                        LOG.debug(_("##\tJSUH - appended"))
-#                    else: # cannot allow
-#                        db.instance_destroy(context,instance_id)
-#                        LOG.debug(_("##\tJSUH - inst id= %s deleted"),
-#                            instance_id)
-                    # JSUH: end
+                        if append_decision == 1:
+                            hosts.append(host)
+                            LOG.debug(_("##\tJSUH - appended"))
+#                        else: # cannot allow
+#                            db.instance_destroy(context,instance_id)
+#                            LOG.debug(_("##\tJSUH - inst id= %s deleted"),
+#                                instance_id)
+                        # JSUH: end
+                    elif (wanted_xpu_arch is None):
+                        LOG.debug(_("##\tJSUH - ***** found  **********="))
+
+                        # JSUH: Check resource availability
+                        resource = {'vcpus': resource_cap['vcpus'],
+                                    'memory_mb':
+                                        resource_cap['host_memory_free'],
+                                    'local_gb': resource_cap['disk_total']
+                                        - resource_cap['disk_used']}
+
+                        # Getting usage resource information
+                        LOG.debug(_("##\tJSUH - vpu total  = %s"),
+                                 resource['vcpus'])
+                        LOG.debug(_("##\tJSUH - vpu needed  = %s"),
+                                 wanted_vcpus)
+                        LOG.debug(_("##\tJSUH - mem total  = %s"),
+                                 resource['memory_mb'])
+                        LOG.debug(_("##\tJSUH - mem needed  = %s"),
+                                 wanted_memory_mb)
+                        LOG.debug(_("##\tJSUH - hdd total  = %s"),
+                                 resource['local_gb'])
+                        LOG.debug(_("##\tJSUH - hdd needed  = %s"),
+                                 wanted_local_gb)
+
+                        append_decision = 1
+                        if wanted_vcpus > resource['vcpus']:
+                            append_decision = 0
+                            LOG.debug(_("##\tJSUH *** LACK of vcpus"))
+                        if wanted_memory_mb > resource['memory_mb']:
+                            append_decision = 0
+                            LOG.debug(_("##\tJSUH *** LACK of memory"))
+                        if wanted_local_gb > resource['local_gb']:
+                            append_decision = 0
+                            LOG.debug(_("##\tJSUH *** LACK of hard disk"))
+
+                        if append_decision == 1:
+                            hosts.append(host)
+                            LOG.debug(_("##\tJSUH - appended"))
+#                        else: # cannot allow
+#                            db.instance_destroy(context,instance_id)
+#                            LOG.debug(_("##\tJSUH - inst id= %s deleted"),
+#                                instance_id)
+                        # JSUH: end
 
         LOG.debug(_("##\tJSUH - hosts = %s"), hosts)
         return hosts

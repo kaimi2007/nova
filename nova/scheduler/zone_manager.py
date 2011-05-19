@@ -132,7 +132,8 @@ class ZoneManager(object):
                     max_value = max(max_value, value)
                     combined[key] = (min_value, max_value)
 
-        return combined
+#        return combined
+        return hosts_dict
 
     def _refresh_from_db(self, context):
         """Make our zone state map match the db."""
