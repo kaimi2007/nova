@@ -2685,5 +2685,5 @@ def instance_metadata_update_or_create(context, instance_id, metadata):
         meta_ref.update({"key": key, "value": value,
                             "instance_id": instance_id,
                             "deleted": 0})
-        meta_ref.save(session=session)
+        #meta_ref.save(session=session)
     return metadata

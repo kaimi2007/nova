@@ -829,6 +829,14 @@ class CloudController(object):
 
     def run_instances(self, context, **kwargs):
         max_count = int(kwargs.get('max_count', 1))
+        metadata={}
+        LOG.debug(_('run instance with extra feature'))
+        extended_arg = kwargs.get('instance_type', None)
+        extra_features = extended_arg.rsplit(';')
+        instance_type = extra_features.pop(0)
+        for feature in extra_features:
+            feature = feature.rsplit('=')
+            metadata[feature[0].strip()] = feature[1].strip()
         if kwargs.get('kernel_id'):
             kernel = self._get_image(context, kwargs['kernel_id'])
             kwargs['kernel_id'] = kernel['id']
@@ -837,7 +845,7 @@ class CloudController(object):
             kwargs['ramdisk_id'] = ramdisk['id']
         instances = self.compute_api.create(context,
             instance_type=instance_types.get_instance_type_by_name(
-                kwargs.get('instance_type', None)),
+                instance_type),
             image_id=self._get_image(context, kwargs['image_id'])['id'],
             min_count=int(kwargs.get('min_count', max_count)),
             max_count=max_count,
@@ -848,6 +856,7 @@ class CloudController(object):
             key_name=kwargs.get('key_name'),
             user_data=kwargs.get('user_data'),
             security_group=kwargs.get('security_group'),
+            metadata=metadata,
             availability_zone=kwargs.get('placement', {}).get(
                                   'AvailabilityZone'))
         return self._format_run_instances(context,
