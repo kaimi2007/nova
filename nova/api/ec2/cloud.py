@@ -832,11 +832,12 @@ class CloudController(object):
         metadata={}
         LOG.debug(_('run instance with extra feature'))
         extended_arg = kwargs.get('instance_type', None)
-        extra_features = extended_arg.rsplit(';')
-        instance_type = extra_features.pop(0)
-        for feature in extra_features:
-            feature = feature.rsplit('=')
-            metadata[feature[0].strip()] = feature[1].strip()
+        if extended_arg is not None
+            extra_features = extended_arg.rsplit(';')
+            instance_type = extra_features.pop(0)
+            for feature in extra_features:
+                feature = feature.rsplit('=')
+                metadata[feature[0].strip()] = feature[1].strip()
         if kwargs.get('kernel_id'):
             kernel = self._get_image(context, kwargs['kernel_id'])
             kwargs['kernel_id'] = kernel['id']
