@@ -832,7 +832,7 @@ class CloudController(object):
         metadata={}
         LOG.debug(_('run instance with extra feature'))
         extended_arg = kwargs.get('instance_type', None)
-        instance_type = ''
+        instance_type = None
         if extended_arg is not None:
             extra_features = extended_arg.rsplit(';')
             instance_type = extra_features.pop(0)
