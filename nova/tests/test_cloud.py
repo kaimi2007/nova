@@ -317,6 +317,25 @@ class CloudTestCase(test.TestCase):
         rv = self.cloud.terminate_instances(self.context, [instance_id])
         greenthread.sleep(0.3)
 
+    def test_extended_features(self):
+        instance_type = FLAGS.default_instance_type
+        instance_type = instance_type + ';xpu_arch=fermi;xpus=1'
+        max_count = 1
+        kwargs = {'image_id': 'ami-1',
+                  'instance_type': instance_type,
+                  'max_count': max_count}
+        rv = self.cloud.run_instances(self.context, **kwargs)
+        greenthread.sleep(0.3)
+        instance_id = rv['instancesSet'][0]['instanceId']
+        output = self.cloud.get_console_output(context=self.context,
+                                               instance_id=[instance_id])
+        self.assertEquals(b64decode(output['output']), 'FAKE CONSOLE?OUTPUT')
+        # TODO(soren): We need this until we can stop polling in the rpc code
+        #              for unit tests.
+        greenthread.sleep(0.3)
+        rv = self.cloud.terminate_instances(self.context, [instance_id])
+        greenthread.sleep(0.3)
+
     def test_ajax_console(self):
         kwargs = {'image_id': 'ami-1'}
         LOG.debug(_("###RLK ---- test_ajax_console - 0"))
