@@ -103,6 +103,17 @@ class ZoneManagerTestCase(test.TestCase):
         self.assertEquals(caps, dict(svc1_a=(2, 20), svc1_b=(3, 30),
                                      svc1_c=(5, 5), svc10_a=(99, 99),
                                      svc10_b=(99, 99)))
+                                     
+    def test_hosts_capabilities(self):
+        zm = zone_manager.ZoneManager()
+        caps = zm.get_zone_capabilities(None)
+        self.assertEquals(caps, {})
+        #{ <host> : {<service> : {<cap_key> : <cap_value>}}}
+        zm.update_service_capabilities("svc1", "host1", dict(a=1, b=2))
+        host_caps = zm.get_hosts_capabilities(None)
+        self.assertEquals(host_caps, dict(host1=dict(svc1=dict(a=1, b=2))))
+        
+
 
     def test_refresh_from_db_replace_existing(self):
         zm = zone_manager.ZoneManager()

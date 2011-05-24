@@ -89,7 +89,7 @@ class ArchitectureScheduler(driver.Scheduler):
 
         """Get capability from zone_manager and match cpu_arch and xpu_arch,
         """
-        cap = self.zone_manager.get_zone_capabilities(context)
+        cap = self.zone_manager.get_hosts_capabilities(context)
         LOG.debug(_("## JSUH - cap=%s"), cap)
 
 #        for host, host_dict in cap.iteritems():
