@@ -134,9 +134,9 @@ class ArchitectureScheduler(driver.Scheduler):
                     if(wanted_vcpus > (resource_cap['vcpus']
                         - resource_cap['vcpus_used'])
                     or wanted_memory_mb > resource_cap['host_memory_free']
-                    or wanted_local_gb < 0):
-#                    or wanted_local_gb > (resource_cap['disk_total']
-#                        - resource_cap['disk_used'])):
+#                    or wanted_local_gb < 0):
+                    or wanted_local_gb > (resource_cap['disk_total']
+                        - resource_cap['disk_used'])):
 
                         flag_different = 1
 

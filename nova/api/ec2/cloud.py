@@ -829,7 +829,7 @@ class CloudController(object):
 
     def run_instances(self, context, **kwargs):
         max_count = int(kwargs.get('max_count', 1))
-        metadata={}
+        metadata = {}
         LOG.debug(_('run instance with extra feature'))
         extended_arg = kwargs.get('instance_type', None)
         instance_type = None
