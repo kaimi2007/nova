@@ -260,6 +260,9 @@ class API(base.Base):
             LOG.debug(_("Casting to scheduler for %(pid)s/%(uid)s's"
                     " instance %(instance_id)s") % locals())
 
+            # Note(lorin): Now that the instance_type is being passed
+            # we could just use it instead of extracting these fields
+            # and passing them separately
             wanted_cpu_arch = instance_type['cpu_arch']
             wanted_xpu_arch = instance_type['xpu_arch']
             wanted_vcpus = instance_type['vcpus']
@@ -267,6 +270,11 @@ class API(base.Base):
             wanted_memory_mb = instance_type['memory_mb']
             wanted_local_gb = instance_type['local_gb']
 
+            # NOTE(sandy): For now we're just going to pass in the
+            # instance_type record to the scheduler. In a later phase
+            # we'll be ripping this whole for-loop out and deferring the
+            # creation of the Instance record. At that point all this will
+            # change.
             rpc.cast(context,
                      FLAGS.scheduler_topic,
                      {"method": "run_instance",
@@ -278,6 +286,7 @@ class API(base.Base):
                                "wanted_xpus": wanted_xpus,
                                "wanted_memory_mb": wanted_memory_mb,
                                "wanted_local_gb": wanted_local_gb,
+                               "instance_type": instance_type,
                                "availability_zone": availability_zone,
                                "injected_files": injected_files}})
 
