@@ -47,7 +47,7 @@ import time
 import uuid
 # MK
 import pickle
-# _MK 
+# _MK
 from xml.dom import minidom
 from xml.etree import ElementTree
 
@@ -219,9 +219,9 @@ class _tilera_board(object):
         return []
         #raise
 
-    #def activate_board(self, board_id, board_ip, name, mac_address):  
+    #def activate_board(self, board_id, board_ip, name, mac_address):
     def activate_board(self, board_id, board_ip, name, mac_address, \
-        ip_address):  
+        ip_address):
         print("activate_board \n")
 
         target = os.path.join(FLAGS.instances_path, name)
@@ -1355,7 +1355,7 @@ class tileraConnection(driver.ComputeDriver):
         #idx1 = m.index('MemFree:')
         #idx2 = m.index('Buffers:')
         #idx3 = m.index('Cached:')
-        #avail = (int(m[idx1 + 1]) + int(m[idx2 + 1]) + int(m[idx3 + 1])) / 1024
+        #avail = (int(m[idx1 + 1]) + int(m[idx2 + 1]) + int(m[idx3 + 1]))/1024
         #return  self.get_memory_mb_total() - avail
         return tilera_boards.get_tilera_hw_info('memory_mb_used')  # 476
 
