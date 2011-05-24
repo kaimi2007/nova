@@ -18,20 +18,21 @@
 #    under the License.
 
 """
-A connection to a tilera.
+A connection to a hypervisor through tilera.
 
-Supports tilera board only
+Supports KVM, LXC, QEMU, UML, and XEN.
 
 **Related Flags**
 
-:tilera_type:  tilera domain type.
-:tilera_uri:  Override for the default libvirt URI (depends on libvirt_type).
-:tilera_xml_template:  tilera XML Template.
-:tilera_rescue_image_id:  Rescue ami image (default: ami-rescue).
-:tilera_rescue_kernel_id:  Rescue aki image (default: aki-rescue).
-:tilera_rescue_ramdisk_id:  Rescue ari image (default: ari-rescue).
-:tilera_injected_network_template:  Template file for injected network
-:tilera_allow_project_net_traffic:  Whether to allow in project network traffic
+:tilera_type:  Libvirt domain type.  Can be kvm, qemu, uml, xen
+                (default: kvm).
+:tilera_uri:  Override for the default tilera URI (depends on tilera_type).
+:tilera_xml_template:  Libvirt XML Template.
+:rescue_image_id:  Rescue ami image (default: ami-rescue).
+:rescue_kernel_id:  Rescue aki image (default: aki-rescue).
+:rescue_ramdisk_id:  Rescue ari image (default: ari-rescue).
+:injected_network_template:  Template file for injected network
+:allow_project_net_traffic:  Whether to allow in project network traffic
 
 """
 
@@ -44,7 +45,9 @@ import sys
 import tempfile
 import time
 import uuid
-import pickle  # MK
+# MK
+import pickle
+# _MK 
 from xml.dom import minidom
 from xml.etree import ElementTree
 
@@ -57,6 +60,7 @@ from nova import context
 from nova import db
 from nova import exception
 from nova import flags
+from nova import ipv6
 from nova import log as logging
 from nova import utils
 from nova import vnc
@@ -67,44 +71,12 @@ from nova.virt import disk
 from nova.virt import driver
 from nova.virt import images
 
-tilera = None
 libxml2 = None
 Template = None
 
 LOG = logging.getLogger('nova.virt.tilera')
 
 FLAGS = flags.FLAGS
-"""flags.DECLARE('live_migration_retry_count', 'nova.compute.manager')
-# TODO(vish): These flags should probably go into a shared location
-flags.DEFINE_string('rescue_image_id', 'ami-rescue', 'Rescue ami image')
-flags.DEFINE_string('rescue_kernel_id', 'aki-rescue', 'Rescue aki image')
-flags.DEFINE_string('rescue_ramdisk_id', 'ari-rescue', 'Rescue ari image')
-
-flags.DEFINE_bool('use_cow_images',
-                  True,
-                  'Whether to use cow images')
-flags.DEFINE_string('ajaxterm_portrange',
-                    '10000-12000',
-                    'Range of ports that ajaxterm should randomly try to bind')
-flags.DEFINE_string('firewall_driver',
-                    'nova.virt.libvirt_conn.IptablesFirewallDriver',
-                    'Firewall driver (defaults to iptables)')
-flags.DEFINE_string('cpuinfo_xml_template',
-                    utils.abspath('virt/cpuinfo.xml.template'),
-                    'CpuInfo XML Template (Used only live migration now)')
-flags.DEFINE_string('live_migration_uri',
-                    "qemu+tcp://%s/system",
-                    'Define protocol used by live_migration feature')
-flags.DEFINE_string('live_migration_flag',
-                    "VIR_MIGRATE_UNDEFINE_SOURCE, VIR_MIGRATE_PEER2PEER",
-                    'Define live migration behavior.')
-flags.DEFINE_integer('live_migration_bandwidth', 0,
-                    'Define live migration behavior')
-flags.DEFINE_string('qemu_img', 'qemu-img',
-                    'binary to use for qemu-img commands')
-flags.DEFINE_bool('start_guests_on_host_boot', False,
-                  'Whether to restart guests when the host reboots')"""
-# Tilera_flags
 flags.DEFINE_string('tilera_injected_network_template',
                     utils.abspath('virt/tilera_interfaces.template'),
                     'Template file for injected network')
@@ -113,14 +85,14 @@ flags.DEFINE_string('tilera_xml_template',
                     'tilera XML Template')
 flags.DEFINE_string('tilera_type',
                     'tilera',
-                    'tielra domain type')
+                    'tilera domain type')
 flags.DEFINE_string('tilera_uri',
                     '',
-                    'Override the default tilera URI (which is dependent'
-                    ' on tilera_type)')
+                    'Override the default tilera URI')
 flags.DEFINE_bool('tilera_allow_project_net_traffic',
                   True,
                   'Whether to allow in project network traffic')
+
 
 # MK
 global tilera_boards
@@ -154,11 +126,11 @@ class _tilera_board(object):
                     'ip_addr': l[self.IP_ADDR],
                     'mac_addr': l[self.MAC_ADDR],
                     'status': power_state.NOSTATE,
-                    'vcpus': l[self.VCPUS],
-                    'memory_mb': l[self.MEMORY_MB],
-                    'local_gb': l[self.LOCAL_GB],
-                    'memory_mb_used': l[self.MEMORY_MB_USED],
-                    'local_gb_used': l[self.LOCAL_GB_USED],
+                    'vcpus': int(l[self.VCPUS]),
+                    'memory_mb': int(l[self.MEMORY_MB]),
+                    'local_gb': int(l[self.LOCAL_GB]),
+                    'memory_mb_used': int(l[self.MEMORY_MB_USED]),
+                    'local_gb_used': int(l[self.LOCAL_GB_USED]),
                     'hypervisor_type': l[self.HYPERVISOR_TYPE],
                     'hypervisor_version': l[self.HYPERVISOR_VER],
                     'cpu_info': l[self.CPU_INFO]
@@ -168,7 +140,7 @@ class _tilera_board(object):
 
     def get_tilera_hw_info(self, field):
         for board in self.boards:
-            if board['board_id'] == 2:
+            if board['board_id'] == 9:
                 if field == 'vcpus':
                     return board['vcpus']
                 elif field == 'memory_mb':
@@ -208,12 +180,10 @@ class _tilera_board(object):
                 return item['board_id']
         return -1
 
-    #MK
     def find_ip_w_id(self, id):
         for item in self.boards:
             if item['board_id'] == id:
                 return item['ip_addr']
-    #_MK
 
     def free_board(self, board_id):
         print("free_board....\n")
@@ -228,14 +198,11 @@ class _tilera_board(object):
         #print("deactivate_board is not implemented yet, \
         print("deactivate_board is called for \
                board_id = %s board_ip = %s\n", str(board_id), board_ip)
-        #MK
         for item in self.boards:
             if item['board_id'] == board_id:
                 print "status of board is set to 0"
                 item['status'] = 0
-        #_MK
 
-        #MK: PDU control
         if board_id < 5:
             pdu_num = 1
             pdu_outlet_num = board_id + 5
@@ -252,9 +219,9 @@ class _tilera_board(object):
         return []
         #raise
 
-    #def activate_board(self, board_id, board_ip, name, mac_address):  # MK
+    #def activate_board(self, board_id, board_ip, name, mac_address):  
     def activate_board(self, board_id, board_ip, name, mac_address, \
-        ip_address):  # MK
+        ip_address):  
         print("activate_board \n")
 
         target = os.path.join(FLAGS.instances_path, name)
@@ -267,7 +234,6 @@ class _tilera_board(object):
         path2 = "/tftpboot/vmlinux_" + str(board_id)
         utils.execute('cp', path1, path2)
 
-        #MK: PDU control
         if board_id < 5:
             pdu_num = 1
             pdu_outlet_num = board_id + 5
@@ -279,12 +245,11 @@ class _tilera_board(object):
         print cmd
         path1 = "10.0.100." + str(pdu_num)
         utils.execute('/tftpboot/pdu_mgr', path1, str(pdu_outlet_num), \
-            '3', '>>', 'pdu_output')
-        #_MK
+            str(3), '>>', 'pdu_output')
 
         cmd = "sleep 60"
         print cmd
-        utils.execute('sleep', 60)
+        utils.execute('sleep', str(60))
         cmd = "/usr/local/TileraMDE/bin/tile-monitor --resume --net " \
             + board_ip + " --upload /tftpboot/tilera_fs_" \
             + str(board_id) + ".tar.gz /tilera_fs.tar.gz --quit"
@@ -319,7 +284,7 @@ class _tilera_board(object):
             '3', '>>', 'pdu_output')
         cmd = "sleep 80"
         print cmd
-        utils.execute('sleep', '80')
+        utils.execute('sleep', str(80))
 
         #cmd = "/usr/local/TileraMDE/bin/tile-monitor --resume --net "
         # + board_ip + " --run - /usr/sbin/sshd - --wait -- ls
@@ -438,7 +403,7 @@ class _fake_dom(object):
         fd = self.find_domain(name)
         if fd == []:
             raise exception.NotFound("No such domain (%s)" % name)
-        board_ip = tilera_boards.find_ip_w_id(fd['board_id'])  # MK
+        board_ip = tilera_boards.find_ip_w_id(fd['board_id'])
 
         try:
             tilera_boards.deactivate_board(fd['board_id'])
@@ -448,7 +413,7 @@ class _fake_dom(object):
         self.change_domain_state(name, power_state.NOSTATE)
         try:
             state = tilera_boards.activate_board(fd['board_id'], \
-                board_ip, name, fd['mac_address'], fd['ip_address'])  # MK
+                board_ip, name, fd['mac_address'], fd['ip_address'])
                 #board_ip, name, fd['mac_address']) #MK
                 #fd['ip_addr'], name)
             self.change_domain_state(name, state)
@@ -486,12 +451,11 @@ class _fake_dom(object):
     def create_domain(self, xml_dict, bpath):
         """add a domain to domains list
            and activate a idle Tilera board"""
-        LOG.debug(_("1////////////////////"))  # MK
+        LOG.debug(_("1////////////////////"))
         fd = self.find_domain(xml_dict['name'])
         if fd != []:
             print 'domain with the same name already exists'
             raise
-            #MK
             #raise exception.NotFound("same name already exists")
         print "create_domain: before get_idle_board"
 
@@ -500,7 +464,6 @@ class _fake_dom(object):
             print ('No idle tilera board exits')
             raise exception.NotFound("No free boards available")
 
-        #MK
         board_ip = tilera_boards.find_ip_w_id(board_id)
 
         new_dom = {'board_id': board_id,
@@ -515,10 +478,9 @@ class _fake_dom(object):
                     'ramdisk_id': xml_dict['ramdisk_id'], \
                      'status': power_state.NOSTATE}
         self.domains.append(new_dom)
-        print new_dom  # MK
+        print new_dom
         self.change_domain_state(new_dom['name'], power_state.NOSTATE)
 
-        #MK
         cmd = "mount -o loop " + bpath + "/root /tftpboot/fs_" \
             + str(board_id)
         print cmd
@@ -538,20 +500,19 @@ class _fake_dom(object):
         print cmd
         path4 = "/tftpboot/fs_" + str(board_id)
         utils.execute('umount', '-l', path4)
-        #_MK
 
         try:
             state = tilera_boards.activate_board(board_id,
                 board_ip, new_dom['name'], new_dom['mac_address'], \
-                new_dom['ip_address'])  # MK
+                new_dom['ip_address'])
                 #board_ip, new_dom['name'], new_dom['mac_address']) #MK
         except:
-            self.domains.remove(new_dom)  # MK
+            self.domains.remove(new_dom)
             tilera_boards.free_board(board_id)
             raise exception.NotFound("Failed to boot Tilera board %s" \
                 % board_id)
 
-        print "BEFORE last self.change_domain_state +++++++++++++++++"  # MK
+        print "BEFORE last self.change_domain_state +++++++++++++++++"
         self.change_domain_state(new_dom['name'], state)
         return state
 
@@ -608,11 +569,6 @@ def get_connection(read_only):
     # libraries when not using tilera.
     # Cheetah is separate because the unit tests want to load Cheetah,
     # but not tilera.
-    #MK
-    #global tilera
-    #if tilera is None:
-    #    tilera = __import__('tilera')
-    #_MK
     global libxml2
     if libxml2 is None:
         libxml2 = __import__('libxml2')
@@ -639,8 +595,8 @@ def _get_net_and_prefixlen(cidr):
 
 
 def _get_ip_version(cidr):
-        net = IPy.IP(cidr)
-        return int(net.version())
+    net = IPy.IP(cidr)
+    return int(net.version())
 
 
 def _get_network_info(instance):
@@ -650,9 +606,10 @@ def _get_network_info(instance):
 
     ip_addresses = db.fixed_ip_get_all_by_instance(admin_context,
                                                    instance['id'])
-
     networks = db.network_get_all_by_instance(admin_context,
                                               instance['id'])
+    flavor = db.instance_type_get_by_id(admin_context,
+                                        instance['instance_type_id'])
     network_info = []
 
     for network in networks:
@@ -668,15 +625,18 @@ def _get_network_info(instance):
         def ip6_dict():
             prefix = network['cidr_v6']
             mac = instance['mac_address']
+            project_id = instance['project_id']
             return  {
-                'ip': utils.to_global_ipv6(prefix, mac),
+                'ip': ipv6.to_global(prefix, mac, project_id),
                 'netmask': network['netmask_v6'],
                 'enabled': '1'}
 
         mapping = {
             'label': network['label'],
             'gateway': network['gateway'],
+            'broadcast': network['broadcast'],
             'mac': instance['mac_address'],
+            'rxtx_cap': flavor['rxtx_cap'],
             'dns': [network['dns']],
             'ips': [ip_dict(ip) for ip in network_ips]}
 
@@ -688,7 +648,7 @@ def _get_network_info(instance):
     return network_info
 
 
-class tileraConnection(object):
+class tileraConnection(driver.ComputeDriver):
 
     def __init__(self, read_only):
         super(tileraConnection, self).__init__()
@@ -700,8 +660,15 @@ class tileraConnection(object):
         self.read_only = read_only
 
         fw_class = utils.import_class(FLAGS.firewall_driver)
-        self.tilera_firewall_driver = \
-            fw_class(get_connection=self._get_connection)
+        self.firewall_driver = fw_class(get_connection=self._get_connection)
+        self._host_state = None
+#        self.session = None
+
+    @property
+    def HostState(self):
+        if not self._host_state:
+            self._host_state = HostState(self.read_only)
+        return self._host_state
 
     def init_host(self, host):
         # Adopt existing VM's running here
@@ -726,32 +693,32 @@ class tileraConnection(object):
             self.firewall_driver.apply_instance_filter(instance)
 
     def _get_connection(self):
-        #MK
         #if not self._wrapped_conn or not self._test_connection():
-        #    LOG.debug(_('Connecting to libvirt: %s'), self.tilera_uri)
+        #    LOG.debug(_('Connecting to tilera: %s'), self.tilera_uri)
         #    self._wrapped_conn = self._connect(self.tilera_uri,
-        #                                       self.read_only)
+        #                               self.read_only)
+        # MK
         self._wrapped_conn = fake_doms
-        #_MK
+        # _MK
         return self._wrapped_conn
     _conn = property(_get_connection)
 
-    #def get_uri(self):
-    #    if FLAGS.tilera_type == 'uml':
-    #        uri = FLAGS.tilera_uri or 'uml:///system'
-    #    elif FLAGS.tilera_type == 'xen':
-    #        uri = FLAGS.tilera_uri or 'xen:///'
-    #    elif FLAGS.tilera_type == 'lxc':
-    #        uri = FLAGS.tilera_uri or 'lxc:///'
-    #    else:
-    #        uri = FLAGS.tilera_uri or 'qemu:///system'
-    #    return uri
+    def get_pty_for_instance(self, instance_name):
+        virt_dom = self._conn.lookupByName(instance_name)
+        xml = virt_dom.XMLDesc(0)
+        dom = minidom.parseString(xml)
+        for serial in dom.getElementsByTagName('serial'):
+            if serial.getAttribute('type') == 'pty':
+                source = serial.getElementsByTagName('source')[0]
+                return source.getAttribute('path')
 
     def list_instances(self):
+        #return [self._conn.lookupByID(x).name()
+        #        for x in self._conn.listDomainsID()]
         return self._conn.list_domains()  # MK
 
-    """def _map_to_instance_info(self, domain):
-        # Gets info from a virsh domain object into an InstanceInfo
+    def _map_to_instance_info(self, domain):
+        """Gets info from a virsh domain object into an InstanceInfo"""
 
         # domain.info() returns a list of:
         #    state:       one of the state values (virDomainState)
@@ -760,29 +727,8 @@ class tileraConnection(object):
         #    nbVirtCPU:   the number of virtual CPU
         #    puTime:      the time used by the domain in nanoseconds
 
-        (state, _max_mem, _mem, _num_cpu, _cpu_time) = domain.info()
-        name = domain.name()
-
-        return driver.InstanceInfo(name, state)
-
-    def list_instances_detail(self):
-        infos = []
-        for domain_id in self._conn.listDomainsID():
-            domain = self._conn.lookupByID(domain_id)
-            info = self._map_to_instance_info(domain)
-            infos.append(info)
-        return infos"""
-
-    def _map_to_instance_info(self, domain_name):
-        # Gets info from a virsh domain object into an InstanceInfo
-
-        # domain.info() returns a list of:
-        #    state:       one of the state values (virDomainState)
-        #    maxMemory:   the maximum memory used by the domain
-        #    memory:      the current amount of memory used by the domain
-        #    nbVirtCPU:   the number of virtual CPU
-        #    puTime:      the time used by the domain in nanoseconds
-
+        #(state, _max_mem, _mem, _num_cpu, _cpu_time) = domain.info()
+        #name = domain.name()
         (state, _max_mem, _mem, _num_cpu, _cpu_time) \
             = self.get_info(domain_name)
         name = domain_name
@@ -791,6 +737,10 @@ class tileraConnection(object):
 
     def list_instances_detail(self):
         infos = []
+        #for domain_id in self._conn.listDomainsID():
+        #    domain = self._conn.lookupByID(domain_id)
+        #    info = self._map_to_instance_info(domain)
+        #    infos.append(info)
         for domain in self._conn.list_domains():
             info = self._map_to_instance_info(domain['name'])
             infos.append(info)
@@ -827,7 +777,7 @@ class tileraConnection(object):
         instance_name = instance['name']
         LOG.info(_('instance %(instance_name)s: deleting instance files'
                 ' %(target)s') % locals())
-        if FLAGS.libvirt_type == 'lxc':
+        if FLAGS.tilera_type == 'lxc':
             disk.destroy_container(target, instance, nbd=FLAGS.use_cow_images)
         if os.path.exists(target):
             shutil.rmtree(target)
@@ -836,14 +786,19 @@ class tileraConnection(object):
     def attach_volume(self, instance_name, device_path, mountpoint):
         raise exception.APIError("attach_volume not supported for tilera.")
 
+    @exception.wrap_exception
     def detach_volume(self, instance_name, mountpoint):
         raise exception.APIError("detach_volume not supported for tilera.")
 
+    @exception.wrap_exception
     def snapshot(self, instance, image_id):
-        """ Create snapshot from a running VM instance """
-        raise NotImplementedError(
-            _("Instance snapshotting is not supported for libvirt"
-              "at this time"))
+        raise exception.APIError("snapshot not supported for tilera.")
+        """Create snapshot from a running VM instance.
+
+        This command only works with qemu 0.14+, the qemu_img flag is
+        provided so that a locally compiled binary of qemu-img can be used
+        to support this command.
+        """
 
     @exception.wrap_exception
     def reboot(self, instance):
@@ -868,22 +823,30 @@ class tileraConnection(object):
 
     @exception.wrap_exception
     def pause(self, instance, callback):
-        raise exception.APIError("pause not supported for tilera.")
+        raise exception.ApiError("pause not supported for tilera.")
 
     @exception.wrap_exception
     def unpause(self, instance, callback):
-        raise exception.APIError("unpause not supported for tilera.")
+        raise exception.ApiError("unpause not supported for tilera.")
 
     @exception.wrap_exception
     def suspend(self, instance, callback):
-        raise exception.APIError("suspend not supported for tilera")
+        raise exception.ApiError("suspend not supported for tilera")
 
     @exception.wrap_exception
     def resume(self, instance, callback):
-        raise exception.APIError("resume not supported for tilera")
+        raise exception.ApiError("resume not supported for tilera")
 
     @exception.wrap_exception
     def rescue(self, instance):
+        """Loads a VM using rescue images.
+
+        A rescue is normally performed when something goes wrong with the
+        primary images and data needs to be corrected/recovered. Rescuing
+        should not edit or over-ride the original image, only allow for
+        data recovery.
+
+        """
         self.destroy(instance, False)
 
         xml_dict = self.to_xml_dict(instance, rescue=True)
@@ -914,10 +877,20 @@ class tileraConnection(object):
 
     @exception.wrap_exception
     def unrescue(self, instance):
-        # NOTE(vish): Because reboot destroys and recreates an instance using
-        #             the normal xml file, we can just call reboot here
+        """Reboot the VM which is being rescued back into primary images.
+
+        Because reboot destroys and re-creates instances, unresue should
+        simply call reboot.
+
+        """
         self.reboot(instance)
 
+    @exception.wrap_exception
+    def poll_rescued_instances(self, timeout):
+        pass
+
+    # NOTE(ilyaalekseyev): Implementation like in multinics
+    # for xenapi(tr3buchet)
     @exception.wrap_exception
     def spawn(self, instance, network_info=None):
         LOG.debug(_("<============= spawn of tilera =============>"))  # MK
@@ -926,186 +899,22 @@ class tileraConnection(object):
                               instance['id'],
                               power_state.NOSTATE,
                               'launching')
-        #self.tilera_firewall_driver.\
-        #setup_basic_filtering(instance, network_info)  # MK
-        self.tilera_firewall_driver.prepare_instance_filter(instance, \
-            network_info)
-        #self._create_image(instance, xml, network_info)
+        #self.firewall_driver.setup_basic_filtering(instance, network_info)
+        #self.firewall_driver.prepare_instance_filter(instance, network_info)
+        self._create_image(instance, xml_dict, network_info=network_info)
         #domain = self._create_new_domain(xml)
         LOG.debug(_("instance %s: is running"), instance['name'])
-        self.tilera_firewall_driver.apply_instance_filter(instance)
+        #self.firewall_driver.apply_instance_filter(instance)
 
-        if not network_info:
-            network_info = _get_network_info(instance)
+        #if FLAGS.start_guests_on_host_boot:
+        #    LOG.debug(_("instance %s: setting autostart ON") %
+        #              instance['name'])
+        #    domain.setAutostart(1)
 
-        #if not suffix:
-        suffix = ''
-
-        def basepath(fname='', suffix=suffix):
+        def basepath(fname='', suffix=''):
             return os.path.join(FLAGS.instances_path,
                                 instance['name'],
                                 fname + suffix)
-
-        # ensure directories exist and are writable
-        utils.execute('mkdir', '-p', basepath(suffix=''))
-        utils.execute('chmod', '0777', basepath(suffix=''))
-
-        LOG.info(_('instance %s: Creating image'), instance['name'])
-        f = open(basepath('tilera.xml'), 'w')
-        #f.write('tilera_xml') #####BUG?
-        f.close()
-
-        if FLAGS.tilera_type == 'lxc':
-            container_dir = '%s/rootfs' % basepath(suffix='')
-            utils.execute('mkdir', '-p', container_dir)
-
-        # NOTE(vish): No need add the suffix to console.log
-        os.close(os.open(basepath('console.log', ''),
-                         os.O_CREAT | os.O_WRONLY, 0660))
-
-        user = manager.AuthManager().get_user(instance['user_id'])
-        project = manager.AuthManager().get_project(instance['project_id'])
-
-        disk_images = None  # MK
-        if not disk_images:
-            disk_images = {'image_id': instance['image_id'],
-                           'kernel_id': instance['kernel_id'],
-                           'ramdisk_id': instance['ramdisk_id']}
-
-        """if disk_images['kernel_id']:
-            fname = '%08x' % int(disk_images['kernel_id'])
-            self._cache_image(fn=self._fetch_image,
-                              target=basepath('kernel'),
-                              fname=fname,
-                              image_id=disk_images['kernel_id'],
-                              user=user,
-                              project=project)
-            if disk_images['ramdisk_id']:
-                fname = '%08x' % int(disk_images['ramdisk_id'])
-                self._cache_image(fn=self._fetch_image,
-                                  target=basepath('ramdisk'),
-                                  fname=fname,
-                                  image_id=disk_images['ramdisk_id'],
-                                  user=user,
-                                  project=project)
-
-        root_fname = '%08x' % int(disk_images['image_id'])
-        size = FLAGS.minimum_root_size
-
-        inst_type_id = inst['instance_type_id']
-        inst_type = instance_types.get_instance_type(inst_type_id)
-        if inst_type['name'] == 'm1.tiny' or suffix == '.rescue':
-            size = None
-            root_fname += "_sm"
-
-        self._cache_image(fn=self._fetch_image,
-                          target=basepath('disk'),
-                          fname=root_fname,
-                          cow=FLAGS.use_cow_images,
-                          image_id=disk_images['image_id'],
-                          user=user,
-                          project=project,
-                          size=size)
-
-        if inst_type['local_gb']:
-            self._cache_image(fn=self._create_local,
-                              target=basepath('disk.local'),
-                              fname="local_%s" % inst_type['local_gb'],
-                              cow=FLAGS.use_cow_images,
-                              local_gb=inst_type['local_gb'])"""
-
-        #MK
-        #Test: copying original tilera images
-        board_id = tilera_boards.check_idle_board()
-        path_fs = "/tftpboot/tilera_fs_" + str(board_id)
-        path_root = basepath(suffix='') + "/root"
-        utils.execute('cp', path_fs, path_root)
-        kmsg_dump_file = "/tftpboot/kmsg_dump_0"  # + str(board_id)
-        utils.execute('touch', kmsg_dump_file)
-        #_MK
-
-        # For now, we assume that if we're not using a kernel, we're using a
-        # partitioned disk image where the target partition is the first
-        # partition
-        target_partition = None
-        if not instance['kernel_id']:
-            target_partition = "1"
-
-        if FLAGS.libvirt_type == 'lxc':
-            target_partition = None
-
-        if instance['key_data']:
-            key = str(instance['key_data'])
-        else:
-            key = None
-        net = None
-
-        nets = []
-        ifc_template = open(FLAGS.injected_network_template).read()
-        ifc_num = -1
-        have_injected_networks = False
-        admin_context = context.get_admin_context()
-        for (network_ref, mapping) in network_info:
-            ifc_num += 1
-
-            if not network_ref['injected']:
-                continue
-
-            have_injected_networks = True
-            address = mapping['ips'][0]['ip']
-            address_v6 = None
-            if FLAGS.use_ipv6:
-                address_v6 = mapping['ip6s'][0]['ip']
-            net_info = {'name': 'eth%d' % ifc_num,
-                   'address': address,
-                   'netmask': network_ref['netmask'],
-                   'gateway': network_ref['gateway'],
-                   'broadcast': network_ref['broadcast'],
-                   'dns': network_ref['dns'],
-                   'address_v6': address_v6,
-                   'gateway_v6': network_ref['gateway_v6'],
-                   'netmask_v6': network_ref['netmask_v6']}
-            nets.append(net_info)
-
-        if have_injected_networks:
-            net = str(Template(ifc_template,
-                               searchList=[{'interfaces': nets,
-                                            'use_ipv6': FLAGS.use_ipv6}]))
-
-        if key or net:
-            inst_name = instance['name']
-            img_id = instance.image_id
-            if key:
-                LOG.info(_('instance %(inst_name)s: injecting key into'
-                        ' image %(img_id)s') % locals())
-            if net:
-                LOG.info(_('instance %(inst_name)s: injecting net into'
-                        ' image %(img_id)s') % locals())
-            try:
-                #MK
-                #disk.inject_data(basepath('disk'), key, net,
-                disk.inject_data(basepath('root'), key, net,
-                                 partition=target_partition,
-                                 nbd=FLAGS.use_cow_images)
-
-                if FLAGS.libvirt_type == 'lxc':
-                    disk.setup_container(basepath('disk'),
-                                 container_dir=container_dir,
-                                 nbd=FLAGS.use_cow_images)
-            except Exception as e:
-                # This could be a windows image, or a vmdk format disk
-                LOG.warn(_('instance %(inst_name)s: ignoring error injecting'
-                        ' data into image %(img_id)s (%(e)s)') % locals())
-
-        if FLAGS.tilera_type == 'uml':
-            utils.execute('sudo', 'chown', 'root', basepath('disk'))
-
-        #Back to spawn
-        """if FLAGS.start_guests_on_host_boot:
-            LOG.debug(_("instance %s: setting autostart ON") %
-                      instance['name'])
-            domain.setAutostart(1)"""
-
         bpath = basepath(suffix='')
         timer = utils.LoopingCall(f=None)
 
@@ -1180,78 +989,18 @@ class tileraConnection(object):
 
         fpath = console_log
 
-        """if FLAGS.tilera_type == 'xen':
-            # Xen is special
-            virsh_output = utils.execute('virsh', 'ttyconsole',
-                                         instance['name'])
-            data = self._flush_xen_console(virsh_output)
-            fpath = self._append_to_file(data, console_log)
-        else:
-            fpath = console_log"""
-
         return self._dump_file(fpath)
 
     @exception.wrap_exception
     def get_ajax_console(self, instance):
-        #MK
         raise NotImplementedError()
-        #def get_open_port():
-        #    start_port, end_port = FLAGS.ajaxterm_portrange.split("-")
-        #    for i in xrange(0, 100):  # don't loop forever
-        #        port = random.randint(int(start_port), int(end_port))
-        #        # netcat will exit with 0 only if the port is in use,
-        #        # so a nonzero return value implies it is unused
-        #        cmd = 'netcat', '0.0.0.0', port, '-w', '1'
-        #        try:
-        #            stdout, stderr = utils.execute(*cmd, process_input='')
-        #        except exception.ProcessExecutionError:
-        #            return port
-        #    raise Exception(_('Unable to find an open port'))
-
-        #def get_pty_for_instance(instance_name):
-        #    virt_dom = self._conn.lookupByName(instance_name)
-        #    xml = virt_dom.XMLDesc(0)
-        #    dom = minidom.parseString(xml)
-
-        #    for serial in dom.getElementsByTagName('serial'):
-        #        if serial.getAttribute('type') == 'pty':
-        #            source = serial.getElementsByTagName('source')[0]
-        #            return source.getAttribute('path')
-        #port = get_open_port()
-        #token = str(uuid.uuid4())
-        #host = instance['host']
-
-        #ajaxterm_cmd = 'sudo socat - %s' \
-        #               % get_pty_for_instance(instance['name'])
-
-        #cmd = '%s/tools/ajaxterm/ajaxterm.py --command "%s" -t %s -p %s' \
-        #      % (utils.novadir(), ajaxterm_cmd, token, port)
-
-        #subprocess.Popen(cmd, shell=True)
-        #return {'token': token, 'host': host, 'port': port}
-        #_MK
 
     @exception.wrap_exception
     def get_vnc_console(self, instance):
-        def get_vnc_port_for_instance(instance_name):
-            virt_dom = self._conn.lookupByName(instance_name)
-            xml = virt_dom.XMLDesc(0)
-            # TODO: use etree instead of minidom
-            dom = minidom.parseString(xml)
-
-            for graphic in dom.getElementsByTagName('graphics'):
-                if graphic.getAttribute('type') == 'vnc':
-                    return graphic.getAttribute('port')
-
-        port = get_vnc_port_for_instance(instance['name'])
-        token = str(uuid.uuid4())
-        host = instance['host']
-
-        return {'token': token, 'host': host, 'port': port}
+        raise NotImplementedError()
 
     @staticmethod
-    def _cache_image(self, fn, target, fname, cow=False, *args, **kwargs):
-        #MK
+    def _cache_image(fn, target, fname, cow=False, *args, **kwargs):
         raise NotImplementedError()
         """Wrapper for a method that creates an image that caches the image.
 
@@ -1266,45 +1015,136 @@ class tileraConnection(object):
 
         If cow is True, it will make a CoW image instead of a copy.
         """
-        #if not os.path.exists(target):
-        #    base_dir = os.path.join(FLAGS.instances_path, '_base')
-        #    if not os.path.exists(base_dir):
-        #        os.mkdir(base_dir)
-        #    base = os.path.join(base_dir, fname)
-
-        #    @utils.synchronized(fname)
-        #    def call_if_not_exists(base, fn, *args, **kwargs):
-        #        if not os.path.exists(base):
-        #            fn(target=base, *args, **kwargs)
-
-        #    call_if_not_exists(base, fn, *args, **kwargs)
-
-        #    if cow:
-        #        utils.execute('qemu-img', 'create', '-f', 'qcow2', '-o',
-        #                      'cluster_size=2M,backing_file=%s' % base,
-        #                      target)
-        #    else:
-        #        utils.execute('cp', base, target)"""
 
     def _fetch_image(self, target, image_id, user, project, size=None):
-        """Grab image and optionally attempt to resize it"""
-        #MK
         raise NotImplementedError()
-        #images.fetch(image_id, target, user, project)
-        #if size:
-        #    disk.extend(target, size)
 
     def _create_local(self, target, local_gb):
-        """Create a blank image of specified size"""
-        #MK
         raise NotImplementedError()
-        #utils.execute('truncate %s -s %dG' % (target, local_gb))
-        # TODO(vish): should we format disk by default?
 
     def _create_image(self, inst, tilera_xml, suffix='', disk_images=None,
-                      network_info=None):
+                        network_info=None):
+        if not network_info:
+            network_info = _get_network_info(inst)
+
+        if not suffix:
+            suffix = ''
+
+        # syntactic nicety
+        def basepath(fname='', suffix=suffix):
+            return os.path.join(FLAGS.instances_path,
+                                inst['name'],
+                                fname + suffix)
+
+        # ensure directories exist and are writable
+        utils.execute('mkdir', '-p', basepath(suffix=''))
+        utils.execute('chmod', '0777', basepath(suffix=''))
+
+        LOG.info(_('instance %s: Creating image'), inst['name'])
+        f = open(basepath('tilera.xml'), 'w')
+        #f.write(tilera_xml)
+        f.close()
+
+        if FLAGS.tilera_type == 'lxc':
+            container_dir = '%s/rootfs' % basepath(suffix='')
+            utils.execute('mkdir', '-p', container_dir)
+
+        # NOTE(vish): No need add the suffix to console.log
+        os.close(os.open(basepath('console.log', ''),
+                         os.O_CREAT | os.O_WRONLY, 0660))
+
+        user = manager.AuthManager().get_user(inst['user_id'])
+        project = manager.AuthManager().get_project(inst['project_id'])
+
+        if not disk_images:
+            disk_images = {'image_id': inst['image_id'],
+                           'kernel_id': inst['kernel_id'],
+                           'ramdisk_id': inst['ramdisk_id']}
+
         #MK
-        raise NotImplementedError()
+        #Test: copying original tilera images
+        board_id = tilera_boards.check_idle_board()
+        path_fs = "/tftpboot/tilera_fs_" + str(board_id)
+        path_root = basepath(suffix='') + "/root"
+        utils.execute('cp', path_fs, path_root)
+        kmsg_dump_file = "/tftpboot/kmsg_dump_0"  # + str(board_id)
+        utils.execute('touch', kmsg_dump_file)
+        #_MK
+
+        # For now, we assume that if we're not using a kernel, we're using a
+        # partitioned disk image where the target partition is the first
+        # partition
+        target_partition = None
+        if not inst['kernel_id']:
+            target_partition = "1"
+
+        if FLAGS.tilera_type == 'lxc':
+            target_partition = None
+
+        if inst['key_data']:
+            key = str(inst['key_data'])
+        else:
+            key = None
+        net = None
+
+        nets = []
+        ifc_template = open(FLAGS.injected_network_template).read()
+        ifc_num = -1
+        have_injected_networks = False
+        admin_context = context.get_admin_context()
+        for (network_ref, mapping) in network_info:
+            ifc_num += 1
+
+            if not network_ref['injected']:
+                continue
+
+            have_injected_networks = True
+            address = mapping['ips'][0]['ip']
+            address_v6 = None
+            if FLAGS.use_ipv6:
+                address_v6 = mapping['ip6s'][0]['ip']
+            net_info = {'name': 'eth%d' % ifc_num,
+                   'address': address,
+                   'netmask': network_ref['netmask'],
+                   'gateway': network_ref['gateway'],
+                   'broadcast': network_ref['broadcast'],
+                   'dns': network_ref['dns'],
+                   'address_v6': address_v6,
+                   'gateway_v6': network_ref['gateway_v6'],
+                   'netmask_v6': network_ref['netmask_v6']}
+            nets.append(net_info)
+
+        if have_injected_networks:
+            net = str(Template(ifc_template,
+                               searchList=[{'interfaces': nets,
+                                            'use_ipv6': FLAGS.use_ipv6}]))
+
+        if key or net:
+            inst_name = inst['name']
+            img_id = inst.image_id
+            if key:
+                LOG.info(_('instance %(inst_name)s: injecting key into'
+                        ' image %(img_id)s') % locals())
+            if net:
+                LOG.info(_('instance %(inst_name)s: injecting net into'
+                        ' image %(img_id)s') % locals())
+            try:
+                #disk.inject_data(basepath('disk'), key, net,
+                disk.inject_data(basepath('root'), key, net,
+                                 partition=target_partition,
+                                 nbd=FLAGS.use_cow_images)
+
+                if FLAGS.tilera_type == 'lxc':
+                    disk.setup_container(basepath('disk'),
+                                        container_dir=container_dir,
+                                        nbd=FLAGS.use_cow_images)
+            except Exception as e:
+                # This could be a windows image, or a vmdk format disk
+                LOG.warn(_('instance %(inst_name)s: ignoring error injecting'
+                        ' data into image %(img_id)s (%(e)s)') % locals())
+
+        if FLAGS.tilera_type == 'uml':
+            utils.execute('sudo', 'chown', 'root', basepath('disk'))
 
     def _get_nic_for_xml(self, network, mapping):
         # Assume that the gateway also acts as the dhcp server.
@@ -1313,26 +1153,16 @@ class tileraConnection(object):
         mac_id = mapping['mac'].replace(':', '')
 
         if FLAGS.allow_project_net_traffic:
+            template = "<parameter name=\"%s\"value=\"%s\" />\n"
+            net, mask = _get_net_and_mask(network['cidr'])
+            values = [("PROJNET", net), ("PROJMASK", mask)]
             if FLAGS.use_ipv6:
-                net, mask = _get_net_and_mask(network['cidr'])
                 net_v6, prefixlen_v6 = _get_net_and_prefixlen(
                                            network['cidr_v6'])
-                extra_params = ("<parameter name=\"PROJNET\" "
-                            "value=\"%s\" />\n"
-                            "<parameter name=\"PROJMASK\" "
-                            "value=\"%s\" />\n"
-                            "<parameter name=\"PROJNETV6\" "
-                            "value=\"%s\" />\n"
-                            "<parameter name=\"PROJMASKV6\" "
-                            "value=\"%s\" />\n") % \
-                              (net, mask, net_v6, prefixlen_v6)
-            else:
-                net, mask = _get_net_and_mask(network['cidr'])
-                extra_params = ("<parameter name=\"PROJNET\" "
-                            "value=\"%s\" />\n"
-                            "<parameter name=\"PROJMASK\" "
-                            "value=\"%s\" />\n") % \
-                              (net, mask)
+                values.extend([("PROJNETV6", net_v6),
+                               ("PROJMASKV6", prefixlen_v6)])
+
+            extra_params = "".join([template % value for value in values])
         else:
             extra_params = "\n"
 
@@ -1350,10 +1180,7 @@ class tileraConnection(object):
 
         return result
 
-    def to_xml_dict(self, instance, rescue=False, network_info=None):
-        # TODO(termie): cache?
-        LOG.debug(_('instance %s: starting toXML method'), instance['name'])
-
+    def _prepare_xml_info(self, instance, rescue=False, network_info=None):
         # TODO(adiantum) remove network_info creation code
         # when multinics will be completed
         if not network_info:
@@ -1361,8 +1188,7 @@ class tileraConnection(object):
 
         nics = []
         for (network, mapping) in network_info:
-            nics.append(self._get_nic_for_xml(network,
-                                              mapping))
+            nics.append(self._get_nic_for_xml(network, mapping))
         # FIXME(vish): stick this in db
         inst_type_id = instance['instance_type_id']
         inst_type = instance_types.get_instance_type(inst_type_id)
@@ -1372,49 +1198,56 @@ class tileraConnection(object):
         else:
             driver_type = 'raw'
 
-        xml_info = {'type': FLAGS.libvirt_type,
+        xml_info = {'type': FLAGS.tilera_type,
                     'name': instance['name'],
                     'basepath': os.path.join(FLAGS.instances_path,
                                              instance['name']),
                     'memory_kb': inst_type['memory_mb'] * 1024,
                     'vcpus': inst_type['vcpus'],
-                    'ip_address': mapping['ips'][0]['ip'],
-                    'mac_address': instance['mac_address'],
-                    'image_id': instance['image_id'],  # MK
-                    'kernel_id': instance['kernel_id'],  # MK
-                    'ramdisk_id': instance['ramdisk_id'],  # MK
                     'rescue': rescue,
                     'local': inst_type['local_gb'],
                     'driver_type': driver_type,
-                    'nics': nics}
+                    'nics': nics,
+                    'ip_address': mapping['ips'][0]['ip'],  # MK
+                    'mac_address': instance['mac_address'],  # MK
+                    'image_id': instance['image_id'],  # MK
+                    'kernel_id': instance['kernel_id'],  # MK
+                    'ramdisk_id': instance['ramdisk_id']}  # MK
 
         if FLAGS.vnc_enabled:
             if FLAGS.tilera_type != 'lxc':
                 xml_info['vncserver_host'] = FLAGS.vncserver_host
-        """if not rescue:
+        if not rescue:
             if instance['kernel_id']:
                 xml_info['kernel'] = xml_info['basepath'] + "/kernel"
 
             if instance['ramdisk_id']:
                 xml_info['ramdisk'] = xml_info['basepath'] + "/ramdisk"
 
-            xml_info['disk'] = xml_info['basepath'] + "/disk"""
+            xml_info['disk'] = xml_info['basepath'] + "/disk"
+        return xml_info
 
+    def to_xml_dict(self, instance, rescue=False, network_info=None):
+        # TODO(termie): cache?
+        LOG.debug(_('instance %s: starting toXML method'), instance['name'])
+        xml_info = self._prepare_xml_info(instance, rescue, network_info)
         xml = str(Template(self.tilera_xml, searchList=[xml_info]))
-        LOG.debug(_('instance %s: finished toXML method'),
-                        instance['name'])
+        LOG.debug(_('instance %s: finished toXML method'), instance['name'])
         #return xml
-        #_MK
-        print xml_info
-        return xml_info  # MK
+        return xml_info
 
     def get_info(self, instance_name):
-        try:
-            (state, max_mem, mem, num_cpu, cpu_time) \
+        """Retrieve information from tilera for a specific instance name.
+
+        If a tilera error is encountered during lookup, we might raise a
+        NotFound exception or Error exception depending on how severe the
+        tilera error is.
+
+        """
+        #virt_dom = self._lookup_by_name(instance_name)
+        #(state, max_mem, mem, num_cpu, cpu_time) = virt_dom.info()
+        (state, max_mem, mem, num_cpu, cpu_time) \
                 = self._conn.get_domain_info(instance_name)
-        except:
-            raise exception.NotFound(_("Instance %s not found")
-                                     % instance_name)
         return {'state': state,
                 'max_mem': max_mem,
                 'mem': mem,
@@ -1425,97 +1258,26 @@ class tileraConnection(object):
         raise NotImplementedError()
 
     def get_diagnostics(self, instance_name):
-        raise exception.APIError("diagnostics are not supported for libvirt")
+        raise exception.ApiError(_("diagnostics are not supported "
+                                   "for tilera"))
 
     def get_disks(self, instance_name):
+        raise NotImplementedError()
         """
         Note that this function takes an instance name, not an Instance, so
         that it can be called by monitor.
 
         Returns a list of all block devices for this domain.
         """
-        #MK
-        raise NotImplementedError()
-        #domain = self._conn.lookupByName(instance_name)
-        ## TODO(devcamcar): Replace libxml2 with etree.
-        #xml = domain.XMLDesc(0)
-        #doc = None
-
-        #try:
-        #    doc = libxml2.parseDoc(xml)
-        #except:
-        #    return []
-
-        #ctx = doc.xpathNewContext()
-        #disks = []
-
-        #try:
-        #    ret = ctx.xpathEval('/domain/devices/disk')
-
-        #    for node in ret:
-        #        devdst = None
-
-        #        for child in node.children:
-        #            if child.name == 'target':
-        #                devdst = child.prop('dev')
-
-        #        if devdst is None:
-        #            continue
-
-        #        disks.append(devdst)
-        #finally:
-        #    if ctx is not None:
-        #        ctx.xpathFreeContext()
-        #    if doc is not None:
-        #        doc.freeDoc()
-
-        #return disks
-        #_MK
 
     def get_interfaces(self, instance_name):
+        raise NotImplementedError()
         """
         Note that this function takes an instance name, not an Instance, so
         that it can be called by monitor.
 
         Returns a list of all network interfaces for this instance.
         """
-        #MK
-        raise NotImplementedError()
-        #domain = self._conn.lookupByName(instance_name)
-        ## TODO(devcamcar): Replace libxml2 with etree.
-        #xml = domain.XMLDesc(0)
-        #doc = None
-
-        #try:
-        #    doc = libxml2.parseDoc(xml)
-        #except:
-        #    return []
-
-        #ctx = doc.xpathNewContext()
-        #interfaces = []
-
-        #try:
-        #    ret = ctx.xpathEval('/domain/devices/interface')
-
-        #    for node in ret:
-        #        devdst = None
-
-        #        for child in node.children:
-        #            if child.name == 'target':
-        #                devdst = child.prop('dev')
-
-        #        if devdst == None:
-        #            continue
-
-        #        interfaces.append(devdst)
-        #finally:
-        #    if ctx is not None:
-        #        ctx.xpathFreeContext()
-        #    if doc is not None:
-        #        doc.freeDoc()
-
-        #return interfaces
-        #_MK
 
     def get_vcpu_total(self):
         """Get vcpu number of physical computer.
@@ -1526,10 +1288,8 @@ class tileraConnection(object):
 
         # On certain platforms, this will raise a NotImplementedError.
         try:
-            #MK
             #return multiprocessing.cpu_count()
             return tilera_boards.get_tilera_hw_info('vcpus')  # 10
-            #_MK
         except NotImplementedError:
             LOG.warn(_("Cannot get the number of cpu, because this "
                        "function is not implemented for this platform. "
@@ -1543,7 +1303,6 @@ class tileraConnection(object):
 
         """
 
-        #MK
         #if sys.platform.upper() != 'LINUX2':
         #    return 0
 
@@ -1552,7 +1311,6 @@ class tileraConnection(object):
         ## transforming kb to mb.
         #return int(meminfo[idx + 1]) / 1024
         return tilera_boards.get_tilera_hw_info('memory_mb')  # 16218
-        #_MK
 
     def get_local_gb_total(self):
         """Get the total hdd size(GB) of physical computer.
@@ -1564,11 +1322,9 @@ class tileraConnection(object):
 
         """
 
-        #MK
         #hddinfo = os.statvfs(FLAGS.instances_path)
         #return hddinfo.f_frsize * hddinfo.f_blocks / 1024 / 1024 / 1024
         return tilera_boards.get_tilera_hw_info('local_gb')  # 917
-        #_MK
 
     def get_vcpu_used(self):
         """ Get vcpu usage number of physical computer.
@@ -1578,13 +1334,11 @@ class tileraConnection(object):
         """
 
         total = 0
-        #MK
         #for dom_id in self._conn.listDomainsID():
         #    dom = self._conn.lookupByID(dom_id)
         #    total += len(dom.vcpus()[1])
         for dom_id in self._conn.list_domains():
             total += 1
-        #_MK
         return total
 
     def get_memory_mb_used(self):
@@ -1594,7 +1348,6 @@ class tileraConnection(object):
 
         """
 
-        #MK
         #if sys.platform.upper() != 'LINUX2':
         #    return 0
 
@@ -1602,11 +1355,9 @@ class tileraConnection(object):
         #idx1 = m.index('MemFree:')
         #idx2 = m.index('Buffers:')
         #idx3 = m.index('Cached:')
-        #avail = (int(m[idx1 + 1]) + int(m[idx2 + 1]) \
-        #    + int(m[idx3 + 1])) / 1024
+        #avail = (int(m[idx1 + 1]) + int(m[idx2 + 1]) + int(m[idx3 + 1])) / 1024
         #return  self.get_memory_mb_total() - avail
         return tilera_boards.get_tilera_hw_info('memory_mb_used')  # 476
-        #_MK
 
     def get_local_gb_used(self):
         """Get the free hdd size(GB) of physical computer.
@@ -1618,12 +1369,10 @@ class tileraConnection(object):
 
         """
 
-        #MK
         #hddinfo = os.statvfs(FLAGS.instances_path)
         #avail = hddinfo.f_frsize * hddinfo.f_bavail / 1024 / 1024 / 1024
         #return self.get_local_gb_total() - avail
         return tilera_boards.get_tilera_hw_info('local_gb_used')  # 1
-        #_MK
 
     def get_hypervisor_type(self):
         """Get hypervisor type.
@@ -1631,11 +1380,9 @@ class tileraConnection(object):
         :returns: hypervisor type (ex. qemu)
 
         """
-        #MK
+
         #return self._conn.getType()
         return tilera_boards.get_tilera_hw_info('hypervisor_type')
-        # 'tilera_hv'
-        #_MK
 
     def get_hypervisor_version(self):
         """Get hypervisor version.
@@ -1644,21 +1391,19 @@ class tileraConnection(object):
 
         """
 
-        #MK
-        """# NOTE(justinsb): getVersion moved between libvirt versions
+        # NOTE(justinsb): getVersion moved between tilera versions
         # Trying to do be compatible with older versions is a lost cause
         # But ... we can at least give the user a nice message
-        method = getattr(self._conn, 'getVersion', None)
-        if method is None:
-            raise exception.Error(_("libvirt version is too old"
-                                    " (does not support getVersion)"))
+        #method = getattr(self._conn, 'getVersion', None)
+        #if method is None:
+        #    raise exception.Error(_("tilera version is too old"
+        #                            " (does not support getVersion)"))
             # NOTE(justinsb): If we wanted to get the version, we could:
-            # method = getattr(libvirt, 'getVersion', None)
+            # method = getattr(tilera, 'getVersion', None)
             # NOTE(justinsb): This would then rely on a proper version check
 
-        return method()"""
+        #return method()
         return tilera_boards.get_tilera_hw_info('hypervisor_version')  # 1
-        #_MK
 
     def get_cpu_info(self):
         """Get cpuinfo information.
@@ -1670,77 +1415,70 @@ class tileraConnection(object):
 
         """
 
-        #MK
-        #xml = self._conn.getCapabilities()
-        #xml = libxml2.parseDoc(xml)
-        #nodes = xml.xpathEval('//host/cpu')
-        #if len(nodes) != 1:
-        #    raise exception.Invalid(_("Invalid xml. '<cpu>' must be 1,"
-        #                              "but %d\n") % len(nodes)
-        #                              + xml.serialize())
+        """xml = self._conn.getCapabilities()
+        xml = libxml2.parseDoc(xml)
+        nodes = xml.xpathEval('//host/cpu')
+        if len(nodes) != 1:
+            reason = _("'<cpu>' must be 1, but %d\n") % len(nodes)
+            reason += xml.serialize()
+            raise exception.InvalidCPUInfo(reason=reason)
 
-        #cpu_info = dict()
-        #arch_nodes = xml.xpathEval('//host/cpu/arch')
-        #if arch_nodes:
-        #    cpu_info['arch'] = arch_nodes[0].getContent()
-        #model_nodes = xml.xpathEval('//host/cpu/model')
-        #if model_nodes:
-        #    cpu_info['model'] = model_nodes[0].getContent()
-        #vendor_nodes = xml.xpathEval('//host/cpu/vendor')
-        #if vendor_nodes:
-        #    cpu_info['vendor'] = vendor_nodes[0].getContent()
-        #topology_nodes = xml.xpathEval('//host/cpu/topology')
-        #topology = dict()
-        #if topology_nodes:
-        #    topology_node = topology_nodes[0].get_properties()
-        #    while topology_node:
-        #        name = topology_node.get_name()
-        #        topology[name] = topology_node.getContent()
-        #        topology_node = topology_node.get_next()
-        #
-        #    keys = ['cores', 'sockets', 'threads']
-        #    tkeys = topology.keys()
-        #    if set(tkeys) != set(keys):
-        #        ks = ', '.join(keys)
-        #        raise exception.Invalid(_("Invalid xml: topology"
-        #                             "(%(topology)s) must have "
-        #                             "%(ks)s") % locals())
-        #
-        #feature_nodes = xml.xpathEval('//host/cpu/feature')
-        #
-        #features = list()
-        #for nodes in feature_nodes:
-        #    features.append(nodes.get_properties().getContent())
-        #cpu_info['topology'] = topology
-        #cpu_info['features'] = features
-        #return utils.dumps(cpu_info)
+        cpu_info = dict()
+
+        arch_nodes = xml.xpathEval('//host/cpu/arch')
+        if arch_nodes:
+            cpu_info['arch'] = arch_nodes[0].getContent()
+
+        model_nodes = xml.xpathEval('//host/cpu/model')
+        if model_nodes:
+            cpu_info['model'] = model_nodes[0].getContent()
+
+        vendor_nodes = xml.xpathEval('//host/cpu/vendor')
+        if vendor_nodes:
+            cpu_info['vendor'] = vendor_nodes[0].getContent()
+
+        topology_nodes = xml.xpathEval('//host/cpu/topology')
+        topology = dict()
+        if topology_nodes:
+            topology_node = topology_nodes[0].get_properties()
+            while topology_node:
+                name = topology_node.get_name()
+                topology[name] = topology_node.getContent()
+                topology_node = topology_node.get_next()
+
+            keys = ['cores', 'sockets', 'threads']
+            tkeys = topology.keys()
+            if set(tkeys) != set(keys):
+                ks = ', '.join(keys)
+                reason = _("topology (%(topology)s) must have %(ks)s")
+                raise exception.InvalidCPUInfo(reason=reason % locals())
+
+        feature_nodes = xml.xpathEval('//host/cpu/feature')
+        features = list()
+        for nodes in feature_nodes:
+            features.append(nodes.get_properties().getContent())
+
+        cpu_info['topology'] = topology
+        cpu_info['features'] = features
+        return utils.dumps(cpu_info)"""
         return tilera_boards.get_tilera_hw_info('cpu_info')  # 'TILEPro64'
-        #_MK
 
     def block_stats(self, instance_name, disk):
+        raise NotImplementedError()
         """
         Note that this function takes an instance name, not an Instance, so
         that it can be called by monitor.
         """
-        #MK
-        raise NotImplementedError()
-        #domain = self._conn.lookupByName(instance_name)
-        #return domain.blockStats(disk)
-        #_MK
 
     def interface_stats(self, instance_name, interface):
+        raise NotImplementedError()
         """
         Note that this function takes an instance name, not an Instance, so
         that it can be called by monitor.
         """
-        #MK
-        raise NotImplementedError()
-        #domain = self._conn.lookupByName(instance_name)
-        #return domain.interfaceStats(interface)
-        #_MK
 
     def get_console_pool_info(self, console_type):
-        #TODO(mdragon): console proxy should be implemented for libvirt,
+        #TODO(mdragon): console proxy should be implemented for tilera,
         #               in case someone wants to use it with kvm or
         #               such. For now return fake data.
         return  {'address': '127.0.0.1',
@@ -1748,12 +1486,10 @@ class tileraConnection(object):
                  'password': 'fakepassword'}
 
     def refresh_security_group_rules(self, security_group_id):
-        self.tilera_firewall_driver.\
-            refresh_security_group_rules(security_group_id)
+        self.firewall_driver.refresh_security_group_rules(security_group_id)
 
     def refresh_security_group_members(self, security_group_id):
-        self.tilera_firewall_driver.\
-            refresh_security_group_members(security_group_id)
+        self.firewall_driver.refresh_security_group_members(security_group_id)
 
     def update_available_resource(self, ctxt, host):
         """Updates compute manager resource info on ComputeNode table.
@@ -1769,9 +1505,7 @@ class tileraConnection(object):
         try:
             service_ref = db.service_get_all_compute_by_host(ctxt, host)[0]
         except exception.NotFound:
-            raise exception.Invalid(_("Cannot update compute manager "
-                                      "specific info, because no service "
-                                      "record was found."))
+            raise exception.ComputeServiceUnavailable(host=host)
 
         # Updating host information
         dic = {'vcpus': self.get_vcpu_total(),
@@ -1804,12 +1538,12 @@ class tileraConnection(object):
             db.compute_node_update(ctxt, compute_node_ref[0]['id'], dic)
 
     def compare_cpu(self, cpu_info):
+        raise NotImplementedError()
         """Checks the host cpu is compatible to a cpu given by xml.
 
-        "xml" must be a part of libvirt.openReadonly().getCapabilities().
+        "xml" must be a part of tilera.openReadonly().getCapabilities().
         return values follows by virCPUCompareResult.
         if 0 > return value, do live migration.
-        'http://libvirt.org/html/libvirt-libvirt.html#virCPUCompareResult'
 
         :param cpu_info: json string that shows cpu feature(see get_cpu_info())
         :returns:
@@ -1817,26 +1551,6 @@ class tileraConnection(object):
             raise exception.
 
         """
-
-        LOG.info(_('Instance launched has CPU info:\n%s') % cpu_info)
-        dic = utils.loads(cpu_info)
-        xml = str(Template(self.cpuinfo_xml, searchList=dic))
-        LOG.info(_('to xml...\n:%s ' % xml))
-
-        u = "http://libvirt.org/html/libvirt-libvirt.html#virCPUCompareResult"
-        m = _("CPU doesn't have compatibility.\n\n%(ret)s\n\nRefer to %(u)s")
-        # unknown character exists in xml, then libvirt complains
-        try:
-            ret = self._conn.compareCPU(xml, 0)
-        except libvirt.libvirtError, e:
-            ret = e.message
-            LOG.error(m % locals())
-            raise
-
-        if ret <= 0:
-            raise exception.Invalid(m % locals())
-
-        return
 
     def ensure_filtering_rules_for_instance(self, instance_ref,
                                             time=None):
@@ -1852,7 +1566,7 @@ class tileraConnection(object):
         - prepare_instance_filter(for nova-instance-instance-xxx, etc.)
 
         to_xml may have to be called since it defines PROJNET, PROJMASK.
-        but libvirt migrates those value through migrateToURI(),
+        but tilera migrates those value through migrateToURI(),
         so , no need to be called.
 
         Don't use thread for this method since migration should
@@ -1925,11 +1639,11 @@ class tileraConnection(object):
         # Do live migration.
         try:
             flaglist = FLAGS.live_migration_flag.split(',')
-            flagvals = [getattr(libvirt, x.strip()) for x in flaglist]
+            flagvals = [getattr(tilera, x.strip()) for x in flaglist]
             logical_sum = reduce(lambda x, y: x | y, flagvals)
 
             if self.read_only:
-                tmpconn = self._connect(self.libvirt_uri, False)
+                tmpconn = self._connect(self.tilera_uri, False)
                 dom = tmpconn.lookupByName(instance_ref.name)
                 dom.migrateToURI(FLAGS.live_migration_uri % dest,
                                  logical_sum,
@@ -1944,7 +1658,7 @@ class tileraConnection(object):
                                  FLAGS.live_migration_bandwidth)
 
         except Exception:
-            recover_method(ctxt, instance_ref)
+            recover_method(ctxt, instance_ref, dest=dest)
             raise
 
         # Waiting for completion of live_migration.
@@ -1965,6 +1679,101 @@ class tileraConnection(object):
         """See comments of same method in firewall_driver."""
         self.firewall_driver.unfilter_instance(instance_ref)
 
+    def update_host_status(self):
+        """Update the status info of the host, and return those values
+            to the calling program."""
+        return self.HostState.update_status()
+
+    def get_host_stats(self, refresh=False):
+        """Return the current state of the host. If 'refresh' is
+           True, run the update first."""
+        print 'Updating!'
+        return self.HostState.get_host_stats(refresh=refresh)
+#        """See xenapi_conn.py implementation."""
+#        print 'UPDATING!'
+#        data = {'vcpus': self.get_vcpu_total(),
+#               'memory_mb': self.get_memory_mb_total(),
+#               'local_gb': self.get_local_gb_total(),
+#               'vcpus_used': self.get_vcpu_used(),
+#               'memory_mb_used': self.get_memory_mb_used(),
+#               'local_gb_used': self.get_local_gb_used(),
+#               'hypervisor_type': self.get_hypervisor_type(),
+#               'hypervisor_version': self.get_hypervisor_version(),
+#               'cpu_info': self.get_cpu_info(),
+#               #RLK
+#               'cpu_arch': FLAGS.cpu_arch,
+#               'xpu_arch': FLAGS.xpu_arch,
+#               'xpus': FLAGS.xpus,
+#               'xpu_info': FLAGS.xpu_info,
+#               'net_arch': FLAGS.net_arch,
+#               'net_info': FLAGS.net_info,
+#               'net_mbps': FLAGS.net_mbps}
+#        return data
+
+
+class HostState(object):
+    """Manages information about the XenServer host this compute
+    node is running on.
+    """
+    def __init__(self, read_only):
+        super(HostState, self).__init__()
+        self.read_only = read_only
+        self._stats = {}
+        self.update_status()
+
+    def get_host_stats(self, refresh=False):
+        """Return the current state of the host. If 'refresh' is
+        True, run the update first.
+        """
+        if refresh:
+            self.update_status()
+        return self._stats
+
+    def update_status(self):
+        """Since under Xenserver, a compute node runs on a given host,
+        we can get host status information using xenapi.
+        """
+#        data = {'vcpus': self.get_vcpu_total(),
+#               'memory_mb': self.get_memory_mb_total(),
+#               'local_gb': self.get_local_gb_total(),
+#               'vcpus_used': self.get_vcpu_used(),
+#               'memory_mb_used': self.get_memory_mb_used(),
+#               'local_gb_used': self.get_local_gb_used(),
+#               'hypervisor_type': self.get_hypervisor_type(),
+#               'hypervisor_version': self.get_hypervisor_version(),
+#               'cpu_info': self.get_cpu_info(),
+#               #RLK
+#               'cpu_arch': FLAGS.cpu_arch,
+#               'xpu_arch': FLAGS.xpu_arch,
+#               'xpus': FLAGS.xpus,
+#               'xpu_info': FLAGS.xpu_info,
+#               'net_arch': FLAGS.net_arch,
+#               'net_info': FLAGS.net_info,
+#               'net_mbps': FLAGS.net_mbps}
+        LOG.debug(_("Updating host stats"))
+        print 'Updating statistics!!'
+        connection = get_connection(self.read_only)
+        data = {}
+        data["vcpus"] = connection.get_vcpu_total()
+        data["vcpus_used"] = connection.get_vcpu_used()
+        data["cpu_info"] = connection.get_cpu_info()
+        data["cpu_arch"] = FLAGS.cpu_arch
+        data["xpus"] = FLAGS.xpus
+        data["xpu_arch"] = FLAGS.xpu_arch
+        data["xpus_used"] = 0  # len(gvirtus_pids)
+        data["xpu_info"] = FLAGS.xpu_info
+        data["net_arch"] = FLAGS.net_arch
+        data["net_info"] = FLAGS.net_info
+        data["net_mbps"] = FLAGS.net_mbps
+        data["disk_total"] = connection.get_local_gb_total()
+        data["disk_used"] = connection.get_local_gb_used()
+        data["disk_available"] = data["disk_total"] - data["disk_used"]
+        data["host_memory_total"] = connection.get_memory_mb_total()
+        data["host_memory_free"] = data["host_memory_total"] - \
+            connection.get_memory_mb_used()
+        data["hypervisor_type"] = connection.get_hypervisor_type()
+        data["hypervisor_version"] = connection.get_hypervisor_version()
+        self._stats = data
 
 #MK
 tilera_boards = _tilera_board()
