@@ -112,7 +112,20 @@ class ZoneManagerTestCase(test.TestCase):
         zm.update_service_capabilities("svc1", "host1", dict(a=1, b=2))
         host_caps = zm.get_hosts_capabilities(None)
         self.assertEquals(host_caps, dict(host1=dict(svc1=dict(a=1, b=2))))
-        
+        zm.update_service_capabilities("svc1", "host2", dict(a=2, b=3))
+        host_caps = zm.get_hosts_capabilities(None)
+        self.assertEquals(host_caps, dict(host1=dict(svc1=dict(a=1, b=2)),
+                                          host2=dict(svc1=dict(a=2, b=3))))        
+        zm.update_service_capabilities("svc1", "host2", dict(a=12, c=5))
+        host_caps = zm.get_hosts_capabilities(None)
+        self.assertEquals(host_caps, dict(host1=dict(svc1=dict(a=1, b=2)),
+                                          host2=dict(svc1=dict(a=12, c=5))))
+        zm.update_service_capabilities("svc2", "host1", dict(gpu=True))
+        host_caps = zm.get_hosts_capabilities(None)
+        self.assertEquals(host_caps, dict(host1=dict(svc1=dict(a=1, b=2),
+                                                     svc2=dict(gpu=True)),
+                                          host2=dict(svc1=dict(a=12, c=5))))
+
 
 
     def test_refresh_from_db_replace_existing(self):
