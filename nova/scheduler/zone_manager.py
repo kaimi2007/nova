@@ -133,14 +133,13 @@ class ZoneManager(object):
                     combined[key] = (min_value, max_value)
 
         return combined
-    
+
     def get_hosts_capabilities(self, context):
         """Return the capabilities of the individual hosts within a zone.
-        
+
         Returns a dict: { <host> : {<service> : {<cap_key> : <cap_value>}}}
         """
         return self.service_states
-        
 
     def _refresh_from_db(self, context):
         """Make our zone state map match the db."""
