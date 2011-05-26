@@ -134,166 +134,176 @@ class ArchitectureScheduler(driver.Scheduler):
                         resource_cap['disk_total']
                         - resource_cap['disk_used'])
 
-                    flag_different = 0
-
                     if(wanted_vcpus > (resource_cap['vcpus']
                         - resource_cap['vcpus_used'])
                     or wanted_memory_mb > resource_cap['host_memory_free']
-#                    or wanted_local_gb < 0):
-                    or wanted_local_gb > (resource_cap['disk_total']
-                        - resource_cap['disk_used'])):
+                    or wanted_local_gb < 0):
+#                    or wanted_local_gb > (resource_cap['disk_total']
+#                        - resource_cap['disk_used'])):
 
                         flag_different = 1
+                    else:
+                        flag_different = 0
 
                     try:
-                        flag_different = 0
-                        wanted_xpu_arch = instance_meta['xpu_arch']
-                        LOG.debug(_("## JSUH - wanted-xpu_arch=%s"), \
-                                    wanted_xpu_arch)
-                        if (wanted_xpu_arch is not None):
-                            flag_different = 1
-                            if (resource_cap[xpu_arch] is None):
-                                LOG.debug(_("## JSUH - xpu_arch is None"))
-                            elif (wanted_xpu_arch == resource_cap[xpu_arch]):
-                                flag_different = 0
-                                LOG.debug(_("## JSUH - xpu_arch is %s"), \
-                                    resource_cap[xpu_arch])
+                        if(flag_different == 0):
+                            wanted_xpu_arch = instance_meta['xpu_arch']
+                            LOG.debug(_("## JSUH - wanted-xpu_arch=%s"), \
+                                wanted_xpu_arch)
+                            if (wanted_xpu_arch is not None):
+                                flag_different = 1
+                                if (resource_cap['xpu_arch'] is None):
+                                    LOG.debug(_("## JSUH - xpu_arch is None"))
+                                elif (wanted_xpu_arch == \
+                                    resource_cap['xpu_arch']):
+                                    flag_different = 0
+                                    LOG.debug(_("## JSUH - xpu_arch is %s"), \
+                                        resource_cap['xpu_arch'])
                     except:
                         pass
 
                     try:
-                        flag_different = 0
-                        wanted_xpus = instance_meta['xpus']
-                        LOG.debug(_("## JSUH - wanted-xpus=%s"), wanted_xpus)
-                        if (wanted_xpus is not None):
-                            flag_different = 1
-                            if (resource_cap[xpus] is None):
-                                LOG.debug(_("## JSUH - xpus is None"))
-                            else:
-                                xpu_cap = int(resource_cap['xpus']) \
-                                    - int(resource_cap['xpus_used'])
-                                xpu_meta = int(instance_meta['xpus'])
+                        if(flag_different == 0):
+                            wanted_xpus = instance_meta['xpus']
+                            LOG.debug(_("## JSUH - wanted-xpus=%s"), \
+                                wanted_xpus)
+                            if (wanted_xpus is not None):
+                                flag_different = 1
+                                if (resource_cap['xpus'] is None):
+                                    LOG.debug(_("## JSUH - xpus is None"))
+                                else:
+                                    xpu_cap = int(resource_cap['xpus']) \
+                                        - int(resource_cap['xpus_used'])
+                                    xpu_meta = int(instance_meta['xpus'])
 
-                                if (xpu_cap < xpu_meta):
-                                    flag_different = 1
-                                    LOG.debug(_("## JSUH - LACK of xpuss"))
-                    except:
-                        pass
-
-                    try:
-                        flag_different = 0
-                        wanted_cpu_info = instance_meta['cpu_info']
-                        LOG.debug(_("## JSUH - wanted-cpu_info=%s"), \
-                            wanted_cpu_info)
-                        if (wanted_cpu_info is not None):
-                            flag_different = 1
-                            if (resource_cap['cpu_info'] is None):
-                                LOG.debug(_("## JSUH - cpu_info is None"))
-                            else:
-                                wanted = wanted_cpu_info.split(',')
-                                # get flattened list
-                                # TODO: convert to Set operation
-                                offered = []
-                                for offer in \
-                                    resource_cap['cpu_info'].split(','):
-                                    right = offer.rfind('"', 0, len(offer))
-                                    left = offer.rfind('"', 0, right)
-#                                    print offer[left+1: right]
-                                    offered.append(offer[left + 1: right])
-
-                                LOG.debug(_("## JSUH - offered=%s"), offered)
-
-                                for want in wanted:
-                                    LOG.debug(_("## JSUH - check=%s"), want)
-                                    found = 0
-                                    for item in offered:
-                                        if(want == item):
-                                            found = 1
-                                            break
-                                    if found == 0:
+                                    if (xpu_cap < xpu_meta):
                                         flag_different = 1
-                                        LOG.debug(_("## JSUH - not found"))
-                                        break
-                                    else:
-                                        LOG.debug(_("## JSUH - ok"))
+                                        LOG.debug(_("## JSUH - LACK of xpuss"))
                     except:
                         pass
 
                     try:
-                        flag_different = 0
-                        wanted_xpu_info = instance_meta['xpu_info']
-                        LOG.debug(_("## JSUH - wanted-xpu_info=%s"), \
-                            wanted_xpu_info)
-                        if (wanted_xpu_info is not None):
-                            flag_different = 1
-                            if (resource_cap['xpu_info'] is None):
-                                LOG.debug(_("## JSUH - xpu_info is None"))
-                            else:
-                                wanted = wanted_xpu_info.split(',')
-                                # get flattened list
-                                # TODO: convert to Set operation
-                                offered = []
-                                for offer in \
-                                    resource_cap['xpu_info'].split(','):
-                                    right = offer.rfind('"', 0, len(offer))
-                                    left = offer.rfind('"', 0, right)
-                                    offered.append(offer[left + 1: right])
+                        if(flag_different == 0):
+                            wanted_cpu_info = instance_meta['cpu_info']
+                            LOG.debug(_("## JSUH - wanted-cpu_info=%s"), \
+                                wanted_cpu_info)
+                            if (wanted_cpu_info is not None):
+                                flag_different = 1
+                                if (resource_cap['cpu_info'] is None):
+                                    LOG.debug(_("## JSUH - cpu_info is None"))
+                                else:
+                                    wanted = wanted_cpu_info.split(',')
+                                    # get flattened list
+                                    # TODO: convert to Set operation
+                                    offered = []
+                                    for offer in \
+                                        resource_cap['cpu_info'].split(','):
+                                        right = offer.rfind('"', 0, len(offer))
+                                        left = offer.rfind('"', 0, right)
+#                                        print offer[left+1: right]
+                                        offered.append(offer[left + 1: right])
 
-                                LOG.debug(_("## JSUH - offered=%s"), offered)
+                                    LOG.debug(_("## JSUH - offered=%s"), \
+                                        offered)
 
-                                for want in wanted:
-                                    LOG.debug(_("## JSUH - check=%s"), want)
-                                    found = 0
-                                    for item in offered:
-                                        if(want == item):
-                                            found = 1
+                                    flag_different = 0
+                                    for want in wanted:
+                                        LOG.debug(_("## JSUH - check=%s"), \
+                                            want)
+                                        found = 0
+                                        for item in offered:
+                                            if(want == item):
+                                                found = 1
+                                                break
+                                        if found == 0:
+                                            flag_different = 1
+                                            LOG.debug(_("## JSUH - not found"))
                                             break
-                                    if found == 0:
-                                        flag_different = 1
-                                        LOG.debug(_("## JSUH - not found"))
-                                        break
-                                    else:
-                                        LOG.debug(_("## JSUH - ok"))
+                                        else:
+                                            LOG.debug(_("## JSUH - ok"))
                     except:
                         pass
 
                     try:
-                        flag_different = 0
-                        wanted_net_info = instance_meta['net_info']
-                        LOG.debug(_("## JSUH - wanted-net_info=%s"), \
-                            wanted_net_info)
-                        if (wanted_net_info is not None):
-                            flag_different = 1
-                            if (resource_cap['net_info'] is None):
-                                LOG.debug(_("## JSUH - net_info is None"))
-                            else:
-                                wanted = wanted_net_info.split(',')
-                                # get flattened list
-                                # TODO: convert to Set operation
-                                offered = []
-                                for offer in \
-                                    resource_cap['net_info'].split(','):
-                                    right = offer.rfind('"', 0, len(offer))
-                                    left = offer.rfind('"', 0, right)
-#                                    print offer[left+1: right]
-                                    offered.append(offer[left + 1: right])
+                        if(flag_different == 0):
+                            wanted_xpu_info = instance_meta['xpu_info']
+                            LOG.debug(_("## JSUH - wanted-xpu_info=%s"), \
+                                wanted_xpu_info)
+                            if (wanted_xpu_info is not None):
+                                flag_different = 1
+                                if (resource_cap['xpu_info'] is None):
+                                    LOG.debug(_("## JSUH - xpu_info is None"))
+                                else:
+                                    wanted = wanted_xpu_info.split(',')
+                                    # get flattened list
+                                    # TODO: convert to Set operation
+                                    offered = []
+                                    for offer in \
+                                        resource_cap['xpu_info'].split(','):
+                                        right = offer.rfind('"', 0, len(offer))
+                                        left = offer.rfind('"', 0, right)
+                                        offered.append(offer[left + 1: right])
 
-                                LOG.debug(_("## JSUH - offered=%s"), offered)
+                                    LOG.debug(_("## JSUH - offered=%s"), \
+                                    offered)
 
-                                for want in wanted:
-                                    LOG.debug(_("## JSUH - check=%s"), want)
-                                    found = 0
-                                    for item in offered:
-#                                        LOG.debug(_("## JSUH -comp=%s"), item)
-                                        if(want == item):
-                                            found = 1
+                                    flag_different = 0
+                                    for want in wanted:
+                                        LOG.debug(_("## JSUH - check=%s"), \
+                                            want)
+                                        found = 0
+                                        for item in offered:
+                                            if(want == item):
+                                                found = 1
+                                                break
+                                        if found == 0:
+                                            flag_different = 1
+                                            LOG.debug(_("## JSUH - not found"))
                                             break
-                                    if found == 0:
-                                        flag_different = 1
-                                        LOG.debug(_("## JSUH - not found"))
-                                        break
-                                    else:
-                                        LOG.debug(_("## JSUH - ok"))
+                                        else:
+                                            LOG.debug(_("## JSUH - ok"))
+                    except:
+                        pass
+
+                    try:
+                        if(flag_different == 0):
+                            wanted_net_info = instance_meta['net_info']
+                            LOG.debug(_("## JSUH - wanted-net_info=%s"), \
+                                wanted_net_info)
+                            if (wanted_net_info is not None):
+                                flag_different = 1
+                                if (resource_cap['net_info'] is None):
+                                    LOG.debug(_("## JSUH - net_info is None"))
+                                else:
+                                    wanted = wanted_net_info.split(',')
+                                    # get flattened list
+                                    # TODO: convert to Set operation
+                                    offered = []
+                                    for offer in \
+                                        resource_cap['net_info'].split(','):
+                                        right = offer.rfind('"', 0, len(offer))
+                                        left = offer.rfind('"', 0, right)
+#                                        print offer[left+1: right]
+                                        offered.append(offer[left + 1: right])
+
+                                    LOG.debug(_("## JSUH - offered=%s"), \
+                                        offered)
+
+                                    flag_different = 0
+                                    for want in wanted:
+                                        LOG.debug(_("## JSUH - check=%s"),
+                                            want)
+                                        found = 0
+                                        for item in offered:
+                                            if(want == item):
+                                                found = 1
+                                                break
+                                        if found == 0:
+                                            flag_different = 1
+                                            LOG.debug(_("## JSUH - not found"))
+                                            break
+                                        else:
+                                            LOG.debug(_("## JSUH - ok"))
                     except:
                         pass
 
@@ -326,7 +336,7 @@ class ArchitectureScheduler(driver.Scheduler):
 
                     if (flag_different == 0):
                         LOG.debug(_("##\tJSUH - ***** found  **********="))
-                        hosts.append(host)
+#                        hosts.append(host)
                     else:
                         LOG.debug(_("##\tJSUH - ***** not found  **********="))
 
