@@ -28,11 +28,11 @@ class InstanceTypeMetadataTestCase(test.TestCase):
     def setUp(self):
         super(InstanceTypeMetadataTestCase, self).setUp()
         self.context = context.get_admin_context()
-        values = dict(name="cg1.4xlarge",
+        values = dict(name="cg1.64xlarge", 
                       memory_mb=22000,
                       vcpus=8,
                       local_gb=1690,
-                      flavorid=105)
+                      flavorid=999)
         metadata = dict(cpu_arch="x86_64",
                         cpu_model="Nehalem",
                         xpu_arch="fermi",
@@ -45,7 +45,7 @@ class InstanceTypeMetadataTestCase(test.TestCase):
         
     def tearDown(self):
         # Remove the instance type from the database
-        db.api.instance_type_purge(context.get_admin_context(), "cg1.4xlarge")
+        db.api.instance_type_purge(context.get_admin_context(), "cg1.64xlarge")
         super(InstanceTypeMetadataTestCase, self).tearDown()
         
     def test_instance_type_metadata_get(self):
