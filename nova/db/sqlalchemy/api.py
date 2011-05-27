@@ -2481,7 +2481,22 @@ def console_get(context, console_id, instance_id=None):
 
 @require_admin_context
 def instance_type_create(_context, values):
+    """Create a new instance type. In order to pass in metadata, 
+    the values dict should contain a 'meta' key/value pair: 
+    
+    {'meta' : {'k1': 'v1', 'k2': 'v2', ...}}
+    
+    """
     try:
+        metadata = values.get('meta')
+        metadata_refs = []
+        if metadata:
+            for k, v in metadata.iteritems():
+                metadata_ref = models.InstanceTypeMetadata()
+                metadata_ref['key'] = k
+                metadata_ref['value'] = v
+                metadata_refs.append(metadata_ref)
+        values['meta'] = metadata_refs
         instance_type_ref = models.InstanceTypes()
         instance_type_ref.update(values)
         instance_type_ref.save()
@@ -2686,4 +2701,67 @@ def instance_metadata_update_or_create(context, instance_id, metadata):
                             "instance_id": instance_id,
                             "deleted": 0})
         #meta_ref.save(session=session)
+    return metadata
+
+####################
+
+@require_context
+def instance_type_metadata_get(context, instance_type_id):
+    session = get_session()
+
+    meta_results = session.query(models.InstanceTypeMetadata).\
+                    filter_by(instance_type_id=instance_type_id).\
+                    filter_by(deleted=False).\
+                    all()
+
+    meta_dict = {}
+    for i in meta_results:
+        meta_dict[i['key']] = i['value']
+    return meta_dict
+
+
+@require_context
+def instance_type_metadata_delete(context, instance_type_id, key):
+    session = get_session()
+    session.query(models.InstanceTypeMetadata).\
+        filter_by(instance_type_id=instance_type_id).\
+        filter_by(key=key).\
+        filter_by(deleted=False).\
+        update({'deleted': True,
+                'deleted_at': datetime.datetime.utcnow(),
+                'updated_at': literal_column('updated_at')})
+
+
+@require_context
+def instance_type_metadata_get_item(context, instance_type_id, key):
+    session = get_session()
+
+    meta_result = session.query(models.InstanceMetadata).\
+                    filter_by(instance_type_id=instance_type_id).\
+                    filter_by(key=key).\
+                    filter_by(deleted=False).\
+                    first()
+
+    if not meta_result:
+        raise exception.InstanceTypeMetadataNotFound(metadata_key=key,
+                                                 instance_type_id=instance_type_id)
+    return meta_result
+
+
+@require_context
+def instance_type_metadata_update_or_create(context, instance_type_id, 
+                                            metadata):
+    session = get_session()
+    meta_ref = None
+    for key, value in metadata.iteritems():
+        try:
+            meta_ref = instance_type_metadata_get_item(context, 
+                                                       instance_type_id, key,
+                                                       session)
+        except:
+            meta_ref = models.InstanceTypeMetadata()
+        meta_ref.update({"key": key, "value": value,
+                            "instance_type_id": instance_type_id,
+                            "deleted": 0})
+        meta_ref.save(session=session)
     return metadata
