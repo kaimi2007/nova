@@ -179,6 +179,9 @@ class ArchitectureScheduler(driver.Scheduler):
                                     if (xpu_cap < xpu_meta):
                                         flag_different = 1
                                         LOG.debug(_("## JSUH - LACK of xpuss"))
+                                    else:
+                                        flag_different = 0
+                                        LOG.debug(_("## JSUH - xpus ok"))
                     except:
                         pass
 
@@ -226,6 +229,7 @@ class ArchitectureScheduler(driver.Scheduler):
 
                     try:
                         if(flag_different == 0):
+                            LOG.debug(_("## JSUH - xpu_info check"))
                             wanted_xpu_info = instance_meta['xpu_info']
                             LOG.debug(_("## JSUH - wanted-xpu_info=%s"), \
                                 wanted_xpu_info)
@@ -267,6 +271,7 @@ class ArchitectureScheduler(driver.Scheduler):
 
                     try:
                         if(flag_different == 0):
+                            LOG.debug(_("## JSUH - net_info check"))
                             wanted_net_info = instance_meta['net_info']
                             LOG.debug(_("## JSUH - wanted-net_info=%s"), \
                                 wanted_net_info)
@@ -306,6 +311,8 @@ class ArchitectureScheduler(driver.Scheduler):
                                             LOG.debug(_("## JSUH - ok"))
                     except:
                         pass
+
+#                    LOG.debug(_("## JSUH - 4 check %d"), flag_different)
 
 #                    else:
 #                        # need to compare one by one
