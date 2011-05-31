@@ -78,7 +78,7 @@ if [ $just_pep8 -eq 1 ]; then
 fi
 
 if [ $coverage -eq 1 ]; then
-	NOSETESTS="coverage run run_tests.py $noseargs"
+	NOSETESTS="coverage run --branch run_tests.py $noseargs"
 else
 	NOSETESTS="python run_tests.py $noseargs"
 fi
@@ -118,5 +118,6 @@ fi
 
 # Generate coverage report if requested
 if [ $coverage -eq 1 ]; then
-	${wrapper} coverage html -i -d htmlcov 
+	${wrapper} coverage html -i -d htmlcov
+	${wrapper} coverage xml -i -o nova/tests/coverage.xml
 fi
