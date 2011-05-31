@@ -63,9 +63,9 @@ import sys
 # Workaround for bug in coverage 3.4 and below
 # Fixed at https://bitbucket.org/ned/coveragepy/changeset/811ed58de8a3
 try:
-    sys.path[sys.path.index('')] = os.getcwd()
+    sys.path[sys.path.index('')] = os.getcwd()
 except ValueError:
-    pass
+    pass
 
 gettext.install('nova', unicode=1)
 
