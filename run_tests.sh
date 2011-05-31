@@ -24,6 +24,7 @@ function process_option {
     -N|--no-virtual-env) let always_venv=0; let never_venv=1;;
     -f|--force) let force=1;;
     -p|--pep8) let just_pep8=1;;
+    -c|--coverage) let coverage=1;;
     *) noseargs="$noseargs $1"
   esac
 }
@@ -36,6 +37,7 @@ force=0
 noseargs=
 wrapper=""
 just_pep8=0
+coverage=0
 
 for arg in "$@"; do
   process_option $arg
@@ -75,7 +77,11 @@ if [ $just_pep8 -eq 1 ]; then
     exit
 fi
 
-NOSETESTS="python run_tests.py $noseargs"
+if [ $coverage -eq 1 ]; then
+	NOSETESTS="coverage run run_tests.py $noseargs"
+else
+	NOSETESTS="python run_tests.py $noseargs"
+fi
 
 if [ $never_venv -eq 0 ]
 then
@@ -108,4 +114,9 @@ run_tests || exit
 # Also run pep8 if no options were provided.
 if [ -z "$noseargs" ]; then
   run_pep8
+fi
+
+# Generate coverage report if requested
+if [ $coverage -eq 1 ]; then
+	${wrapper} coverage html -i -d htmlcov 
 fi
