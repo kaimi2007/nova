@@ -19,7 +19,6 @@
 Implementation of SQLAlchemy backend.
 """
 
-import datetime
 import warnings
 
 from nova import db
@@ -733,7 +732,7 @@ def fixed_ip_disassociate_all_by_timeout(_context, host, time):
                      filter_by(allocated=0).\
                      update({'instance_id': None,
                              'leased': 0,
-                             'updated_at': datetime.datetime.utcnow()},
+                             'updated_at': utils.utcnow()},
                              synchronize_session='fetch')
     return result
 
@@ -879,17 +878,17 @@ def instance_destroy(context, instance_id):
         session.query(models.Instance).\
                 filter_by(id=instance_id).\
                 update({'deleted': True,
-                        'deleted_at': datetime.datetime.utcnow(),
+                        'deleted_at': utils.utcnow(),
                         'updated_at': literal_column('updated_at')})
         session.query(models.SecurityGroupInstanceAssociation).\
                 filter_by(instance_id=instance_id).\
                 update({'deleted': True,
-                        'deleted_at': datetime.datetime.utcnow(),
+                        'deleted_at': utils.utcnow(),
                         'updated_at': literal_column('updated_at')})
         session.query(models.InstanceMetadata).\
                 filter_by(instance_id=instance_id).\
                 update({'deleted': True,
-                        'deleted_at': datetime.datetime.utcnow(),
+                        'deleted_at': utils.utcnow(),
                         'updated_at': literal_column('updated_at')})
 
 
@@ -1051,7 +1050,7 @@ def instance_get_project_vpn(context, project_id):
                    options(joinedload('security_groups')).\
                    options(joinedload('instance_type')).\
                    filter_by(project_id=project_id).\
-                   filter_by(image_id=str(FLAGS.vpn_image_id)).\
+                   filter_by(image_ref=str(FLAGS.vpn_image_id)).\
                    filter_by(deleted=can_read_deleted(context)).\
                    first()
 
@@ -1231,7 +1230,7 @@ def key_pair_destroy_all_by_user(context, user_id):
         session.query(models.KeyPair).\
                 filter_by(user_id=user_id).\
                 update({'deleted': 1,
-                        'deleted_at': datetime.datetime.utcnow(),
+                        'deleted_at': utils.utcnow(),
                         'updated_at': literal_column('updated_at')})
 
 
@@ -1763,7 +1762,7 @@ def volume_destroy(context, volume_id):
         session.query(models.Volume).\
                 filter_by(id=volume_id).\
                 update({'deleted': 1,
-                        'deleted_at': datetime.datetime.utcnow(),
+                        'deleted_at': utils.utcnow(),
                         'updated_at': literal_column('updated_at')})
         session.query(models.ExportDevice).\
                 filter_by(volume_id=volume_id).\
@@ -1921,7 +1920,7 @@ def snapshot_destroy(context, snapshot_id):
         session.query(models.Snapshot).\
                 filter_by(id=snapshot_id).\
                 update({'deleted': 1,
-                        'deleted_at': datetime.datetime.utcnow(),
+                        'deleted_at': utils.utcnow(),
                         'updated_at': literal_column('updated_at')})
 
 
@@ -2076,17 +2075,17 @@ def security_group_destroy(context, security_group_id):
         session.query(models.SecurityGroup).\
                 filter_by(id=security_group_id).\
                 update({'deleted': 1,
-                        'deleted_at': datetime.datetime.utcnow(),
+                        'deleted_at': utils.utcnow(),
                         'updated_at': literal_column('updated_at')})
         session.query(models.SecurityGroupInstanceAssociation).\
                 filter_by(security_group_id=security_group_id).\
                 update({'deleted': 1,
-                        'deleted_at': datetime.datetime.utcnow(),
+                        'deleted_at': utils.utcnow(),
                         'updated_at': literal_column('updated_at')})
         session.query(models.SecurityGroupIngressRule).\
                 filter_by(group_id=security_group_id).\
                 update({'deleted': 1,
-                        'deleted_at': datetime.datetime.utcnow(),
+                        'deleted_at': utils.utcnow(),
                         'updated_at': literal_column('updated_at')})
 
 
@@ -2097,11 +2096,11 @@ def security_group_destroy_all(context, session=None):
     with session.begin():
         session.query(models.SecurityGroup).\
                 update({'deleted': 1,
-                        'deleted_at': datetime.datetime.utcnow(),
+                        'deleted_at': utils.utcnow(),
                         'updated_at': literal_column('updated_at')})
         session.query(models.SecurityGroupIngressRule).\
                 update({'deleted': 1,
-                        'deleted_at': datetime.datetime.utcnow(),
+                        'deleted_at': utils.utcnow(),
                         'updated_at': literal_column('updated_at')})
 
 
@@ -2750,7 +2749,7 @@ def instance_metadata_delete(context, instance_id, key):
         filter_by(key=key).\
         filter_by(deleted=False).\
         update({'deleted': True,
-                'deleted_at': datetime.datetime.utcnow(),
+                'deleted_at': utils.utcnow(),
                 'updated_at': literal_column('updated_at')})
 
 
@@ -2761,7 +2760,7 @@ def instance_metadata_delete_all(context, instance_id):
         filter_by(instance_id=instance_id).\
         filter_by(deleted=False).\
         update({'deleted': True,
-                'deleted_at': datetime.datetime.utcnow(),
+                'deleted_at': utils.utcnow(),
                 'updated_at': literal_column('updated_at')})
 
 
