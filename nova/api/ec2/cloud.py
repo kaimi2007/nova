@@ -919,7 +919,7 @@ class CloudController(object):
             kwargs['ramdisk_id'] = ramdisk['id']
         instances = self.compute_api.create(context,
             instance_type=instance_types.get_instance_type_by_name(
-                kwargs.get('instance_type', None)),
+                instance_type),
             image_href=self._get_image(context, kwargs['image_id'])['id'],
             min_count=int(kwargs.get('min_count', max_count)),
             max_count=max_count,
