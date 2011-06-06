@@ -1644,6 +1644,7 @@ class LibvirtConnection(driver.ComputeDriver):
         print 'Updating!'
         return self.HostState.get_host_stats(refresh=refresh)
 
+
 class HostState(object):
     """Manages information about the XenServer host this compute
     node is running on.
