@@ -2825,7 +2825,7 @@ def instance_type_metadata_delete(context, instance_type_id, key):
         filter_by(key=key).\
         filter_by(deleted=False).\
         update({'deleted': True,
-                'deleted_at': datetime.datetime.utcnow(),
+                'deleted_at': utils.utcnow(),
                 'updated_at': literal_column('updated_at')})
 
 
