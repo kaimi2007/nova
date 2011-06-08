@@ -136,11 +136,12 @@ class CloudController(object):
             return services[0]['availability_zone']
         return 'unknown zone'
 
-    # def _get_arch_by_host(self, context, host):
-    #     services = db.service_get_all_by_host(context, host)
-    #     if len(services) > 0:
-    #         return services[0]['arch']
-    #     return 'unknown arch'
+    def _get_image_state(self, image):
+        # NOTE(vish): fallback status if image_state isn't set
+        state = image.get('status')
+        if state == 'active':
+            state = 'available'
+        return image['properties'].get('image_state', state)
 
     def get_metadata(self, address):
         ctxt = context.get_admin_context()
@@ -161,8 +162,6 @@ class CloudController(object):
         hostname = instance_ref['hostname']
         host = instance_ref['host']
         availability_zone = self._get_availability_zone_by_host(ctxt, host)
-        #RLK
-        arch = self._get_arch_by_host(ctxt, host)
         floating_ip = db.instance_get_floating_address(ctxt,
                                                        instance_ref['id'])
         ec2_id = ec2utils.id_to_ec2_id(instance_ref['id'])
@@ -186,7 +185,6 @@ class CloudController(object):
                 'local-hostname': hostname,
                 'local-ipv4': address,
                 'placement': {'availability-zone': availability_zone},
-#                'arch': {'arch': arch},
                 'public-hostname': hostname,
                 'public-ipv4': floating_ip or '',
                 'public-keys': keys,
@@ -828,9 +826,6 @@ class CloudController(object):
             host = instance['host']
             zone = self._get_availability_zone_by_host(context, host)
             i['placement'] = {'availabilityZone': zone}
-            #RLK
-#            arch = self._get_arch_by_host(context, host)
-#            i['arch'] = {'arch': arch}
             if instance['reservation_id'] not in reservations:
                 r = {}
                 r['reservationId'] = instance['reservation_id']
@@ -918,14 +913,13 @@ class CloudController(object):
             ramdisk = self._get_image(context, kwargs['ramdisk_id'])
             kwargs['ramdisk_id'] = ramdisk['id']
         image = self._get_image(context, kwargs['image_id'])
-        if not image:
-            raise exception.ImageNotFound(image_id=kwargs['image_id'])
-        try:
-            available = (image['properties']['image_state'] == 'available')
-        except KeyError:
-            available = False
 
-        if not available:
+        if image:
+            image_state = self._get_image_state(image)
+        else:
+            raise exception.ImageNotFound(image_id=kwargs['image_id'])
+
+        if image_state != 'available':
             raise exception.ApiError(_('Image must be available'))
 
         instances = self.compute_api.create(context,
@@ -1044,11 +1038,8 @@ class CloudController(object):
                                               get('image_location'), name)
         else:
             i['imageLocation'] = image['properties'].get('image_location')
-        # NOTE(vish): fallback status if image_state isn't set
-        state = image.get('status')
-        if state == 'active':
-            state = 'available'
-        i['imageState'] = image['properties'].get('image_state', state)
+
+        i['imageState'] = self._get_image_state(image)
         i['displayName'] = name
         i['description'] = image.get('description')
         display_mapping = {'aki': 'kernel',
