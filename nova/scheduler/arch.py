@@ -41,7 +41,7 @@ class ArchitectureScheduler(driver.Scheduler):
             local_list.extend(grab_children(value))
         return local_list
 
-    def hosts_up_with_arch(self, context, topic, instance_id):
+    def hosts_up_with_arch(self, context, topic, instance_id, instance_type):
 #    def hosts_up_with_arch(self, context, topic,  \
 #        wanted_cpu_arch, wanted_vcpus, wanted_xpu_arch, wanted_xpus,
 #        wanted_memory_mb, wanted_local_gb):
@@ -60,7 +60,6 @@ class ArchitectureScheduler(driver.Scheduler):
 
         LOG.debug(_("## JSUH - instances %s"), instances)
         LOG.debug(_("## JSUH - instance.id %s"), instances[0].id)
-        LOG.debug(_("## JSUH - instance.cpu_arch %s"), instances[0].cpu_arch)
 #        LOG.debug(_("##\tRLK - instance.xpu_arch %s"), instances[0].xpu_arch)
 
         services = db.service_get_all_by_topic(context, topic)
@@ -76,12 +75,11 @@ class ArchitectureScheduler(driver.Scheduler):
 
         hosts = []
 
-        # from instance table
         # TODO: to be moved to instance_metadata
-        wanted_cpu_arch = instances[0].cpu_arch
-        wanted_vcpus = instances[0].vcpus
-        wanted_memory_mb = instances[0].memory_mb
-        wanted_local_gb = instances[0].local_gb
+        wanted_cpu_arch = instance_type['cpu_arch']
+        wanted_vcpus = instance_type['vcpus']
+        wanted_memory_mb = instance_type['memory_mb']
+        wanted_local_gb = instance_type['local_gb']
 
         LOG.debug(_("## JSUH - wanted-cpu-arch=%s"), wanted_cpu_arch)
         LOG.debug(_("## JSUH - wanted-vcpus=%s"), wanted_vcpus)
@@ -456,6 +454,8 @@ class ArchitectureScheduler(driver.Scheduler):
         """
 
         instance_id = _kwargs.get('instance_id')
+        request_spec = _kwargs.get('request_spec')
+        instance_type = request_spec['instance_type']
 #        wanted_cpu_arch = _kwargs.get('wanted_cpu_arch')
 #        wanted_xpu_arch = _kwargs.get('wanted_xpu_arch')
 #        wanted_vcpus = _kwargs.get('wanted_vcpus')
@@ -464,7 +464,8 @@ class ArchitectureScheduler(driver.Scheduler):
 #        wanted_local_gb = _kwargs.get('wanted_local_gb')
 
         LOG.debug(_("##\tRLK - instance_id %s"), instance_id)
-        hosts = self.hosts_up_with_arch(context, topic, instance_id)
+        hosts = self.hosts_up_with_arch(context, topic, instance_id,
+                                        instance_type)
 #        hosts = self.hosts_up_with_arch(context, topic, wanted_cpu_arch,
 #            wanted_vcpus, wanted_xpu_arch, wanted_xpus, wanted_memory_mb,
 #            wanted_local_gb)

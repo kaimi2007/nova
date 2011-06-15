@@ -21,15 +21,17 @@ from nova import db
 from nova import exception
 from nova import flags
 from nova import log as logging
-from nova.api.openstack import common
-from nova.api.openstack import wsgi
+
+from nova.compute import api as compute
 from nova.scheduler import api
+
+from nova.api.openstack import create_instance_helper as helper
+from nova.api.openstack import common
+from nova.api.openstack import faults
+from nova.api.openstack import wsgi
 
 
 FLAGS = flags.FLAGS
-flags.DEFINE_string('build_plan_encryption_key',
-        None,
-        '128bit (hex) encryption key for scheduler build plans.')
 
 
 LOG = logging.getLogger('nova.api.openstack.zones')
@@ -53,7 +55,20 @@ def _scrub_zone(zone):
                     'deleted', 'deleted_at', 'updated_at'))
 
 
+def check_encryption_key(func):
+    def wrapped(*args, **kwargs):
+        if not FLAGS.build_plan_encryption_key:
+            raise exception.Error(_("--build_plan_encryption_key not set"))
+        return func(*args, **kwargs)
+    return wrapped
+
+
 class Controller(object):
+    """Controller for Zone resources."""
+
+    def __init__(self):
+        self.compute_api = compute.API()
+        self.helper = helper.CreateInstanceHelper(self)
 
     def index(self, req):
         """Return all zones in brief"""
@@ -88,34 +103,46 @@ class Controller(object):
         return dict(zone=_scrub_zone(zone))
 
     def delete(self, req, id):
+        """Delete a child zone entry."""
         zone_id = int(id)
         api.zone_delete(req.environ['nova.context'], zone_id)
         return {}
 
     def create(self, req, body):
+        """Create a child zone entry."""
         context = req.environ['nova.context']
         zone = api.zone_create(context, body["zone"])
         return dict(zone=_scrub_zone(zone))
 
     def update(self, req, id, body):
+        """Update a child zone entry."""
         context = req.environ['nova.context']
         zone_id = int(id)
         zone = api.zone_update(context, zone_id, body["zone"])
         return dict(zone=_scrub_zone(zone))
 
-    def select(self, req):
+    def boot(self, req, body):
+        """Creates a new server for a given user while being Zone aware.
+
+        Returns a reservation ID (a UUID).
+        """
+        result = None
+        try:
+            extra_values, result = self.helper.create_instance(req, body,
+                                    self.compute_api.create_all_at_once)
+        except faults.Fault, f:
+            return f
+
+        reservation_id = result
+        return {'reservation_id': reservation_id}
+
+    @check_encryption_key
+    def select(self, req, body):
         """Returns a weighted list of costs to create instances
            of desired capabilities."""
         ctx = req.environ['nova.context']
-        qs = req.environ['QUERY_STRING']
-        param_dict = urlparse.parse_qs(qs)
-        param_dict.pop("fresh", None)
-        # parse_qs returns a dict where the values are lists,
-        # since query strings can have multiple values for the
-        # same key. We need to convert that to single values.
-        for key in param_dict:
-            param_dict[key] = param_dict[key][0]
-        build_plan = api.select(ctx, specs=param_dict)
+        specs = json.loads(body)
+        build_plan = api.select(ctx, specs=specs)
         cooked = self._scrub_build_plan(build_plan)
         return {"weights": cooked}
 
@@ -123,9 +150,6 @@ class Controller(object):
         """Remove all the confidential data and return a sanitized
         version of the build plan. Include an encrypted full version
         of the weighting entry so we can get back to it later."""
-        if not FLAGS.build_plan_encryption_key:
-            raise exception.FlagNotSet(flag='build_plan_encryption_key')
-
         encryptor = crypto.encryptor(FLAGS.build_plan_encryption_key)
         cooked = []
         for entry in build_plan:
@@ -135,8 +159,37 @@ class Controller(object):
                 blob=cipher_text))
         return cooked
 
+    def _image_ref_from_req_data(self, data):
+        return data['server']['imageId']
 
-def create_resource():
+    def _flavor_id_from_req_data(self, data):
+        return data['server']['flavorId']
+
+    def _get_server_admin_password(self, server):
+        """ Determine the admin password for a server on creation """
+        return self.helper._get_server_admin_password_old_style(server)
+
+
+class ControllerV11(object):
+    """Controller for 1.1 Zone resources."""
+
+    def _get_server_admin_password(self, server):
+        """ Determine the admin password for a server on creation """
+        return self.helper._get_server_admin_password_new_style(server)
+
+    def _image_ref_from_req_data(self, data):
+        return data['server']['imageRef']
+
+    def _flavor_id_from_req_data(self, data):
+        return data['server']['flavorRef']
+
+
+def create_resource(version):
+    controller = {
+        '1.0': Controller,
+        '1.1': ControllerV11,
+    }[version]()
+
     metadata = {
         "attributes": {
             "zone": ["id", "api_url", "name", "capabilities"],
@@ -148,4 +201,9 @@ def create_resource():
                                                   metadata=metadata),
     }
 
-    return wsgi.Resource(Controller(), serializers=serializers)
+    deserializers = {
+        'application/xml': helper.ServerXMLDeserializer(),
+    }
+
+    return wsgi.Resource(controller, serializers=serializers,
+                         deserializers=deserializers)
