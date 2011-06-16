@@ -966,6 +966,7 @@ def instance_get_all_by_host(context, host):
                    options(joinedload_all('fixed_ip.floating_ips')).\
                    options(joinedload('security_groups')).\
                    options(joinedload_all('fixed_ip.network')).\
+                   options(joinedload('metadata')).\
                    options(joinedload('instance_type')).\
                    filter_by(host=host).\
                    filter_by(deleted=can_read_deleted(context)).\
@@ -1017,6 +1018,7 @@ def instance_get_all_by_project(context, project_id):
                    options(joinedload_all('fixed_ip.floating_ips')).\
                    options(joinedload('security_groups')).\
                    options(joinedload_all('fixed_ip.network')).\
+                   options(joinedload('metadata')).\
                    options(joinedload('instance_type')).\
                    filter_by(project_id=project_id).\
                    filter_by(deleted=can_read_deleted(context)).\
@@ -1032,6 +1034,7 @@ def instance_get_all_by_reservation(context, reservation_id):
                        options(joinedload_all('fixed_ip.floating_ips')).\
                        options(joinedload('security_groups')).\
                        options(joinedload_all('fixed_ip.network')).\
+                       options(joinedload('metadata')).\
                        options(joinedload('instance_type')).\
                        filter_by(reservation_id=reservation_id).\
                        filter_by(deleted=can_read_deleted(context)).\
@@ -1041,6 +1044,7 @@ def instance_get_all_by_reservation(context, reservation_id):
                        options(joinedload_all('fixed_ip.floating_ips')).\
                        options(joinedload('security_groups')).\
                        options(joinedload_all('fixed_ip.network')).\
+                       options(joinedload('metadata')).\
                        options(joinedload('instance_type')).\
                        filter_by(project_id=context.project_id).\
                        filter_by(reservation_id=reservation_id).\
@@ -1054,6 +1058,8 @@ def instance_get_project_vpn(context, project_id):
     return session.query(models.Instance).\
                    options(joinedload_all('fixed_ip.floating_ips')).\
                    options(joinedload('security_groups')).\
+                   options(joinedload_all('fixed_ip.network')).\
+                   options(joinedload('metadata')).\
                    options(joinedload('instance_type')).\
                    filter_by(project_id=project_id).\
                    filter_by(image_ref=str(FLAGS.vpn_image_id)).\
