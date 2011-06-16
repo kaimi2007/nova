@@ -34,8 +34,8 @@ from nova.virt.libvirt import connection as libvirt_conn
 LOG = logging.getLogger("nova.virt.connection")
 FLAGS = flags.FLAGS
 
-if FLAGS.connection_type == 'tilera':
-    from nova.virt import tilera
+if FLAGS.connection_type == 'baremetal':
+    from nova.virt import proxy_baremetal
 
 
 def get_connection(read_only=False):
@@ -75,9 +75,9 @@ def get_connection(read_only=False):
 #    elif t == 'gpu':
 #        print 'Starting with GPU support'
 #        conn = libvirt_conn_gpu.get_connection(read_only)
-    elif t == 'tilera':
-        print 'Starting with Tilera support'
-        conn = tilera.get_connection(read_only)
+    elif t == 'baremetal':
+        print 'Starting with Bare-metal support'
+        conn = proxy_baremetal.get_connection(read_only)
     elif t == 'vmwareapi':
         conn = vmwareapi_conn.get_connection(read_only)
     else:
