@@ -28,11 +28,11 @@ class InstanceTypeExtraSpecsTestCase(test.TestCase):
     def setUp(self):
         super(InstanceTypeExtraSpecsTestCase, self).setUp()
         self.context = context.get_admin_context()
-        values = dict(name="cg1.4xlarge",
+        values = dict(name="cg1.16xlarge",
                       memory_mb=22000,
                       vcpus=8,
                       local_gb=1690,
-                      flavorid=105)
+                      flavorid=999)
         specs = dict(cpu_arch="x86_64",
                         cpu_model="Nehalem",
                         xpu_arch="fermi",
@@ -45,7 +45,7 @@ class InstanceTypeExtraSpecsTestCase(test.TestCase):
 
     def tearDown(self):
         # Remove the instance type from the database
-        db.api.instance_type_purge(context.get_admin_context(), "cg1.4xlarge")
+        db.api.instance_type_purge(context.get_admin_context(), "cg1.16xlarge")
         super(InstanceTypeExtraSpecsTestCase, self).tearDown()
 
     def test_instance_type_specs_get(self):
