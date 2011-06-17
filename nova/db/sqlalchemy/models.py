@@ -687,19 +687,19 @@ class InstanceMetadata(BASE, NovaBase):
                                 'InstanceMetadata.deleted == False)')
 
 
-class InstanceTypeMetadata(BASE, NovaBase):
-    """Represents a metadata key/value pair for an instance_type"""
-    __tablename__ = 'instance_type_metadata'
+class InstanceTypeExtraSpecs(BASE, NovaBase):
+    """Represents additional specs as key/value pairs for an instance_type"""
+    __tablename__ = 'instance_type_extra_specs'
     id = Column(Integer, primary_key=True)
     key = Column(String(255))
     value = Column(String(255))
     instance_type_id = Column(Integer, ForeignKey('instance_types.id'),
                               nullable=False)
-    instance_type = relationship(InstanceTypes, backref="meta",
+    instance_type = relationship(InstanceTypes, backref="extra_specs",
                  foreign_keys=instance_type_id,
                  primaryjoin='and_('
-                 'InstanceTypeMetadata.instance_type_id == InstanceTypes.id,'
-                 'InstanceTypeMetadata.deleted == False)')
+                 'InstanceTypeExtraSpecs.instance_type_id == InstanceTypes.id,'
+                 'InstanceTypeExtraSpecs.deleted == False)')
 
 
 class Zone(BASE, NovaBase):
@@ -726,7 +726,7 @@ def register_models():
               Network, SecurityGroup, SecurityGroupIngressRule,
               SecurityGroupInstanceAssociation, AuthToken, User,
               Project, Certificate, ConsolePool, Console, Zone,
-              InstanceMetadata, InstanceTypesMetadata, Migration)
+              InstanceMetadata, InstanceTypeExtraSpecs, Migration)
     engine = create_engine(FLAGS.sql_connection, echo=False)
     for model in models:
         model.metadata.create_all(engine)
