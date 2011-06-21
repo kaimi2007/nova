@@ -22,7 +22,7 @@ Archtecture Scheduler implementation
 """
 
 import random
-
+import string
 
 from nova import log as logging
 
@@ -65,7 +65,6 @@ class ArchitectureScheduler(driver.Scheduler):
         """
 #        compute_nodes = db.compute_node_get_all_by_arch(context,
 #                instances[0].cpu_arch, instances[0].xpu_arch)
-#        LOG.debug(_("##\tRLK - compute_nodes.length %d"), len(compute_nodes))
 #        services = db.service_get_all_by_topic(context, topic)
 
         hosts = []
@@ -113,7 +112,37 @@ class ArchitectureScheduler(driver.Scheduler):
 
                 resource_cap = {}
                 for cap, value in service_dict_cap.iteritems():
-                    resource_cap[cap] = value
+                    if type(value) is int:
+                        value = str(value)
+
+                    if type(value) is dict:
+                        resource_cap += get_features(resource_cap[kkey])
+                    elif value.find(':') != -1 or value.find(',') != -1:
+                        new_key = ''
+                        new_val = ''
+                        splitted = value.split(',')
+                        for pair in splitted:
+                            if pair.find(':') != -1:
+                                if len(new_key) != 0:
+                                    resource_cap[new_key] = new_val
+                                nspl = pair.split(':')
+                                right = nspl[-2].rfind('"', 0, len(nspl[-2]))
+                                left = nspl[-2].rfind('"', 0, right)
+                                new_key = nspl[-2][left+1: right]
+                                right = nspl[-1].rfind('"', 0, len(nspl[-1]))
+                                left = nspl[-1].rfind('"', 0, right)
+                                new_val = nspl[-1][left+1: right]
+                            else:
+                                right = pair.rfind('"', 0, len(pair))
+                                left = pair.rfind('"', 0, right)
+                                if right != -1 and left != -1:
+                                    testst = 'abcdedf'
+                                    new_val += "," + pair[left+1:right]
+                                else:
+                                    new_val += ", " + pair
+                        resource_cap[new_key] = new_val
+                    else:
+                        resource_cap[cap] = value
 
                 # if the same architecture is found
                 if ((wanted_cpu_arch is None) \
@@ -123,20 +152,20 @@ class ArchitectureScheduler(driver.Scheduler):
                     LOG.debug(_("## *** wanted arch found: <%s> ***"),
                         wanted_cpu_arch)
                     LOG.debug(_("## cap vcpus = <%s>"),
-                        resource_cap['vcpus'] \
-                        - resource_cap['vcpus_used'])
+                        int(resource_cap['vcpus']) \
+                        - int(resource_cap['vcpus_used']))
                     LOG.debug(_("## cap memory_mb = <%s>"),
                         resource_cap['host_memory_free'])
                     LOG.debug(_("## cap local_gb = <%s>"),
-                        resource_cap['disk_total']
-                        - resource_cap['disk_used'])
+                        int(resource_cap['disk_total'])
+                        - int(resource_cap['disk_used']))
 
-                    if(wanted_vcpus > (resource_cap['vcpus']
-                        - resource_cap['vcpus_used'])
-                    or wanted_memory_mb > resource_cap['host_memory_free']
-#                    or wanted_local_gb < 0):
-                    or wanted_local_gb > (resource_cap['disk_total']
-                        - resource_cap['disk_used'])):
+                    if(wanted_vcpus > (int(resource_cap['vcpus'])
+                        - int(resource_cap['vcpus_used']))
+                    or wanted_memory_mb > int(resource_cap['host_memory_free'])
+                    or wanted_local_gb < 0):
+#                    or wanted_local_gb > (int(resource_cap['disk_total')]
+#                        - int(resource_cap['disk_used'])):
 
                         flag_different = 1
                     else:
@@ -146,82 +175,50 @@ class ArchitectureScheduler(driver.Scheduler):
                     # or instance_metadata table
 
                     for kkey in instance_meta:
-                        if kkey == 'xpus':
-                            try:
-                                if(kkey == 'xpus'  and flag_different == 0):
-                                    wanted_xpus = instance_meta['xpus']
-                                    xpus_checked = 1
-                                    LOG.debug(_("## wanted-xpus=%s"), \
-                                        wanted_xpus)
-                                    if (wanted_xpus is not None):
-                                        flag_different = 1
-                                        if (resource_cap['xpus'] is None):
-                                            LOG.debug(_("## xpus is None"))
+                        try:
+                            if(flag_different == 0):
+                                wanted_value = instance_meta[kkey]
+                                LOG.debug(_("## wanted-key=%s"), kkey)
+                                LOG.debug(_("## wanted-value=%s"), \
+                                    wanted_value)
+                                if (wanted_value is not None):
+                                    flag_different = 1
+                                    if (resource_cap[kkey] is None):
+                                        LOG.debug(_("## cap is None"))
+                                    else:
+                                        # get wanted list first
+                                        wanted = wanted_value.split(',')
+                                        LOG.debug(_("## wanted:%s"), wanted)
+
+                                        if type(resource_cap[kkey]) is int:
+                                            resource_cap[kkey] = \
+                                                str(resource_cap[kkey])
+
+                                        # get provided list now
+                                        if resource_cap[kkey].find(',') == -1:
+                                            offered = [resource_cap[kkey]]
                                         else:
-                                            xpu_cap = \
-                                                int(resource_cap['xpus']) \
-                                                - int( \
-                                                    resource_cap['xpus_used'])
-                                            xpu_meta = int( \
-                                                instance_meta['xpus'])
+                                            offered = resource_cap[kkey]. \
+                                                split(',')
 
-                                            if (xpu_cap < xpu_meta):
-                                                flag_different = 1
-                                                LOG.debug(_("## LACK of xpus"))
-                                            else:
-                                                flag_different = 0
-                                                LOG.debug(_("## xpus ok"))
-                            except:
-                                pass
-
-                        else:
-                            try:
-                                if(flag_different == 0):
-                                    wanted_value = instance_meta[kkey]
-                                    LOG.debug(_("## wanted-key=%s"), kkey)
-                                    LOG.debug(_("## wanted-value=%s"), \
-                                        wanted_value)
-                                    if (wanted_value is not None):
-                                        flag_different = 1
-                                        if (resource_cap[kkey] is None):
-                                            LOG.debug(_("## wanted is None"))
-                                        else:
-                                            wanted = wanted_value.split(',')
-                                            # get flattened list
-                                            # TODO: convert to Set operation
-                                            offered = []
-                                            for offer in \
-                                                resource_cap[kkey].split(','):
-                                                right = offer.rfind('"', 0, \
-                                                    len(offer))
-                                                left = offer.rfind('"', 0, \
-                                                    right)
-                                                if right == -1:
-                                                    offered.append(\
-                                                    resource_cap[kkey])
-                                                    break
-                                                else:
-                                                    offered.append( \
-                                                        offer[left + 1: right])
-
-                                            LOG.debug(_("## offered=%s"), \
+                                        LOG.debug(_("## offered=%s"), \
                                                 offered)
 
-                                            flag_different = 0
-                                            for want in wanted:
-                                                found = 0
-                                                for item in offered:
-                                                    if(want == item):
-                                                        found = 1
-                                                        break
-                                                if found == 0:
-                                                    flag_different = 1
-                                                    LOG.debug(_("**not found"))
+                                        flag_different = 0
+                                        for want in wanted:
+                                            found = 0
+                                            for item in offered:
+                                                if(want == item):
+                                                    found = 1
                                                     break
-                                                else:
-                                                    LOG.debug(_("## found"))
-                            except:
-                                pass
+                                            if found == 0:
+                                                flag_different = 1
+                                                LOG.debug(_("**not found"))
+                                                break
+                                            else:
+                                                LOG.debug(_("## found"))
+                        except:
+                            pass
 
                     if (flag_different == 0):
                         LOG.debug(_("##\t***** found  **********="))
