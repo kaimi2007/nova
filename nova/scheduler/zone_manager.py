@@ -156,7 +156,7 @@ class ZoneManager(object):
                 datetime.timedelta(seconds=allowed_time_diff):
 
                 combined[host] = host_dict
- 
+
         return combined
 
     def _refresh_from_db(self, context):

@@ -128,16 +128,16 @@ class ArchitectureScheduler(driver.Scheduler):
                                 nspl = pair.split(':')
                                 right = nspl[-2].rfind('"', 0, len(nspl[-2]))
                                 left = nspl[-2].rfind('"', 0, right)
-                                new_key = nspl[-2][left+1: right]
+                                new_key = nspl[-2][left + 1: right]
                                 right = nspl[-1].rfind('"', 0, len(nspl[-1]))
                                 left = nspl[-1].rfind('"', 0, right)
-                                new_val = nspl[-1][left+1: right]
+                                new_val = nspl[-1][left + 1: right]
                             else:
                                 right = pair.rfind('"', 0, len(pair))
                                 left = pair.rfind('"', 0, right)
                                 if right != -1 and left != -1:
                                     testst = 'abcdedf'
-                                    new_val += "," + pair[left+1:right]
+                                    new_val += "," + pair[left + 1:right]
                                 else:
                                     new_val += ", " + pair
                         resource_cap[new_key] = new_val
