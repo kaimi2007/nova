@@ -149,14 +149,14 @@ class ZoneManager(object):
 
         combined = {}  # { <service>_<cap> : (min, max), ... }
         for host, host_dict in hosts_dict.iteritems():
-#            print "TIME CHECK: now = " , utils.utcnow() 
+#            print "TIME CHECK: now = " , utils.utcnow()
 #            print "TIME CHECK: time_stamp=", self.service_time_stamp[host]
 #            print "TIME CHECK: a_diff= " , allowed_time_diff
             if (utils.utcnow() - self.service_time_stamp[host]) <= \
-                datetime.timedelta (seconds = allowed_time_diff):
+                datetime.timedelta(seconds=allowed_time_diff):
 
                 combined[host] = host_dict
-        
+ 
         return combined
 
     def _refresh_from_db(self, context):
