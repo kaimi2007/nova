@@ -73,7 +73,6 @@ class _baremetal_nodes(object):
                     'cpu_info': l[self.CPU_INFO]
                   }
             self.nodes.append(l_d)
-        #print self.nodes
 
     def get_hw_info(self, field):
         for node in self.nodes:
@@ -127,7 +126,7 @@ class _baremetal_nodes(object):
                 return item['ip_addr']
 
     def free_node(self, node_id):
-        print("free_node....\n")
+        LOG.debug(_("free_node...."))
         for item in self.nodes:
             if item['node_id'] == str(node_id):
                 item['status'] = 0  # make status IDLE
@@ -149,11 +148,12 @@ class _baremetal_nodes(object):
 
     def deactivate_node(self, node_id):
         node_ip = baremetal_nodes.find_ip_w_id(node_id)
-        print("deactivate_node is called for \
-               node_id = %s node_ip = %s\n", str(node_id), node_ip)
+        LOG.debug(_("deactivate_node is called for \
+               node_id = %(id)s node_ip = %(ip)s"),
+               {'id': str(node_id), 'ip': node_ip})
         for item in self.nodes:
             if item['node_id'] == node_id:
-                print "status of node is set to 0"
+                LOG.debug(_("status of node is set to 0"))
                 item['status'] = 0
 
         baremetal_nodes.power_mgr(node_id, 2)
@@ -195,7 +195,7 @@ class _baremetal_nodes(object):
         #else:
         cmd = "TILERA_BOARD_#" + str(node_id) + " " + node_ip \
             + " is ready"
-        print cmd
+        LOG.debug(_(cmd))
         return
 
     #vmlinux mode: 0-NoSet, 1-FirstVmlinux, 2-SecondVmlinux, 9-RemoveVmlinux
@@ -213,7 +213,7 @@ class _baremetal_nodes(object):
             utils.execute('rm', path1)
         else:
             cmd = "Noting to do"
-            print cmd
+            LOG.debug(_(cmd))
         return
 
     def sleep_mgr(self, time):
@@ -227,10 +227,10 @@ class _baremetal_nodes(object):
         return
 
     def fs_set(self, node_id, node_ip):
-        path1 = "/tftpboot/tilera_fs_" + str(node_id) + ".tar.gz"
+        path1 = "/tftpboot/fs_" + str(node_id) + ".tar.gz"
         utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
             '--resume', '--net', node_ip, '--upload', path1, \
-            '/tilera_fs.tar.gz', '--quit')
+            '/fs.tar.gz', '--quit')
         utils.execute('rm', path1)
         utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
             '--resume', '--net', node_ip, '--run', '-', 'mount', \
@@ -238,17 +238,14 @@ class _baremetal_nodes(object):
             '-rf', '/mnt/*', '-', '--wait', \
             #'-rf', '/mnt/root/.ssh/authorized_keys', '-', '--wait', \
             '--run', '-', 'tar', \
-            '-xzpf', '/tilera_fs.tar.gz', '-C', '/mnt/', '-', \
+            '-xzpf', '/fs.tar.gz', '-C', '/mnt/', '-', \
             '--wait', '--quit')
         return
 
     #def activate_node(self, node_id, node_ip, name, mac_address):
     def activate_node(self, node_id, node_ip, name, mac_address, \
         ip_address):
-        print("activate_node \n")
-
-        #target = os.path.join(FLAGS.instances_path, name)
-        #print target
+        LOG.debug(_("activate_node"))
 
         baremetal_nodes.vmlinux_set(1, node_id)
         baremetal_nodes.power_mgr(node_id, 3)
@@ -287,7 +284,7 @@ class _baremetal_nodes(object):
         utils.execute('cp', path_fs, path_root)
 
     def init_kmsg(self):
-        kmsg_dump_file = "kmsg_dump_0"  # + str(node_id)
+        kmsg_dump_file = "/tftpboot/kmsg_dump_0"  # + str(node_id)
         utils.execute('touch', kmsg_dump_file)
 
 baremetal_nodes = _baremetal_nodes()

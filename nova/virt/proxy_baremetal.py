@@ -210,7 +210,7 @@ class ProxyConnection(driver.ComputeDriver):
         #        for x in self._conn.listDomainsID()]
         return self._conn.list_domains()  # MK
 
-    def _map_to_instance_info(self, domain):
+    def _map_to_instance_info(self, domain_name):
         """Gets info from a virsh domain object into an InstanceInfo"""
 
         # domain.info() returns a list of:
@@ -223,9 +223,8 @@ class ProxyConnection(driver.ComputeDriver):
         #(state, _max_mem, _mem, _num_cpu, _cpu_time) = domain.info()
         #name = domain.name()
         (state, _max_mem, _mem, _num_cpu, _cpu_time) \
-            = self.get_info(domain_name)
+            = self._conn.get_domain_info(domain_name)
         name = domain_name
-
         return driver.InstanceInfo(name, state)
 
     def list_instances_detail(self):
@@ -234,8 +233,9 @@ class ProxyConnection(driver.ComputeDriver):
         #    domain = self._conn.lookupByID(domain_id)
         #    info = self._map_to_instance_info(domain)
         #    infos.append(info)
-        for domain in self._conn.list_domains():
-            info = self._map_to_instance_info(domain['name'])
+        for domain_name in self._conn.list_domains():
+            info = self._map_to_instance_info(domain_name)
+            #info = self._map_to_instance_info(domain['name'])
             infos.append(info)
         return infos
 
@@ -413,9 +413,9 @@ class ProxyConnection(driver.ComputeDriver):
 
         def _wait_for_boot():
             try:
-                print xml_dict  # MK
+                LOG.debug(_(xml_dict))
                 state = self._conn.create_domain(xml_dict, bpath)
-                LOG.debug(_('~~~~~~ current state = %s ~~~~~~') % state)  # MK
+                LOG.debug(_('~~~~~~ current state = %s ~~~~~~'), state)  # MK
                 db.instance_set_state(context.get_admin_context(),
                                       instance['id'], state, 'running')
                 if state == power_state.RUNNING:
@@ -761,6 +761,7 @@ class ProxyConnection(driver.ComputeDriver):
         if FLAGS.vnc_enabled:
             if FLAGS.baremetal_type != 'lxc':
                 xml_info['vncserver_host'] = FLAGS.vncserver_host
+                xml_info['vnc_keymap'] = FLAGS.vnc_keymap
         if not rescue:
             if instance['kernel_id']:
                 xml_info['kernel'] = xml_info['basepath'] + "/kernel"
@@ -1231,7 +1232,7 @@ class ProxyConnection(driver.ComputeDriver):
     def get_host_stats(self, refresh=False):
         """Return the current state of the host. If 'refresh' is
            True, run the update first."""
-        print 'Updating!'
+        LOG.debug(_("Updating!"))
         return self.HostState.get_host_stats(refresh=refresh)
 #        """See xenapi_conn.py implementation."""
 #        print 'UPDATING!'
@@ -1295,7 +1296,7 @@ class HostState(object):
 #               'net_info': FLAGS.net_info,
 #               'net_mbps': FLAGS.net_mbps}
         LOG.debug(_("Updating host stats"))
-        print 'Updating statistics!!'
+        #LOG.debug(_("Updating statistics!!"))
         connection = get_connection(self.read_only)
         data = {}
         data["vcpus"] = connection.get_vcpu_total()
@@ -1304,7 +1305,7 @@ class HostState(object):
         data["cpu_arch"] = FLAGS.cpu_arch
         data["xpus"] = FLAGS.xpus
         data["xpu_arch"] = FLAGS.xpu_arch
-        #data["xpus_used"] = 0  # len(gvirtus_pids)
+        #  data["xpus_used"] = 0
         data["xpu_info"] = FLAGS.xpu_info
         data["net_arch"] = FLAGS.net_arch
         data["net_info"] = FLAGS.net_info

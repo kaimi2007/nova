@@ -42,47 +42,61 @@ if FLAGS.baremetal_driver == 'tilera':
 LOG = logging.getLogger('nova.virt.baremetal_dom')
 
 
-class _baremetal_dom(object):
-    """Fake domain for Tilera to avoid using tilera"""
-    fake_dom_file = "/tftpboot/test_fake_dom_file"
-    fake_dom_nums = 0
-    domains = []
-    fp = 0
+class BareMetalDom(object):
+    """Fake domain for bare metal back ends.
+    Implements the singleton pattern"""
 
-    def __init__(self):
+    _instance = None
+
+    def __new__(cls, *args, **kwargs):
+        """Returns the BareMetalDom singleton"""
+        if not cls._instance or ('new' in kwargs and kwargs['new']):
+            cls._instance = super(BareMetalDom, cls).__new__(cls)
+        return cls._instance
+
+    def __init__(self,
+                 fake_dom_file="/tftpboot/test_fake_dom_file",
+                 open_func=open):
+        self.fake_dom_file = fake_dom_file
         self.domains = []
+        self.fake_dom_nums = 0
+        self.domains = []
+        self.fp = 0
+
         utils.execute('rm', self.fake_dom_file)
-        print "open %s" % self.fake_dom_file
+        LOG.debug(_("open %s"), self.fake_dom_file)
         try:
-            self.fp = open(self.fake_dom_file, "r+")
-            print "fp = "
-            print self.fp
+            self.fp = open_func(self.fake_dom_file, "r+")
+            LOG.debug(_("fp = %s"), self.fp)
         except IOError:
-            print ("%s file does not exist, but is created\n" \
-                % self.fake_dom_file)
-            self.fp = open(self.fake_dom_file, "w")
+            LOG.debug(_("%s file does not exist, will create it"),
+                      self.fake_dom_file)
+            self.fp = open_func(self.fake_dom_file, "w")
             self.fp.close()
-            self.fp = open(self.fake_dom_file, "r+")
-        self.read_domain_from_file()
+            self.fp = open_func(self.fake_dom_file, "r+")
+        self._read_domain_from_file(open_func)
         # (TODO) read pre-existing fake domains
 
-    def read_domain_from_file(self):
+    def _read_domain_from_file(self, open_func):
+        """
+        Read the domains from a pickled representation.
+        """
         try:
             self.domains = pickle.load(self.fp)
             self.fp.close()
-            self.fp = open(self.fake_dom_file, "w")
+            self.fp = open_func(self.fake_dom_file, "w")
         except EOFError:
             dom = []
             self.fp.close()
-            self.fp = open(self.fake_dom_file, "w")
-            print "No domains exist."
+            self.fp = open_func(self.fake_dom_file, "w")
+            LOG.debug(_("No domains exist."))
             return
-        print "============= initial domains ==========="
-        print self.domains
-        print "========================================="
-        for dom in self.domains:
+        LOG.debug(_("============= initial domains ==========="))
+        LOG.debug(_("%s"), self.domains)
+        LOG.debug(_("========================================="))
+        for dom in self.domains[:]:
             if dom['status'] != power_state.RUNNING:
-                print "Not running domain: remove"
+                LOG.debug(_("Not running domain: remove"))
                 self.domains.remove(dom)
                 continue
             res = baremetal_nodes.set_status(dom['node_id'], \
@@ -90,12 +104,12 @@ class _baremetal_dom(object):
             if res > 0:  # no such node exixts
                 self.fake_dom_nums = self.fake_dom_nums + 1
             else:
-                print "domain running on an unknown node: discarded"
+                LOG.debug(_("domain running on an unknown node: discarded"))
                 self.domains.remove(dom)
                 continue
 
-        print "--> domains after reading"
-        print self.domains
+        LOG.debug(_("--> domains after reading"))
+        LOG.debug(_(self.domains))
 
     def reboot_domain(self, name):
         fd = self.find_domain(name)
@@ -126,25 +140,25 @@ class _baremetal_dom(object):
            and power down the corresponding bare-metal node"""
         fd = self.find_domain(name)
         if fd == []:
-            print "destroy_domain: no such domain"
+            LOG.debug(_("destroy_domain: no such domain"))
             raise exception.NotFound("No such domain %s" % name)
 
         try:
             baremetal_nodes.deactivate_node(fd['node_id'])
-            print "--> after deactivate node"
+            LOG.debug(_("--> after deactivate node"))
 
             kmsg_dump_file = "/tftpboot/kmsg_dump_0"  # + str(fd['node_id'])
             utils.execute('rm', kmsg_dump_file)
             self.domains.remove(fd)
-            print "domains: "
-            print self.domains
-            print "nodes: "
-            print baremetal_nodes.nodes
+            LOG.debug(_("domains: "))
+            LOG.debug(_(self.domains))
+            LOG.debug(_("nodes: "))
+            LOG.debug(_(baremetal_nodes.nodes))
             self.store_domain()
-            print "after storing domains"
-            print self.domains
+            LOG.debug(_("after storing domains"))
+            LOG.debug(_(self.domains))
         except:
-            print "what to do?"
+            LOG.debug(_("what to do?"))
             raise
 
     def create_domain(self, xml_dict, bpath):
@@ -153,14 +167,14 @@ class _baremetal_dom(object):
         LOG.debug(_("1////////////////////"))
         fd = self.find_domain(xml_dict['name'])
         if fd != []:
-            print 'domain with the same name already exists'
+            LOG.debug(_("domain with the same name already exists"))
             raise
             #raise exception.NotFound("same name already exists")
-        print "create_domain: before get_idle_node"
+        LOG.debug(_("create_domain: before get_idle_node"))
 
         node_id = baremetal_nodes.get_idle_node()
         if node_id == -1:
-            print ('No idle bare-metal node exits')
+            LOG.debug(_("No idle bare-metal node exits"))
             raise exception.NotFound("No free nodes available")
 
         node_ip = baremetal_nodes.find_ip_w_id(node_id)
@@ -177,26 +191,26 @@ class _baremetal_dom(object):
                     'ramdisk_id': xml_dict['ramdisk_id'], \
                      'status': power_state.NOSTATE}
         self.domains.append(new_dom)
-        print new_dom
+        LOG.debug(_(new_dom))
         self.change_domain_state(new_dom['name'], power_state.NOSTATE)
 
         cmd = "mount -o loop " + bpath + "/root /tftpboot/fs_" \
             + str(node_id)
-        print cmd
+        LOG.debug(_(cmd))
         path1 = bpath + "/root"
         path2 = "/tftpboot/fs_" + str(node_id)
         utils.execute('mount', '-o', 'loop', path1, path2)
         cmd = "cd /tftpboot/fs_" + str(node_id) + \
-            "; tar -czpf ../tilera_fs_" + str(node_id) + ".tar.gz ."
-        print cmd
+            "; tar -czpf ../fs_" + str(node_id) + ".tar.gz ."
+        LOG.debug(_(cmd))
         path1 = "/tftpboot/fs_" + str(node_id)
         os.chdir(path1)
-        path2 = "../tilera_fs_" + str(node_id) + ".tar.gz"
+        path2 = "../fs_" + str(node_id) + ".tar.gz"
         utils.execute('tar', '-czpf', path2, '.')
         path1 = bpath + "/../../.."
         os.chdir(path1)
         cmd = "umount -l /tftpboot/fs_" + str(node_id)
-        print cmd
+        LOG.debug(_(cmd))
         path4 = "/tftpboot/fs_" + str(node_id)
         utils.execute('umount', '-l', path4)
 
@@ -211,7 +225,7 @@ class _baremetal_dom(object):
             raise exception.NotFound("Failed to boot Bare-metal node %s" \
                 % node_id)
 
-        print "BEFORE last self.change_domain_state +++++++++++++++++"
+        LOG.debug(_("BEFORE last self.change_domain_state +++++++++++++++++"))
         self.change_domain_state(new_dom['name'], state)
         return state
 
@@ -221,27 +235,27 @@ class _baremetal_dom(object):
             raise exception.NotFound("No such domain exists")
         i = self.domains.index(l)
         self.domains[i]['status'] = state
-        print "change_domain_state: to new state %s" % str(state)
+        LOG.debug(_("change_domain_state: to new state %s"), str(state))
         self.store_domain()
 
     def store_domain(self):
         # store fake domains to the file
-        print "store fake domains to the file"
-        print "-------"
-        print self.domains
-        print "-------"
-        print self.fp
+        LOG.debug(_("store fake domains to the file"))
+        LOG.debug(_("-------"))
+        LOG.debug(_(self.domains))
+        LOG.debug(_("-------"))
+        LOG.debug(_(self.fp))
         self.fp.seek(0)
         pickle.dump(self.domains, self.fp)
-        print "after successful pickle.dump"
+        LOG.debug(_("after successful pickle.dump"))
 
     def find_domain(self, name):
-        print "find_domain: self.domains %s" % name
-        print self.domains
+        #LOG.debug(_("find_domain: self.domains %s"), name)
+        #LOG.debug(_(self.domains))
         for item in self.domains:
             if item['name'] == name:
                 return item
-        print "domain does not exist\n"
+        LOG.debug(_("domain does not exist"))
         return []
 
     def list_domains(self):
@@ -252,8 +266,8 @@ class _baremetal_dom(object):
     def get_domain_info(self, instance_name):
         domain = self.find_domain(instance_name)
         if domain != []:
-            return [domain['status'], domain['memory_mb'], \
-                    domain['memory_mb'], \
+            return [domain['status'], domain['memory_kb'], \
+                    domain['memory_kb'], \
                     domain['vcpus'], \
                     100]
         else:
@@ -261,5 +275,5 @@ class _baremetal_dom(object):
             #raise exception.NotFound("get_domain_info: No such doamin %s" \
             #                          % instance_name)
 
-baremetal_dom = _baremetal_dom()
+baremetal_dom = BareMetalDom()
 #_MK
