@@ -109,6 +109,7 @@ class ZoneManager(object):
         self.last_zone_db_check = datetime.datetime.min
         self.zone_states = {}  # { <zone_id> : ZoneState }
         self.service_states = {}  # { <host> : { <service> : { cap k : v }}}
+        self.service_time_stamp = {}  # reported time
         self.green_pool = greenpool.GreenPool()
 
     def get_zone_list(self):
@@ -141,7 +142,22 @@ class ZoneManager(object):
 
         Returns a dict: { <host> : {<service> : {<cap_key> : <cap_value>}}}
         """
-        return self.service_states
+
+        hosts_dict = self.service_states
+
+        allowed_time_diff = FLAGS.periodic_interval * 3
+
+        combined = {}  # { <service>_<cap> : (min, max), ... }
+        for host, host_dict in hosts_dict.iteritems():
+#            print "TIME CHECK: now = " , utils.utcnow() 
+#            print "TIME CHECK: time_stamp=", self.service_time_stamp[host]
+#            print "TIME CHECK: a_diff= " , allowed_time_diff
+            if (utils.utcnow() - self.service_time_stamp[host]) <= \
+                datetime.timedelta (seconds = allowed_time_diff):
+
+                combined[host] = host_dict
+        
+        return combined
 
     def _refresh_from_db(self, context):
         """Make our zone state map match the db."""
@@ -181,3 +197,4 @@ class ZoneManager(object):
         service_caps = self.service_states.get(host, {})
         service_caps[service_name] = capabilities
         self.service_states[host] = service_caps
+        self.service_time_stamp[host] = utils.utcnow()
