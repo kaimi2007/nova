@@ -71,17 +71,13 @@ from nova.virt import disk
 from nova.virt import driver
 from nova.virt import images
 from nova.virt.libvirt import netutils
-from nova.virt.baremetal_dom import *
-
-FLAGS = flags.FLAGS
-if FLAGS.baremetal_driver == 'tilera':
-    from nova.virt.tilera import *
-#    __all__ = ['baremetal_nodes', 'baremetal_dom']
+from nova.virt.baremetal import nodes
+from nova.virt.baremetal import dom
 
 libxml2 = None
 Template = None
 
-LOG = logging.getLogger('nova.virt.proxy_baremetal')
+LOG = logging.getLogger('nova.virt.baremetal.proxy')
 
 FLAGS = flags.FLAGS
 flags.DEFINE_string('baremetal_injected_network_template',
@@ -100,11 +96,6 @@ flags.DEFINE_bool('baremetal_allow_project_net_traffic',
                   True,
                   'Whether to allow in project network traffic')
 
-
-# MK
-#global baremetal_nodes
-#global fake_doms
-# _MK
 
 def get_connection(read_only):
     # These are loaded late so that there's no need to install these
@@ -147,6 +138,7 @@ class ProxyConnection(driver.ComputeDriver):
         super(ProxyConnection, self).__init__()
         #self.baremetal_uri = self.get_uri()
 
+        self.baremetal_nodes = nodes.get_baremetal_nodes()
         self.baremetal_xml = open(FLAGS.baremetal_xml_template).read()
         self.cpuinfo_xml = open(FLAGS.cpuinfo_xml_template).read()
         self._wrapped_conn = None
@@ -191,7 +183,7 @@ class ProxyConnection(driver.ComputeDriver):
         #    self._wrapped_conn = self._connect(self.baremetal_uri,
         #                               self.read_only)
         # MK
-        self._wrapped_conn = baremetal_dom
+        self._wrapped_conn = dom.BareMetalDom()
         # _MK
         return self._wrapped_conn
     _conn = property(_get_connection)
@@ -390,7 +382,7 @@ class ProxyConnection(driver.ComputeDriver):
         xml_dict = self.to_xml_dict(instance, network_info)
         db.instance_set_state(context.get_admin_context(),
                               instance['id'],
-                              power_state.NOSTATE,
+                              power_state.BUILDING,  # NOSTATE,
                               'launching')
         #self.firewall_driver.setup_basic_filtering(instance, network_info)
         #self.firewall_driver.prepare_instance_filter(instance, network_info)
@@ -465,9 +457,9 @@ class ProxyConnection(driver.ComputeDriver):
         utils.execute('sudo', 'chown', os.getuid(), console_log)
 
         fd = self._conn.find_domain(instance['name'])
-        node_ip = baremetal_nodes.find_ip_w_id(fd['node_id'])
+        node_ip = self.baremetal_nodes.find_ip_w_id(fd['node_id'])
 
-        baremetal_nodes.get_console_output(console_log)
+        self.baremetal_nodes.get_console_output(console_log)
 
         fpath = console_log
 
@@ -564,8 +556,8 @@ class ProxyConnection(driver.ComputeDriver):
         #MK
         #Test: copying original baremetal images
         bp = basepath(suffix='')
-        baremetal_nodes.get_image(bp)
-        baremetal_nodes.init_kmsg()
+        self.baremetal_nodes.get_image(bp)
+        self.baremetal_nodes.init_kmsg()
         #_MK
 
         if not disk_images:
@@ -834,7 +826,7 @@ class ProxyConnection(driver.ComputeDriver):
         # On certain platforms, this will raise a NotImplementedError.
         try:
             #return multiprocessing.cpu_count()
-            return baremetal_nodes.get_hw_info('vcpus')  # 10
+            return self.baremetal_nodes.get_hw_info('vcpus')  # 10
         except NotImplementedError:
             LOG.warn(_("Cannot get the number of cpu, because this "
                        "function is not implemented for this platform. "
@@ -855,7 +847,7 @@ class ProxyConnection(driver.ComputeDriver):
         #idx = meminfo.index('MemTotal:')
         ## transforming kb to mb.
         #return int(meminfo[idx + 1]) / 1024
-        return baremetal_nodes.get_hw_info('memory_mb')  # 16218
+        return self.baremetal_nodes.get_hw_info('memory_mb')  # 16218
 
     def get_local_gb_total(self):
         """Get the total hdd size(GB) of physical computer.
@@ -869,7 +861,7 @@ class ProxyConnection(driver.ComputeDriver):
 
         #hddinfo = os.statvfs(FLAGS.instances_path)
         #return hddinfo.f_frsize * hddinfo.f_blocks / 1024 / 1024 / 1024
-        return baremetal_nodes.get_hw_info('local_gb')  # 917
+        return self.baremetal_nodes.get_hw_info('local_gb')  # 917
 
     def get_vcpu_used(self):
         """ Get vcpu usage number of physical computer.
@@ -902,7 +894,7 @@ class ProxyConnection(driver.ComputeDriver):
         #idx3 = m.index('Cached:')
         #avail = (int(m[idx1 + 1]) + int(m[idx2 + 1]) + int(m[idx3 + 1]))/1024
         #return  self.get_memory_mb_total() - avail
-        return baremetal_nodes.get_hw_info('memory_mb_used')  # 476
+        return self.baremetal_nodes.get_hw_info('memory_mb_used')  # 476
 
     def get_local_gb_used(self):
         """Get the free hdd size(GB) of physical computer.
@@ -917,7 +909,7 @@ class ProxyConnection(driver.ComputeDriver):
         #hddinfo = os.statvfs(FLAGS.instances_path)
         #avail = hddinfo.f_frsize * hddinfo.f_bavail / 1024 / 1024 / 1024
         #return self.get_local_gb_total() - avail
-        return baremetal_nodes.get_hw_info('local_gb_used')  # 1
+        return self.baremetal_nodes.get_hw_info('local_gb_used')  # 1
 
     def get_hypervisor_type(self):
         """Get hypervisor type.
@@ -927,7 +919,7 @@ class ProxyConnection(driver.ComputeDriver):
         """
 
         #return self._conn.getType()
-        return baremetal_nodes.get_hw_info('hypervisor_type')
+        return self.baremetal_nodes.get_hw_info('hypervisor_type')
 
     def get_hypervisor_version(self):
         """Get hypervisor version.
@@ -948,7 +940,7 @@ class ProxyConnection(driver.ComputeDriver):
             # NOTE(justinsb): This would then rely on a proper version check
 
         #return method()
-        return baremetal_nodes.get_hw_info('hypervisor_version')  # 1
+        return self.baremetal_nodes.get_hw_info('hypervisor_version')  # 1
 
     def get_cpu_info(self):
         """Get cpuinfo information.
@@ -1006,7 +998,7 @@ class ProxyConnection(driver.ComputeDriver):
         cpu_info['topology'] = topology
         cpu_info['features'] = features
         return utils.dumps(cpu_info)"""
-        return baremetal_nodes.get_hw_info('cpu_info')  # 'TILEPro64'
+        return self.baremetal_nodes.get_hw_info('cpu_info')  # 'TILEPro64'
 
     def block_stats(self, instance_name, disk):
         raise NotImplementedError()

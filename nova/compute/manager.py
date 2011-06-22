@@ -71,8 +71,6 @@ flags.DEFINE_string('console_host', socket.gethostname(),
 flags.DEFINE_integer('live_migration_retry_count', 30,
                     ("Retry count needed in live_migration."
                      " sleep 1 sec for each count"))
-flags.DEFINE_string('baremetal_driver', 'tilera',
-                    'Bare-metal driver runs on')
 flags.DEFINE_string('cpu_arch', 'x86_64',
                     'Architecture the instance runs on')
 flags.DEFINE_string('xpu_arch', '',
