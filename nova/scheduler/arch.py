@@ -60,13 +60,6 @@ class ArchitectureScheduler(driver.Scheduler):
         services = db.service_get_all_by_topic(context, topic)
         LOG.debug(_("## services %s"), services)
 
-        """Select all compute_node available where cpu_arch and xpu_arch
-        match the instance available.
-        """
-#        compute_nodes = db.compute_node_get_all_by_arch(context,
-#                instances[0].cpu_arch, instances[0].xpu_arch)
-#        services = db.service_get_all_by_topic(context, topic)
-
         hosts = []
 
         # from instance table
@@ -115,14 +108,26 @@ class ArchitectureScheduler(driver.Scheduler):
                     if type(value) is int:
                         value = str(value)
 
-                    if type(value) is dict:
-                        resource_cap += get_features(resource_cap[kkey])
-                    elif value.find(':') != -1 or value.find(',') != -1:
+                    # simple case: one value
+                    if value.find(':') == -1 and value.find(',') == -1:
+                        resource_cap[cap] = value
+
+                    # complex; multi-level key-value pairs.
+                    # example: cpu_info = { "vendor":"intel", features=
+                    #  ["dia", "est"], toplogy={"core":4, "thread":1}}
+                    # only the lowest key-value pair is recorded. So, in the
+                    # previous eample, the final dict is:
+                    #   resource["vendor"] = "intel",
+                    #   resource["features"] = "dia, est",
+                    #   resource["core"] = "4",
+                    #   resource["thread"] = "1",
+                    # No key is availabel for cpu_info and topology
+                    else:  # decompose capability
                         new_key = ''
                         new_val = ''
                         splitted = value.split(',')
                         for pair in splitted:
-                            if pair.find(':') != -1:
+                            if pair.find(':') != -1:  # key:value pair
                                 if len(new_key) != 0:
                                     resource_cap[new_key] = new_val
                                 nspl = pair.split(':')
@@ -132,17 +137,14 @@ class ArchitectureScheduler(driver.Scheduler):
                                 right = nspl[-1].rfind('"', 0, len(nspl[-1]))
                                 left = nspl[-1].rfind('"', 0, right)
                                 new_val = nspl[-1][left + 1: right]
-                            else:
+                            else:  # value only
                                 right = pair.rfind('"', 0, len(pair))
                                 left = pair.rfind('"', 0, right)
                                 if right != -1 and left != -1:
-                                    testst = 'abcdedf'
                                     new_val += "," + pair[left + 1:right]
                                 else:
                                     new_val += ", " + pair
                         resource_cap[new_key] = new_val
-                    else:
-                        resource_cap[cap] = value
 
                 # if the same architecture is found
                 if ((wanted_cpu_arch is None) \
@@ -163,9 +165,8 @@ class ArchitectureScheduler(driver.Scheduler):
                     if(wanted_vcpus > (int(resource_cap['vcpus'])
                         - int(resource_cap['vcpus_used']))
                     or wanted_memory_mb > int(resource_cap['host_memory_free'])
-                    or wanted_local_gb < 0):
-#                    or wanted_local_gb > (int(resource_cap['disk_total')]
-#                        - int(resource_cap['disk_used'])):
+                    or wanted_local_gb > (int(resource_cap['disk_total')]
+                        - int(resource_cap['disk_used'])):
 
                         flag_different = 1
                     else:
@@ -188,7 +189,6 @@ class ArchitectureScheduler(driver.Scheduler):
                                     else:
                                         # get wanted list first
                                         wanted = wanted_value.split(',')
-                                        LOG.debug(_("## wanted:%s"), wanted)
 
                                         if type(resource_cap[kkey]) is int:
                                             resource_cap[kkey] = \
@@ -204,6 +204,7 @@ class ArchitectureScheduler(driver.Scheduler):
                                         LOG.debug(_("## offered=%s"), \
                                                 offered)
 
+                                        # check if the required are provided
                                         flag_different = 0
                                         for want in wanted:
                                             found = 0
