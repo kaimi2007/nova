@@ -64,7 +64,6 @@ class BareMetalDom(object):
         self.fake_dom_file = fake_dom_file
         self.domains = []
         self.fake_dom_nums = 0
-        self.domains = []
         self.fp = 0
         self.baremetal_nodes = nodes.get_baremetal_nodes()
 
@@ -199,25 +198,7 @@ class BareMetalDom(object):
         LOG.debug(_(new_dom))
         self.change_domain_state(new_dom['name'], power_state.BUILDING)
 
-        cmd = "mount -o loop " + bpath + "/root /tftpboot/fs_" \
-            + str(node_id)
-        LOG.debug(_(cmd))
-        path1 = bpath + "/root"
-        path2 = "/tftpboot/fs_" + str(node_id)
-        utils.execute('mount', '-o', 'loop', path1, path2)
-        cmd = "cd /tftpboot/fs_" + str(node_id) + \
-            "; tar -czpf ../fs_" + str(node_id) + ".tar.gz ."
-        LOG.debug(_(cmd))
-        path1 = "/tftpboot/fs_" + str(node_id)
-        os.chdir(path1)
-        path2 = "../fs_" + str(node_id) + ".tar.gz"
-        utils.execute('tar', '-czpf', path2, '.')
-        path1 = bpath + "/../../.."
-        os.chdir(path1)
-        cmd = "umount -l /tftpboot/fs_" + str(node_id)
-        LOG.debug(_(cmd))
-        path4 = "/tftpboot/fs_" + str(node_id)
-        utils.execute('umount', '-l', path4)
+        self.baremetal_nodes.set_image(bpath, node_id)
 
         try:
             state = self.baremetal_nodes.activate_node(node_id,

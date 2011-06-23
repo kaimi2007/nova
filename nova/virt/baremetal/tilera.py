@@ -7,9 +7,6 @@ import sys
 import tempfile
 import time
 import uuid
-# MK
-import pickle
-# _MK
 from xml.dom import minidom
 from xml.etree import ElementTree
 
@@ -294,6 +291,19 @@ class BareMetalNodes(object):
         path_fs = "/tftpboot/tilera_fs_" + str(node_id)
         path_root = bp + "/root"
         utils.execute('cp', path_fs, path_root)
+
+    def set_image(self, bpath, node_id):
+        path1 = bpath + "/root"
+        path2 = "/tftpboot/fs_" + str(node_id)
+        utils.execute('mount', '-o', 'loop', path1, path2)
+        path1 = "/tftpboot/fs_" + str(node_id)
+        os.chdir(path1)
+        path2 = "../fs_" + str(node_id) + ".tar.gz"
+        utils.execute('tar', '-czpf', path2, '.')
+        path1 = bpath + "/../../.."
+        os.chdir(path1)
+        path4 = "/tftpboot/fs_" + str(node_id)
+        utils.execute('umount', '-l', path4)
 
     def init_kmsg(self):
         kmsg_dump_file = "/tftpboot/kmsg_dump_0"  # + str(node_id)
