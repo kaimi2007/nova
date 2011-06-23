@@ -71,7 +71,7 @@ from nova.virt.libvirt import netutils
 from nova.virt.baremetal import nodes
 from nova.virt.baremetal import dom
 
-libxml2 = None
+
 Template = None
 
 LOG = logging.getLogger('nova.virt.baremetal.proxy')
@@ -99,9 +99,6 @@ def get_connection(read_only):
     # libraries when not using baremetal.
     # Cheetah is separate because the unit tests want to load Cheetah,
     # but not baremetal.
-    global libxml2
-    if libxml2 is None:
-        libxml2 = __import__('libxml2')
     _late_load_cheetah()
     return ProxyConnection(read_only)
 
@@ -133,18 +130,12 @@ class ProxyConnection(driver.ComputeDriver):
 
     def __init__(self, read_only):
         super(ProxyConnection, self).__init__()
-        #self.baremetal_uri = self.get_uri()
-
         self.baremetal_nodes = nodes.get_baremetal_nodes()
         self.baremetal_xml = open(FLAGS.baremetal_xml_template).read()
-        self.cpuinfo_xml = open(FLAGS.cpuinfo_xml_template).read()
         self._wrapped_conn = None
         self.read_only = read_only
 
-        fw_class = utils.import_class(FLAGS.firewall_driver)
-        self.firewall_driver = fw_class(get_connection=self._get_connection)
         self._host_state = None
-#        self.session = None
 
     @property
     def HostState(self):
@@ -171,17 +162,9 @@ class ProxyConnection(driver.ComputeDriver):
 
             if state != power_state.RUNNING:
                 continue
-            self.firewall_driver.prepare_instance_filter(instance)
-            self.firewall_driver.apply_instance_filter(instance)
 
     def _get_connection(self):
-        #if not self._wrapped_conn or not self._test_connection():
-        #    LOG.debug(_('Connecting to baremetal: %s'), self.baremetal_uri)
-        #    self._wrapped_conn = self._connect(self.baremetal_uri,
-        #                               self.read_only)
-        # MK
         self._wrapped_conn = dom.BareMetalDom()
-        # _MK
         return self._wrapped_conn
     _conn = property(_get_connection)
 
@@ -246,8 +229,6 @@ class ProxyConnection(driver.ComputeDriver):
                                       instance['id'],
                                       power_state.SHUTOFF)
                 break
-
-        #self.firewall_driver.unfilter_instance(instance)
 
         if cleanup:
             self._cleanup(instance)
@@ -381,17 +362,8 @@ class ProxyConnection(driver.ComputeDriver):
                               instance['id'],
                               power_state.BUILDING,  # NOSTATE,
                               'launching')
-        #self.firewall_driver.setup_basic_filtering(instance, network_info)
-        #self.firewall_driver.prepare_instance_filter(instance, network_info)
         self._create_image(instance, xml_dict, network_info=network_info)
-        #domain = self._create_new_domain(xml)
         LOG.debug(_("instance %s: is running"), instance['name'])
-        #self.firewall_driver.apply_instance_filter(instance)
-
-        #if FLAGS.start_guests_on_host_boot:
-        #    LOG.debug(_("instance %s: setting autostart ON") %
-        #              instance['name'])
-        #    domain.setAutostart(1)
 
         def basepath(fname='', suffix=''):
             return os.path.join(FLAGS.instances_path,
@@ -508,8 +480,6 @@ class ProxyConnection(driver.ComputeDriver):
     def _fetch_image(self, target, image_id, user, project, size=None):
         """Grab image and optionally attempt to resize it"""
         images.fetch(image_id, target, user, project)
-        #if size:
-        #    disk.extend(target, size)
 
     def _create_local(self, target, local_gb):
         """Create a blank image of specified size"""
@@ -948,54 +918,7 @@ class ProxyConnection(driver.ComputeDriver):
         :return: see above description
 
         """
-
-        """xml = self._conn.getCapabilities()
-        xml = libxml2.parseDoc(xml)
-        nodes = xml.xpathEval('//host/cpu')
-        if len(nodes) != 1:
-            reason = _("'<cpu>' must be 1, but %d\n") % len(nodes)
-            reason += xml.serialize()
-            raise exception.InvalidCPUInfo(reason=reason)
-
-        cpu_info = dict()
-
-        arch_nodes = xml.xpathEval('//host/cpu/arch')
-        if arch_nodes:
-            cpu_info['arch'] = arch_nodes[0].getContent()
-
-        model_nodes = xml.xpathEval('//host/cpu/model')
-        if model_nodes:
-            cpu_info['model'] = model_nodes[0].getContent()
-
-        vendor_nodes = xml.xpathEval('//host/cpu/vendor')
-        if vendor_nodes:
-            cpu_info['vendor'] = vendor_nodes[0].getContent()
-
-        topology_nodes = xml.xpathEval('//host/cpu/topology')
-        topology = dict()
-        if topology_nodes:
-            topology_node = topology_nodes[0].get_properties()
-            while topology_node:
-                name = topology_node.get_name()
-                topology[name] = topology_node.getContent()
-                topology_node = topology_node.get_next()
-
-            keys = ['cores', 'sockets', 'threads']
-            tkeys = topology.keys()
-            if set(tkeys) != set(keys):
-                ks = ', '.join(keys)
-                reason = _("topology (%(topology)s) must have %(ks)s")
-                raise exception.InvalidCPUInfo(reason=reason % locals())
-
-        feature_nodes = xml.xpathEval('//host/cpu/feature')
-        features = list()
-        for nodes in feature_nodes:
-            features.append(nodes.get_properties().getContent())
-
-        cpu_info['topology'] = topology
-        cpu_info['features'] = features
-        return utils.dumps(cpu_info)"""
-        return self.baremetal_nodes.get_hw_info('cpu_info')  # 'TILEPro64'
+        return self.baremetal_nodes.get_hw_info('cpu_info')
 
     def block_stats(self, instance_name, disk):
         raise NotImplementedError()
@@ -1020,10 +943,12 @@ class ProxyConnection(driver.ComputeDriver):
                  'password': 'fakepassword'}
 
     def refresh_security_group_rules(self, security_group_id):
-        self.firewall_driver.refresh_security_group_rules(security_group_id)
+        # Bare metal doesn't currently support security groups
+        pass
 
     def refresh_security_group_members(self, security_group_id):
-        self.firewall_driver.refresh_security_group_members(security_group_id)
+        # Bare metal doesn't currently support security groups
+        pass
 
     def update_available_resource(self, ctxt, host):
         """Updates compute manager resource info on ComputeNode table.
@@ -1058,8 +983,7 @@ class ProxyConnection(driver.ComputeDriver):
                'xpu_info': FLAGS.xpu_info,
                'net_arch': FLAGS.net_arch,
                'net_info': FLAGS.net_info,
-               'net_mbps': FLAGS.net_mbps
-               }
+               'net_mbps': FLAGS.net_mbps}
 
         compute_node_ref = service_ref['compute_node']
         LOG.info(_('#### RLK: cpu_arch = %s ') % FLAGS.cpu_arch)
@@ -1073,145 +997,18 @@ class ProxyConnection(driver.ComputeDriver):
 
     def compare_cpu(self, cpu_info):
         raise NotImplementedError()
-        """Checks the host cpu is compatible to a cpu given by xml.
-
-        "xml" must be a part of baremetal.openReadonly().getCapabilities().
-        return values follows by virCPUCompareResult.
-        if 0 > return value, do live migration.
-
-        :param cpu_info: json string that shows cpu feature(see get_cpu_info())
-        :returns:
-            None. if given cpu info is not compatible to this server,
-            raise exception.
-
-        """
 
     def ensure_filtering_rules_for_instance(self, instance_ref,
                                             time=None):
-        """Setting up filtering rules and waiting for its completion.
-
-        To migrate an instance, filtering rules to hypervisors
-        and firewalls are inevitable on destination host.
-        ( Waiting only for filterling rules to hypervisor,
-        since filtering rules to firewall rules can be set faster).
-
-        Concretely, the below method must be called.
-        - setup_basic_filtering (for nova-basic, etc.)
-        - prepare_instance_filter(for nova-instance-instance-xxx, etc.)
-
-        to_xml may have to be called since it defines PROJNET, PROJMASK.
-        but baremetal migrates those value through migrateToURI(),
-        so , no need to be called.
-
-        Don't use thread for this method since migration should
-        not be started when setting-up filtering rules operations
-        are not completed.
-
-        :params instance_ref: nova.db.sqlalchemy.models.Instance object
-
-        """
-
-        if not time:
-            time = greenthread
-
-        # If any instances never launch at destination host,
-        # basic-filtering must be set here.
-        self.firewall_driver.setup_basic_filtering(instance_ref)
-        # setting up n)ova-instance-instance-xx mainly.
-        self.firewall_driver.prepare_instance_filter(instance_ref)
-
-        # wait for completion
-        timeout_count = range(FLAGS.live_migration_retry_count)
-        while timeout_count:
-            if self.firewall_driver.instance_filter_exists(instance_ref):
-                break
-            timeout_count.pop()
-            if len(timeout_count) == 0:
-                msg = _('Timeout migrating for %s. nwfilter not found.')
-                raise exception.Error(msg % instance_ref.name)
-            time.sleep(1)
+        raise NotImplementedError()
 
     def live_migration(self, ctxt, instance_ref, dest,
                        post_method, recover_method):
-        """Spawning live_migration operation for distributing high-load.
-
-        :params ctxt: security context
-        :params instance_ref:
-            nova.db.sqlalchemy.models.Instance object
-            instance object that is migrated.
-        :params dest: destination host
-        :params post_method:
-            post operation method.
-            expected nova.compute.manager.post_live_migration.
-        :params recover_method:
-            recovery method when any exception occurs.
-            expected nova.compute.manager.recover_live_migration.
-
-        """
-
-        greenthread.spawn(self._live_migration, ctxt, instance_ref, dest,
-                          post_method, recover_method)
-
-    def _live_migration(self, ctxt, instance_ref, dest,
-                        post_method, recover_method):
-        """Do live migration.
-
-        :params ctxt: security context
-        :params instance_ref:
-            nova.db.sqlalchemy.models.Instance object
-            instance object that is migrated.
-        :params dest: destination host
-        :params post_method:
-            post operation method.
-            expected nova.compute.manager.post_live_migration.
-        :params recover_method:
-            recovery method when any exception occurs.
-            expected nova.compute.manager.recover_live_migration.
-
-        """
-
-        # Do live migration.
-        try:
-            flaglist = FLAGS.live_migration_flag.split(',')
-            flagvals = [getattr(baremetal, x.strip()) for x in flaglist]
-            logical_sum = reduce(lambda x, y: x | y, flagvals)
-
-            if self.read_only:
-                tmpconn = self._connect(self.baremetal_uri, False)
-                dom = tmpconn.lookupByName(instance_ref.name)
-                dom.migrateToURI(FLAGS.live_migration_uri % dest,
-                                 logical_sum,
-                                 None,
-                                 FLAGS.live_migration_bandwidth)
-                tmpconn.close()
-            else:
-                dom = self._conn.lookupByName(instance_ref.name)
-                dom.migrateToURI(FLAGS.live_migration_uri % dest,
-                                 logical_sum,
-                                 None,
-                                 FLAGS.live_migration_bandwidth)
-
-        except Exception:
-            recover_method(ctxt, instance_ref, dest=dest)
-            raise
-
-        # Waiting for completion of live_migration.
-        timer = utils.LoopingCall(f=None)
-
-        def wait_for_live_migration():
-            """waiting for live migration completion"""
-            try:
-                self.get_info(instance_ref.name)['state']
-            except exception.NotFound:
-                timer.stop()
-                post_method(ctxt, instance_ref, dest)
-
-        timer.f = wait_for_live_migration
-        timer.start(interval=0.5, now=True)
+        raise NotImplementedError()
 
     def unfilter_instance(self, instance_ref):
         """See comments of same method in firewall_driver."""
-        self.firewall_driver.unfilter_instance(instance_ref)
+        pass
 
     def update_host_status(self):
         """Update the status info of the host, and return those values
@@ -1223,32 +1020,13 @@ class ProxyConnection(driver.ComputeDriver):
            True, run the update first."""
         LOG.debug(_("Updating!"))
         return self.HostState.get_host_stats(refresh=refresh)
-#        """See xenapi_conn.py implementation."""
-#        print 'UPDATING!'
-#        data = {'vcpus': self.get_vcpu_total(),
-#               'memory_mb': self.get_memory_mb_total(),
-#               'local_gb': self.get_local_gb_total(),
-#               'vcpus_used': self.get_vcpu_used(),
-#               'memory_mb_used': self.get_memory_mb_used(),
-#               'local_gb_used': self.get_local_gb_used(),
-#               'hypervisor_type': self.get_hypervisor_type(),
-#               'hypervisor_version': self.get_hypervisor_version(),
-#               'cpu_info': self.get_cpu_info(),
-#               #RLK
-#               'cpu_arch': FLAGS.cpu_arch,
-#               'xpu_arch': FLAGS.xpu_arch,
-#               'xpus': FLAGS.xpus,
-#               'xpu_info': FLAGS.xpu_info,
-#               'net_arch': FLAGS.net_arch,
-#               'net_info': FLAGS.net_info,
-#               'net_mbps': FLAGS.net_mbps}
-#        return data
 
 
 class HostState(object):
     """Manages information about the XenServer host this compute
     node is running on.
     """
+
     def __init__(self, read_only):
         super(HostState, self).__init__()
         self.read_only = read_only

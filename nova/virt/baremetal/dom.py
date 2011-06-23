@@ -54,8 +54,7 @@ class BareMetalDom(object):
         return cls._instance
 
     def __init__(self,
-                 fake_dom_file="/tftpboot/test_fake_dom_file",
-                 open=open):
+                 fake_dom_file="/tftpboot/test_fake_dom_file"):
         # Only call __init__ the first time object is instantiated
         if self._is_init:
             return
@@ -78,10 +77,10 @@ class BareMetalDom(object):
             self.fp = open(self.fake_dom_file, "w")
             self.fp.close()
             self.fp = open(self.fake_dom_file, "r+")
-        self._read_domain_from_file(open)
+        self._read_domain_from_file()
         # (TODO) read pre-existing fake domains
 
-    def _read_domain_from_file(self, open):
+    def _read_domain_from_file(self):
         """
         Read the domains from a pickled representation.
         """
