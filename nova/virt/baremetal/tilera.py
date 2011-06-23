@@ -54,7 +54,7 @@ class BareMetalNodes(object):
             cls._instance = super(BareMetalNodes, cls).__new__(cls)
         return cls._instance
 
-    def __init__(self, file_name="/tftpboot/tilera_boards", open=open):
+    def __init__(self, file_name="/tftpboot/tilera_boards"):
         # Only call __init__ the first time object is instantiated
         if self._is_init:
             return
