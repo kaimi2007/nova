@@ -13,6 +13,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import __builtin__
+
 import mox
 
 import pickle
@@ -22,6 +24,8 @@ import stubout
 from nova import flags
 from nova import test
 from nova.compute import power_state
+from nova import context
+from nova import db
 from nova.tests import fake_utils
 
 from nova.virt.baremetal import proxy
@@ -31,7 +35,16 @@ FLAGS = flags.FLAGS
 FLAGS.baremetal_driver = 'fake'
 
 
+fake_domains = [{'status': 1, 'name': 'instance-00000001',
+                 'memory_kb': 16777216, 'kernel_id': '1896115634',
+                 'ramdisk_id': '', 'image_id': '1552326678',
+                 'vcpus': 1, 'node_id': 6,
+                 'mac_address': '02:16:3e:01:4e:c9',
+                 'ip_address': '10.5.1.2'}]
+
+
 class BareMetalDomTestCase(test.TestCase):
+
     def setUp(self):
         super(BareMetalDomTestCase, self).setUp()
         # Stub out utils.execute
@@ -49,68 +62,47 @@ class BareMetalDomTestCase(test.TestCase):
     def test_read_domain_only_once(self):
         """Confirm that the domain is read from a file only once,
         even if the object is instantiated multiple times"""
+        try:
+            self.mox.StubOutWithMock(__builtin__, 'open')
+            self.mox.StubOutWithMock(dom.BareMetalDom,
+                                     "_read_domain_from_file")
 
-        fake_file = StringIO.StringIO()
+            # We expect one _read_domain_from_file call
+            open('/tftpboot/test_fake_dom_file', 'r+')
+            dom.BareMetalDom._read_domain_from_file()
 
-        def fake_open(filename, mode='r', bufsuze=0):
-            return fake_file
+            self.mox.ReplayAll()
 
-        # Stub out the _read_domain_from_file function
-        self.mox.StubOutWithMock(dom.BareMetalDom, "_read_domain_from_file")
-
-        # We expect one _read_domain_from_file call
-        dom.BareMetalDom._read_domain_from_file(fake_open)
-
-        self.mox.ReplayAll()
-
-        # Instantiate multiple instances
-        x = dom.BareMetalDom(open=fake_open)
-        x = dom.BareMetalDom(open=fake_open)
-        x = dom.BareMetalDom(open=fake_open)
+            # Instantiate multiple instances
+            x = dom.BareMetalDom()
+            x = dom.BareMetalDom()
+            x = dom.BareMetalDom()
+        finally:
+            self.mox.UnsetStubs()
 
     def test_init_no_domains(self):
 
         # Create the mock objects
-        mock_open = self.mox.CreateMockAnything()
-        self.mox.StubOutWithMock(pickle, 'load')
-        fake_file = StringIO.StringIO()
+        try:
+            self.mox.StubOutWithMock(__builtin__, 'open')
+            fake_file = StringIO.StringIO()
 
-        # Here's the sequence of events we expect
-        mock_open("/tftpboot/test_fake_dom_file", "r+").AndReturn(fake_file)
-        pickle.load(fake_file).AndReturn([])
-        mock_open("/tftpboot/test_fake_dom_file", "w").AndReturn(fake_file)
+            # Here's the sequence of events we expect
+            open('/tftpboot/test_fake_dom_file', 'r+').AndReturn(fake_file)
+            open('/tftpboot/test_fake_dom_file', 'w')
 
-        self.mox.ReplayAll()
+            self.mox.ReplayAll()
 
-        # Code under test
-        bmdom = dom.BareMetalDom(open=mock_open)
+            # Code under test
+            bmdom = dom.BareMetalDom()
 
-        self.assertEqual(bmdom.fake_dom_nums, 0)
-
-    def test_init_no_file(self):
-
-        # Create the mock objects
-        mock_open = self.mox.CreateMockAnything()
-        self.mox.StubOutWithMock(pickle, 'load')
-        fake_file = StringIO.StringIO()
-
-        # Here's the sequence of events we expect
-        mock_open("/tftpboot/test_fake_dom_file", "r+").AndRaise(\
-            IOError("file not found"))
-        mock_open("/tftpboot/test_fake_dom_file", "w").AndReturn(fake_file)
-        mock_open("/tftpboot/test_fake_dom_file", "r+").AndReturn(fake_file)
-
-        pickle.load(fake_file).AndReturn([])
-        mock_open("/tftpboot/test_fake_dom_file", "w").AndReturn(fake_file)
-
-        self.mox.ReplayAll()
-
-        # Code under test
-        bmdom = dom.BareMetalDom(open=mock_open)
-
-        self.assertEqual(bmdom.fake_dom_nums, 0)
+            self.assertEqual(bmdom.fake_dom_nums, 0)
+        finally:
+            self.mox.UnsetStubs()
 
     def test_init_remove_non_running_domain(self):
+        """Check to see that all entries in the domain list are removed
+        except for the one that is in the running state"""
 
         fake_file = StringIO.StringIO()
 
@@ -125,22 +117,85 @@ class BareMetalDomTestCase(test.TestCase):
                    dict(node_id=9, status=power_state.FAILED),
                    dict(node_id=10, status=power_state.BUILDING)]
 
-        # Here we use a fake open function instead of a mock because we
-        # aren't testing explicitly for open being called
-        def fake_open(filename, mode='r', bufsuze=0):
-            return fake_file
-
         pickle.dump(domains, fake_file)
 
-        self.mox.StubOutWithMock(pickle, 'load')
-        pickle.load(fake_file).AndReturn(domains)
-        self.mox.ReplayAll()
+        try:
+            self.mox.StubOutWithMock(__builtin__, 'open')
+            self.mox.StubOutWithMock(pickle, 'load')
+            pickle.load(fake_file).AndReturn(domains)
+            open('/tftpboot/test_fake_dom_file', 'r+').AndReturn(fake_file)
+            open('/tftpboot/test_fake_dom_file', 'w')
 
-        bmdom = dom.BareMetalDom(open=fake_open)
-        self.assertEqual(bmdom.domains, [{'node_id': 2,
-                                          'status': power_state.RUNNING}])
-        self.assertEqual(bmdom.fake_dom_nums, 1)
+            self.mox.ReplayAll()
+
+            bmdom = dom.BareMetalDom()
+
+            self.assertEqual(bmdom.domains, [{'node_id': 2,
+                                              'status': power_state.RUNNING}])
+            self.assertEqual(bmdom.fake_dom_nums, 1)
+        finally:
+            self.mox.UnsetStubs()
+
+    def test_find_domain(self):
+        domain = {'status': 1, 'name': 'instance-00000001',
+                    'memory_kb': 16777216, 'kernel_id': '1896115634',
+                    'ramdisk_id': '', 'image_id': '1552326678',
+                    'vcpus': 1, 'node_id': 6,
+                    'mac_address': '02:16:3e:01:4e:c9',
+                    'ip_address': '10.5.1.2'}
+
+        try:
+            self.mox.StubOutWithMock(__builtin__, 'open')
+            open('/tftpboot/test_fake_dom_file', 'r+').AndReturn(\
+                StringIO.StringIO(pickle.dumps(fake_domains)))
+            open('/tftpboot/test_fake_dom_file', 'w')
+
+            self.mox.ReplayAll()
+
+            bmdom = dom.BareMetalDom()
+
+            self.assertEquals(bmdom.find_domain('instance-00000001'), domain)
+        finally:
+            self.mox.UnsetStubs()
 
 
 class ProxyBareMetalTestCase(test.TestCase):
-    pass
+
+    test_ip = '10.11.12.13'
+    test_instance = {'memory_kb': '1024000',
+                     'basepath': '/some/path',
+                     'bridge_name': 'br100',
+                     'mac_address': '02:12:34:46:56:67',
+                     'vcpus': 2,
+                     'project_id': 'fake',
+                     'bridge': 'br101',
+                     'image_ref': '123456',
+                     'instance_type_id': '5'}  # m1.small
+
+    def setUp(self):
+        super(ProxyBareMetalTestCase, self).setUp()
+        self.context = context.get_admin_context()
+        fake_utils.stub_out_utils_execute(self.stubs)
+
+    def test_get_info(self):
+        baremetal_xml_template = open(FLAGS.baremetal_xml_template)
+        try:
+            self.mox.StubOutWithMock(__builtin__, 'open')
+            open(mox.StrContains('baremetal.xml.template')).AndReturn(\
+                 baremetal_xml_template)
+            open('/tftpboot/test_fake_dom_file', 'r+').AndReturn(\
+                 StringIO.StringIO(pickle.dumps(fake_domains)))
+            open('/tftpboot/test_fake_dom_file', 'w')
+            self.mox.ReplayAll()
+
+            conn = proxy.get_connection(True)
+            info = conn.get_info('instance-00000001')
+
+            self.assertEquals(info['mem'], 16777216)
+            self.assertEquals(info['state'], 1)
+            self.assertEquals(info['num_cpu'], 1)
+            self.assertEquals(info['cpu_time'], 100)
+            self.assertEquals(info['max_mem'], 16777216)
+
+        finally:
+            self.mox.UnsetStubs()

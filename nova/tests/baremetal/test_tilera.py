@@ -15,6 +15,8 @@
 #    under the License.
 #
 
+import __builtin__
+
 import StringIO
 
 from nova import test
@@ -26,27 +28,26 @@ class TileraBareMetalNodesTestCase(test.TestCase):
 
     def setUp(self):
         super(TileraBareMetalNodesTestCase, self).setUp()
-        board_info = """\
+        self.board_info = """\
 # board_id  ip_address mac_address 00:1A:CA:00:57:90 \
 00:1A:CA:00:58:98 00:1A:CA:00:58:50
-6            10.0.2.7	00:1A:CA:00:58:5C 10 16218 917 476 1 tilera_hv 1 \
+6            10.0.2.7   00:1A:CA:00:58:5C 10 16218 917 476 1 tilera_hv 1 \
 {"vendor":"tilera","model":"TILEmpower","arch":"TILEPro64","features":\
 ["8x8Grid","32bVLIW","5.6MBCache","443BOPS","37TbMesh","700MHz-866MHz",\
 "4DDR2","2XAUIMAC/PHY","2GbEMAC"],"topology":{"cores":"64"}}
-7            10.0.2.8	00:1A:CA:00:58:A4 10 16218 917 476 1 tilera_hv 1 \
+7            10.0.2.8   00:1A:CA:00:58:A4 10 16218 917 476 1 tilera_hv 1 \
 {"vendor":"tilera","model":"TILEmpower","arch":"TILEPro64","features":\
 ["8x8Grid","32bVLIW","5.6MBCache","443BOPS","37TbMesh","700MHz-866MHz",\
 "4DDR2","2XAUIMAC/PHY","2GbEMAC"],"topology":{"cores":"64"}}
-8            10.0.2.9	00:1A:CA:00:58:1A 10 16218 917 476 1 tilera_hv 1 \
+8            10.0.2.9   00:1A:CA:00:58:1A 10 16218 917 476 1 tilera_hv 1 \
 {"vendor":"tilera","model":"TILEmpower","arch":"TILEPro64","features":\
 ["8x8Grid","32bVLIW","5.6MBCache","443BOPS","37TbMesh","700MHz-866MHz",\
 "4DDR2","2XAUIMAC/PHY","2GbEMAC"],"topology":{"cores":"64"}}
-9            10.0.2.10	00:1A:CA:00:58:38 10 16385 1000 0 0 tilera_hv 1 \
+9            10.0.2.10  00:1A:CA:00:58:38 10 16385 1000 0 0 tilera_hv 1 \
 {"vendor":"tilera","model":"TILEmpower","arch":"TILEPro64","features":\
 ["8x8Grid","32bVLIW","5.6MBCache","443BOPS","37TbMesh","700MHz-866MHz",\
 "4DDR2","2XAUIMAC/PHY","2GbEMAC"],"topology":{"cores":"64"}}
 """
-        self.fake_file = StringIO.StringIO(board_info)
 
     def tearDown(self):
         super(TileraBareMetalNodesTestCase, self).tearDown()
@@ -55,25 +56,35 @@ class TileraBareMetalNodesTestCase(test.TestCase):
         tilera.BareMetalNodes._instance = None
         tilera.BareMetalNodes._is_init = False
 
-    def fake_open(self, filename, mode='r', bufsize=0):
-        return self.fake_file
-
     def test_singleton(self):
         """Confirm that the object acts like a singleton.
 
         In this case, we check that it only loads the config file once,
         even though it has been instantiated multiple times"""
 
-        mock_open = self.mox.CreateMockAnything()
-        mock_open("/tftpboot/tilera_boards", "r").AndReturn(self.fake_file)
+        try:
+            self.mox.StubOutWithMock(__builtin__, 'open')
 
-        self.mox.ReplayAll()
+            open("/tftpboot/tilera_boards", "r").AndReturn(\
+                 StringIO.StringIO(self.board_info))
 
-        nodes = tilera.BareMetalNodes("/tftpboot/tilera_boards",
-                                      open=mock_open)
-        nodes = tilera.BareMetalNodes("/tftpboot/tilera_boards",
-                                      open=mock_open)
+            self.mox.ReplayAll()
+
+            nodes = tilera.BareMetalNodes("/tftpboot/tilera_boards")
+            nodes = tilera.BareMetalNodes("/tftpboot/tilera_boards")
+        finally:
+            self.mox.UnsetStubs()
 
     def test_get_hw_info(self):
-        nodes = tilera.BareMetalNodes(open=self.fake_open)
-        self.assertEqual(nodes.get_hw_info('vcpus'), 10)
+        try:
+
+            self.mox.StubOutWithMock(__builtin__, 'open')
+
+            open("/tftpboot/tilera_boards", "r").AndReturn(\
+                StringIO.StringIO(self.board_info))
+
+            self.mox.ReplayAll()
+            nodes = tilera.BareMetalNodes()
+            self.assertEqual(nodes.get_hw_info('vcpus'), 10)
+        finally:
+            self.mox.UnsetStubs()
