@@ -13,6 +13,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import __builtin__
+
 import mox
 
 import pickle
@@ -22,6 +24,8 @@ import stubout
 from nova import flags
 from nova import test
 from nova.compute import power_state
+from nova import context
+from nova import db
 from nova.tests import fake_utils
 
 from nova.virt.baremetal import proxy
@@ -29,6 +33,16 @@ from nova.virt.baremetal import dom
 
 FLAGS = flags.FLAGS
 FLAGS.baremetal_driver = 'fake'
+
+
+
+fake_domains = [{'status': 1, 'name': 'instance-00000001', 
+                 'memory_kb': 16777216, 'kernel_id': '1896115634', 
+                 'ramdisk_id': '', 'image_id': '1552326678', 
+                 'vcpus': 1, 'node_id': 6, 
+                 'mac_address': '02:16:3e:01:4e:c9', 
+                 'ip_address': '10.5.1.2'}]
+
 
 
 class BareMetalDomTestCase(test.TestCase):
@@ -140,7 +154,72 @@ class BareMetalDomTestCase(test.TestCase):
         self.assertEqual(bmdom.domains, [{'node_id': 2,
                                           'status': power_state.RUNNING}])
         self.assertEqual(bmdom.fake_dom_nums, 1)
+        
+    def test_find_domain(self):
+        domain = {'status': 1, 'name': 'instance-00000001', 
+                    'memory_kb': 16777216, 'kernel_id': '1896115634', 
+                    'ramdisk_id': '', 'image_id': '1552326678', 
+                    'vcpus': 1, 'node_id': 6, 
+                    'mac_address': '02:16:3e:01:4e:c9', 
+                    'ip_address': '10.5.1.2'}
+        
+        def fake_open(filename, mode='r', bufsuze=0):
+            return StringIO.StringIO(pickle.dumps(fake_domains))
+
+        bmdom = dom.BareMetalDom(open=fake_open)
+
+        self.assertEquals(bmdom.find_domain('instance-00000001'), domain)
+        
 
 
 class ProxyBareMetalTestCase(test.TestCase):
-    pass
+    
+    test_ip = '10.11.12.13'
+    test_instance = {'memory_kb':     '1024000',
+                     'basepath':      '/some/path',
+                     'bridge_name':   'br100',
+                     'mac_address':   '02:12:34:46:56:67',
+                     'vcpus':         2,
+                     'project_id':    'fake',
+                     'bridge':        'br101',
+                     'image_ref':     '123456',
+                     'instance_type_id': '5'}  # m1.small
+                     
+    def setUp(self):
+        super(ProxyBareMetalTestCase, self).setUp()        
+        self.context = context.get_admin_context()
+        fake_utils.stub_out_utils_execute(self.stubs)
+        
+    def test_get_info(self):
+        baremetal_xml_template = open(FLAGS.baremetal_xml_template)
+        try:
+            self.mox.StubOutWithMock(__builtin__, 'open')
+            open(mox.StrContains('baremetal.xml.template')).AndReturn(baremetal_xml_template)
+            open('/tftpboot/test_fake_dom_file', 'r+').AndReturn(StringIO.StringIO(pickle.dumps(fake_domains)))
+            open('/tftpboot/test_fake_dom_file', 'w')            
+            self.mox.ReplayAll()
+
+            conn = proxy.get_connection(True)
+            info = conn.get_info('instance-00000001')
+
+            self.assertEquals(info['mem'], 16777216)
+            self.assertEquals(info['state'], 1)
+            self.assertEquals(info['num_cpu'], 1)
+            self.assertEquals(info['cpu_time'], 100)
+            self.assertEquals(info['max_mem'], 16777216)
+            
+        finally:
+            self.mox.UnsetStubs()            
+
+                     
+    
+   ### def test_init_host(self):
+   ### # Upon init, should set the state of the running instances
+   ###
+   ### # Need to populate the database here
+   ###     instance_ref = db.instance_create(self.context, self.test_instance)        
+   ###
+   ###     conn = proxy.get_connection(True)
+   ###     conn.init_host(host=???)
+   ###     
+    

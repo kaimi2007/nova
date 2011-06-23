@@ -54,8 +54,8 @@ class BareMetalDom(object):
         return cls._instance
 
     def __init__(self,
-                 fake_dom_file="/tftpboot/test_fake_dom_file",
-                 open=open):
+                 fake_dom_file="/tftpboot/test_fake_dom_file"):
+#                 open=open):
         # Only call __init__ the first time object is instantiated
         if self._is_init:
             return
@@ -64,7 +64,6 @@ class BareMetalDom(object):
         self.fake_dom_file = fake_dom_file
         self.domains = []
         self.fake_dom_nums = 0
-        self.domains = []
         self.fp = 0
         self.baremetal_nodes = nodes.get_baremetal_nodes()
 
