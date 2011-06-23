@@ -78,10 +78,10 @@ class BareMetalDom(object):
             self.fp = open(self.fake_dom_file, "w")
             self.fp.close()
             self.fp = open(self.fake_dom_file, "r+")
-        self._read_domain_from_file(open)
+        self._read_domain_from_file()
         # (TODO) read pre-existing fake domains
 
-    def _read_domain_from_file(self, open):
+    def _read_domain_from_file(self): #, open):
         """
         Read the domains from a pickled representation.
         """

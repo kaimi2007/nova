@@ -63,66 +63,45 @@ class BareMetalDomTestCase(test.TestCase):
     def test_read_domain_only_once(self):
         """Confirm that the domain is read from a file only once,
         even if the object is instantiated multiple times"""
+        try:
+            self.mox.StubOutWithMock(__builtin__, 'open')
+            self.mox.StubOutWithMock(dom.BareMetalDom, "_read_domain_from_file")
 
-        fake_file = StringIO.StringIO()
+            # We expect one _read_domain_from_file call
+            open('/tftpboot/test_fake_dom_file', 'r+')
+            dom.BareMetalDom._read_domain_from_file()
 
-        def fake_open(filename, mode='r', bufsuze=0):
-            return fake_file
 
-        # Stub out the _read_domain_from_file function
-        self.mox.StubOutWithMock(dom.BareMetalDom, "_read_domain_from_file")
+            self.mox.ReplayAll()
 
-        # We expect one _read_domain_from_file call
-        dom.BareMetalDom._read_domain_from_file(fake_open)
-
-        self.mox.ReplayAll()
-
-        # Instantiate multiple instances
-        x = dom.BareMetalDom(open=fake_open)
-        x = dom.BareMetalDom(open=fake_open)
-        x = dom.BareMetalDom(open=fake_open)
+            # Instantiate multiple instances
+            x = dom.BareMetalDom()
+            x = dom.BareMetalDom()
+            x = dom.BareMetalDom()
+        finally:
+            self.mox.UnsetStubs()            
+            
 
     def test_init_no_domains(self):
 
         # Create the mock objects
-        mock_open = self.mox.CreateMockAnything()
-        self.mox.StubOutWithMock(pickle, 'load')
-        fake_file = StringIO.StringIO()
+        try:
+            self.mox.StubOutWithMock(__builtin__, 'open')
+            fake_file = StringIO.StringIO()
+            
+            # Here's the sequence of events we expect
+            open('/tftpboot/test_fake_dom_file', 'r+').AndReturn(fake_file)
+            open('/tftpboot/test_fake_dom_file', 'w')
 
-        # Here's the sequence of events we expect
-        mock_open("/tftpboot/test_fake_dom_file", "r+").AndReturn(fake_file)
-        pickle.load(fake_file).AndReturn([])
-        mock_open("/tftpboot/test_fake_dom_file", "w").AndReturn(fake_file)
+            self.mox.ReplayAll()
+            
+            # Code under test
+            bmdom = dom.BareMetalDom()
+            
+            self.assertEqual(bmdom.fake_dom_nums, 0)
+        finally:
+            self.mox.UnsetStubs()
 
-        self.mox.ReplayAll()
-
-        # Code under test
-        bmdom = dom.BareMetalDom(open=mock_open)
-
-        self.assertEqual(bmdom.fake_dom_nums, 0)
-
-    def test_init_no_file(self):
-
-        # Create the mock objects
-        mock_open = self.mox.CreateMockAnything()
-        self.mox.StubOutWithMock(pickle, 'load')
-        fake_file = StringIO.StringIO()
-
-        # Here's the sequence of events we expect
-        mock_open("/tftpboot/test_fake_dom_file", "r+").AndRaise(\
-            IOError("file not found"))
-        mock_open("/tftpboot/test_fake_dom_file", "w").AndReturn(fake_file)
-        mock_open("/tftpboot/test_fake_dom_file", "r+").AndReturn(fake_file)
-
-        pickle.load(fake_file).AndReturn([])
-        mock_open("/tftpboot/test_fake_dom_file", "w").AndReturn(fake_file)
-
-        self.mox.ReplayAll()
-
-        # Code under test
-        bmdom = dom.BareMetalDom(open=mock_open)
-
-        self.assertEqual(bmdom.fake_dom_nums, 0)
 
     def test_init_remove_non_running_domain(self):
 
