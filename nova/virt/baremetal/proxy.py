@@ -133,15 +133,12 @@ class ProxyConnection(driver.ComputeDriver):
 
     def __init__(self, read_only):
         super(ProxyConnection, self).__init__()
-        #self.baremetal_uri = self.get_uri()
-
         self.baremetal_nodes = nodes.get_baremetal_nodes()
         self.baremetal_xml = open(FLAGS.baremetal_xml_template).read()
         self._wrapped_conn = None
         self.read_only = read_only
 
         self._host_state = None
-#        self.session = None
 
     @property
     def HostState(self):
@@ -170,13 +167,7 @@ class ProxyConnection(driver.ComputeDriver):
                 continue
 
     def _get_connection(self):
-        #if not self._wrapped_conn or not self._test_connection():
-        #    LOG.debug(_('Connecting to baremetal: %s'), self.baremetal_uri)
-        #    self._wrapped_conn = self._connect(self.baremetal_uri,
-        #                               self.read_only)
-        # MK
         self._wrapped_conn = dom.BareMetalDom()
-        # _MK
         return self._wrapped_conn
     _conn = property(_get_connection)
 
@@ -241,7 +232,6 @@ class ProxyConnection(driver.ComputeDriver):
                                       instance['id'],
                                       power_state.SHUTOFF)
                 break
-
 
         if cleanup:
             self._cleanup(instance)
@@ -493,8 +483,6 @@ class ProxyConnection(driver.ComputeDriver):
     def _fetch_image(self, target, image_id, user, project, size=None):
         """Grab image and optionally attempt to resize it"""
         images.fetch(image_id, target, user, project)
-        #if size:
-        #    disk.extend(target, size)
 
     def _create_local(self, target, local_gb):
         """Create a blank image of specified size"""
@@ -933,7 +921,7 @@ class ProxyConnection(driver.ComputeDriver):
         :return: see above description
 
         """
-        return self.baremetal_nodes.get_hw_info('cpu_info')  
+        return self.baremetal_nodes.get_hw_info('cpu_info')
 
     def block_stats(self, instance_name, disk):
         raise NotImplementedError()
@@ -998,8 +986,7 @@ class ProxyConnection(driver.ComputeDriver):
                'xpu_info': FLAGS.xpu_info,
                'net_arch': FLAGS.net_arch,
                'net_info': FLAGS.net_info,
-               'net_mbps': FLAGS.net_mbps
-               }
+               'net_mbps': FLAGS.net_mbps}
 
         compute_node_ref = service_ref['compute_node']
         LOG.info(_('#### RLK: cpu_arch = %s ') % FLAGS.cpu_arch)
@@ -1016,16 +1003,15 @@ class ProxyConnection(driver.ComputeDriver):
 
     def ensure_filtering_rules_for_instance(self, instance_ref,
                                             time=None):
-            raise NotImplementedError()
+        raise NotImplementedError()
 
     def live_migration(self, ctxt, instance_ref, dest,
                        post_method, recover_method):
-            raise NotImplementedError()
+        raise NotImplementedError()
 
     def unfilter_instance(self, instance_ref):
         """See comments of same method in firewall_driver."""
         pass
-
 
     def update_host_status(self):
         """Update the status info of the host, and return those values
@@ -1037,32 +1023,13 @@ class ProxyConnection(driver.ComputeDriver):
            True, run the update first."""
         LOG.debug(_("Updating!"))
         return self.HostState.get_host_stats(refresh=refresh)
-#        """See xenapi_conn.py implementation."""
-#        print 'UPDATING!'
-#        data = {'vcpus': self.get_vcpu_total(),
-#               'memory_mb': self.get_memory_mb_total(),
-#               'local_gb': self.get_local_gb_total(),
-#               'vcpus_used': self.get_vcpu_used(),
-#               'memory_mb_used': self.get_memory_mb_used(),
-#               'local_gb_used': self.get_local_gb_used(),
-#               'hypervisor_type': self.get_hypervisor_type(),
-#               'hypervisor_version': self.get_hypervisor_version(),
-#               'cpu_info': self.get_cpu_info(),
-#               #RLK
-#               'cpu_arch': FLAGS.cpu_arch,
-#               'xpu_arch': FLAGS.xpu_arch,
-#               'xpus': FLAGS.xpus,
-#               'xpu_info': FLAGS.xpu_info,
-#               'net_arch': FLAGS.net_arch,
-#               'net_info': FLAGS.net_info,
-#               'net_mbps': FLAGS.net_mbps}
-#        return data
 
 
 class HostState(object):
     """Manages information about the XenServer host this compute
     node is running on.
     """
+
     def __init__(self, read_only):
         super(HostState, self).__init__()
         self.read_only = read_only
