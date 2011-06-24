@@ -85,5 +85,5 @@ class BareMetalNodes(object):
     def init_kmsg(self, node_id):
         pass
 
-    def init_kmsg(self, node_id):
+    def delete_kmsg(self, node_id):
         pass
