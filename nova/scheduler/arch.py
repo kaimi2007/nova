@@ -35,27 +35,16 @@ from nova import db
 class ArchitectureScheduler(driver.Scheduler):
     """Implements Scheduler as a random node selector."""
 
-    def grab_children(father):
-        local_list = []
-        for key, value in father.iteritems():
-            local_list.extend(grab_children(value))
-        return local_list
+    def testme(self):
+        print 'ok'
 
     def hosts_up_with_arch(self, context, topic, instance_id):
-#    def hosts_up_with_arch(self, context, topic, instance_id, instance_type):
 
-        """Return the list of hosts that have a running service
-        for cpu_arch and others.
+        """Figure out what is requested
         """
-
-#        """Figure out what is requested
-#        """
         instances = db.instance_get_all_by_instance_id(context,
                                                        instance_id)
-
-        LOG.debug(_("## instances %s"), instances)
         LOG.debug(_("## instance.id %s"), instances[0].id)
-        LOG.debug(_("## instance.cpu_arch %s"), instances[0].cpu_arch)
 
         services = db.service_get_all_by_topic(context, topic)
         LOG.debug(_("## services %s"), services)
@@ -105,12 +94,15 @@ class ArchitectureScheduler(driver.Scheduler):
 
                 resource_cap = {}
                 for cap, value in service_dict_cap.iteritems():
-                    if type(value) is int:
-                        value = str(value)
-
-                    # simple case: one value
-                    if value.find(':') == -1 and value.find(',') == -1:
+                    if type(value) is int:  # value is int
                         resource_cap[cap] = value
+
+                    # string and one value
+                    elif value.find(':') == -1 and value.find(',') == -1:
+                        try:
+                            resource_cap[cap] = int(value)
+                        except:
+                            resource_cap[cap] = value
 
                     # complex; multi-level key-value pairs.
                     # example: cpu_info = { "vendor":"intel", features=
@@ -129,7 +121,10 @@ class ArchitectureScheduler(driver.Scheduler):
                         for pair in splitted:
                             if pair.find(':') != -1:  # key:value pair
                                 if len(new_key) != 0:
-                                    resource_cap[new_key] = new_val
+                                    try:
+                                        resource_cap[new_key] = int(new_val)
+                                    except:
+                                        resource_cap[new_key] = new_val
                                 nspl = pair.split(':')
                                 right = nspl[-2].rfind('"', 0, len(nspl[-2]))
                                 left = nspl[-2].rfind('"', 0, right)
@@ -144,7 +139,10 @@ class ArchitectureScheduler(driver.Scheduler):
                                     new_val += "," + pair[left + 1:right]
                                 else:
                                     new_val += ", " + pair
-                        resource_cap[new_key] = new_val
+                        try:
+                            resource_cap[new_key] = int(new_val)
+                        except:
+                            resource_cap[new_key] = new_val
 
                 # if the same architecture is found
                 if ((wanted_cpu_arch is None) \
@@ -187,13 +185,19 @@ class ArchitectureScheduler(driver.Scheduler):
                                     flag_different = 1
                                     if (resource_cap[kkey] is None):
                                         LOG.debug(_("## cap is None"))
+                                    elif type(resource_cap[kkey]) is int:
+                                        LOG.debug(_("## offered(int)=%s"), \
+                                            resource_cap[kkey])
+                                        if int(wanted_value) <= \
+                                            resource_cap[kkey]:
+
+                                            LOG.debug(_("## found"))
+                                            flag_different = 0
+                                        else:
+                                            LOG.debug(_("**not found"))
                                     else:
                                         # get wanted list first
                                         wanted = wanted_value.split(',')
-
-                                        if type(resource_cap[kkey]) is int:
-                                            resource_cap[kkey] = \
-                                                str(resource_cap[kkey])
 
                                         # get provided list now
                                         if resource_cap[kkey].find(',') == -1:
@@ -202,7 +206,7 @@ class ArchitectureScheduler(driver.Scheduler):
                                             offered = resource_cap[kkey]. \
                                                 split(',')
 
-                                        LOG.debug(_("## offered=%s"), \
+                                        LOG.debug(_("## offered(str)=%s"), \
                                                 offered)
 
                                         # check if the required are provided
