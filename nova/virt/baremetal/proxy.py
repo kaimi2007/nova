@@ -426,9 +426,8 @@ class ProxyConnection(driver.ComputeDriver):
         utils.execute('sudo', 'chown', os.getuid(), console_log)
 
         fd = self._conn.find_domain(instance['name'])
-        node_ip = self.baremetal_nodes.find_ip_w_id(fd['node_id'])
 
-        self.baremetal_nodes.get_console_output(console_log)
+        self.baremetal_nodes.get_console_output(console_log, fd['node_id'])
 
         fpath = console_log
 
@@ -524,7 +523,6 @@ class ProxyConnection(driver.ComputeDriver):
         #Test: copying original baremetal images
         bp = basepath(suffix='')
         self.baremetal_nodes.get_image(bp)
-        self.baremetal_nodes.init_kmsg()
         #_MK
 
         if not disk_images:

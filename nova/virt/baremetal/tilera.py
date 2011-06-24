@@ -272,8 +272,9 @@ class BareMetalNodes(object):
 
         return power_state.RUNNING
 
-    def get_console_output(self, console_log):
-        kmsg_dump_file = "/tftpboot/kmsg_dump_0"  # + str(fd['node_id'])
+    def get_console_output(self, console_log, node_id):
+        node_ip = self.find_ip_w_id(node_id)
+        kmsg_dump_file = "/tftpboot/kmsg_dump_" + str(node_id)
         size = os.path.getsize(kmsg_dump_file)
         head_cmd = "head -400 /proc/kmsg >> /etc/kmsg_dump"
         if size <= 0:
@@ -305,9 +306,13 @@ class BareMetalNodes(object):
         path4 = "/tftpboot/fs_" + str(node_id)
         utils.execute('umount', '-l', path4)
 
-    def init_kmsg(self):
-        kmsg_dump_file = "/tftpboot/kmsg_dump_0"  # + str(node_id)
+    def init_kmsg(self, node_id):
+        kmsg_dump_file = "/tftpboot/kmsg_dump_" + str(node_id)
         utils.execute('touch', kmsg_dump_file)
+
+    def delete_kmsg(self, node_id):
+        kmsg_dump_file = "/tftpboot/kmsg_dump_" + str(node_id)
+        utils.execute('rm', kmsg_dump_file)
 
 #baremetal_nodes = _baremetal_nodes()
 #_MK

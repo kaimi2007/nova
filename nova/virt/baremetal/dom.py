@@ -150,8 +150,7 @@ class BareMetalDom(object):
             self.baremetal_nodes.deactivate_node(fd['node_id'])
             LOG.debug(_("--> after deactivate node"))
 
-            kmsg_dump_file = "/tftpboot/kmsg_dump_0"  # + str(fd['node_id'])
-            utils.execute('rm', kmsg_dump_file)
+            self.baremetal_nodes.delete_kmsg(fd['node_id'])
             self.domains.remove(fd)
             LOG.debug(_("domains: "))
             LOG.debug(_(self.domains))
@@ -180,6 +179,7 @@ class BareMetalDom(object):
             LOG.debug(_("No idle bare-metal node exits"))
             raise exception.NotFound("No free nodes available")
 
+        self.baremetal_nodes.init_kmsg(node_id)
         node_ip = self.baremetal_nodes.find_ip_w_id(node_id)
 
         new_dom = {'node_id': node_id,
