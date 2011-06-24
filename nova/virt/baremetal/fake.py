@@ -82,5 +82,8 @@ class BareMetalNodes(object):
     def set_image(self, bpath, node_id):
         pass
 
-    def init_kmsg(self):
+    def init_kmsg(self, node_id):
+        pass
+
+    def init_kmsg(self, node_id):
         pass
