@@ -2189,11 +2189,32 @@ def provider_fw_rule_create(context, rule):
     return fw_rule_ref
 
 
+@require_admin_context
 def provider_fw_rule_get_all(context):
     session = get_session()
     return session.query(models.ProviderFirewallRule).\
                    filter_by(deleted=can_read_deleted(context)).\
                    all()
+
+
+@require_admin_context
+def provider_fw_rule_get_all_by_cidr(context, cidr):
+    session = get_session()
+    return session.query(models.ProviderFirewallRule).\
+                   filter_by(deleted=can_read_deleted(context)).\
+                   filter_by(cidr=cidr).\
+                   all()
+
+
+@require_admin_context
+def provider_fw_rule_destroy(context, rule_id):
+    session = get_session()
+    with session.begin():
+        session.query(models.ProviderFirewallRule).\
+                filter_by(id=rule_id).\
+                update({'deleted': True,
+                        'deleted_at': utils.utcnow(),
+                        'updated_at': literal_column('updated_at')})
 
 
 ###################
@@ -2600,14 +2621,21 @@ def instance_type_create(_context, values):
     return instance_type_ref
 
 
-def _inst_type_query_to_dict(inst_type_query):
+def _dict_with_extra_specs(inst_type_query):
     """Takes an instance type query returned by sqlalchemy
-    and returns it as a dictionary.
+    and returns it as a dictionary, converting the extra_specs
+    entry from a list of dicts:
+
+    'extra_specs' : [{'key': 'k1', 'value': 'v1', ...}, ...]
+
+    to a single dict:
+
+    'extra_specs' : {'k1': 'v1'}
+
     """
-    extra_specs_objs = inst_type_query['extra_specs']
+    inst_type_dict = dict(inst_type_query)
     extra_specs = dict([(x['key'], x['value']) for x in \
                         inst_type_query['extra_specs']])
-    inst_type_dict = dict(inst_type_query)
     inst_type_dict['extra_specs'] = extra_specs
     return inst_type_dict
 
@@ -2632,7 +2660,7 @@ def instance_type_get_all(context, inactive=False):
     if inst_types:
         inst_dict = {}
         for i in inst_types:
-            inst_dict[i['name']] = _inst_type_query_to_dict(i)
+            inst_dict[i['name']] = _dict_with_extra_specs(i)
         return inst_dict
     else:
         raise exception.NoInstanceTypesFound()
@@ -2650,7 +2678,7 @@ def instance_type_get_by_id(context, id):
     if not inst_type:
         raise exception.InstanceTypeNotFound(instance_type=id)
     else:
-        return _inst_type_query_to_dict(inst_type)
+        return _dict_with_extra_specs(inst_type)
 
 
 @require_context
@@ -2664,7 +2692,7 @@ def instance_type_get_by_name(context, name):
     if not inst_type:
         raise exception.InstanceTypeNotFoundByName(instance_type_name=name)
     else:
-        return _inst_type_query_to_dict(inst_type)
+        return _dict_with_extra_specs(inst_type)
 
 
 @require_context
@@ -2678,7 +2706,7 @@ def instance_type_get_by_flavor_id(context, id):
     if not inst_type:
         raise exception.FlavorNotFound(flavor_id=id)
     else:
-        return _inst_type_query_to_dict(inst_type)
+        return _dict_with_extra_specs(inst_type)
 
 
 @require_admin_context
