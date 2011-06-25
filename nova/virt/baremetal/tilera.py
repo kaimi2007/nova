@@ -121,10 +121,9 @@ class BareMetalNodes(object):
     def check_idle_node(self):
         """check an idle node"""
         for item in self.nodes:
-
             if item['status'] == 0:
                 return item['node_id']
-        return -1
+        raise exception.NotFound("No free nodes available")
 
     def get_status(self):
         pass
@@ -135,7 +134,7 @@ class BareMetalNodes(object):
             if item['status'] == 0:
                 item['status'] = 1      # make status RUNNING
                 return item['node_id']
-        return -1
+        raise exception.NotFound("No free nodes available")
 
     def find_ip_w_id(self, id):
         for item in self.nodes:
@@ -147,8 +146,6 @@ class BareMetalNodes(object):
         for item in self.nodes:
             if item['node_id'] == str(node_id):
                 item['status'] = 0  # make status IDLE
-                return
-        return -1
 
     #PDU mode: 1-ON, 2-OFF, 3-REBOOT
     def power_mgr(self, node_id, mode):
@@ -171,9 +168,7 @@ class BareMetalNodes(object):
             if item['node_id'] == node_id:
                 LOG.debug(_("status of node is set to 0"))
                 item['status'] = 0
-
         self.power_mgr(node_id, 2)
-        return []
 
     def network_set(self, node_ip, mac_address, ip_address):
         utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \

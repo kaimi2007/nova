@@ -26,7 +26,7 @@ class BareMetalNodes(object):
         return "127.0.0.1"
 
     def deactivate_node(self, node_id):
-        return []
+        pass
 
     def get_hw_info(self, field):
         return "fake"

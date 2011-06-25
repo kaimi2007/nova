@@ -166,7 +166,7 @@ class BareMetalDom(object):
     def create_domain(self, xml_dict, bpath):
         """add a domain to domains list
            and activate a idle Bare-metal node"""
-        LOG.debug(_("1////////////////////"))
+        LOG.debug(_("===== Domain is being created ====="))
         fd = self.find_domain(xml_dict['name'])
         if fd != []:
             LOG.debug(_("domain with the same name already exists"))
@@ -175,10 +175,6 @@ class BareMetalDom(object):
         LOG.debug(_("create_domain: before get_idle_node"))
 
         node_id = self.baremetal_nodes.get_idle_node()
-        if node_id == -1:
-            LOG.debug(_("No idle bare-metal node exits"))
-            raise exception.NotFound("No free nodes available")
-
         self.baremetal_nodes.init_kmsg(node_id)
         node_ip = self.baremetal_nodes.find_ip_w_id(node_id)
 
