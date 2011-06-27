@@ -27,10 +27,10 @@ from nova import rpc
 from nova.scheduler import driver
 from nova.scheduler import manager
 
-class ArchSchedulerTestCase(test.TestCase):
-    """Test case for Archscheduler"""
+class HeteroSchedulerTestCase(test.TestCase):
+    """Test case for heterogeneous scheduler"""
     def setUp(self):
-        super(ArchSchedulerTestCase, self).setUp()
+        super(HeteroSchedulerTestCase, self).setUp()
         driver = 'nova.scheduler.hetero.HeterogeneousScheduler'
         self.context = context.get_admin_context()
         self.flags(scheduler_driver = driver)
@@ -58,24 +58,8 @@ class ArchSchedulerTestCase(test.TestCase):
         self.inst_ref = db.instance_create(self.context, instance)        
 
     def tearDown(self):
-        #db.instance_destroy(self.context, self.inst)  
-        super(ArchSchedulerTestCase, self).tearDown()
+        super(HeteroSchedulerTestCase, self).tearDown()
 
-#####    def _create_instance(self, **kwargs):
-#####        """Create a test instance and instance type"""
-#####        inst = {}
-#####        inst['user_id'] = 'admin'
-#####        inst['project_id'] = kwargs.get('project_id', 'fake')
-#####        inst['vcpus'] = kwargs.get('vcpus', 1)
-#####        inst['memory_mb'] = kwargs.get('memory_mb', 10)
-#####        inst['local_gb'] = kwargs.get('local_gb', 2)
-#####        inst['flavorid'] = kwargs.get('flavorid', 999)
-#####        inst['extra_specs'] = specs
-#####        ref = db.api.instance_type_create(self.context,
-#####                                           inst)
-#####        inst['instance_type_id'] = kwargs.get('inst_type_id', 
-#####                                              ref.id)
-#####        return db.instance_create(self.context, inst)['id']
 
     def test_no_hosts(self):
         scheduler = manager.SchedulerManager()  
@@ -88,8 +72,6 @@ class ArchSchedulerTestCase(test.TestCase):
                           instance_id = self.inst_ref.id,
                           request_spec={'instance_type': self.instance_type,
                                         'num_instances': 1})
-
-
     
     def test_one_host_no_match_cap(self):
         scheduler = manager.SchedulerManager()  
