@@ -77,7 +77,7 @@ class ArchSchedulerTestCase(test.TestCase):
 #####                                              ref.id)
 #####        return db.instance_create(self.context, inst)['id']
 
-    def test_archschedule_no_hosts(self):
+    def test_no_hosts(self):
         scheduler = manager.SchedulerManager()  
         self.mox.StubOutWithMock(rpc, 'cast', use_mock_anything = True)        
         self.mox.ReplayAll()
@@ -91,7 +91,7 @@ class ArchSchedulerTestCase(test.TestCase):
 
 
     
-    def test_archschedule_one_host_no_match_cap(self):
+    def test_one_host_no_match_cap(self):
         scheduler = manager.SchedulerManager()  
         caps = {'vcpus': 16, 'memory_mb': 32, 'local_gb': 100,
                'vcpus_used': 1, 'local_gb_used': 10, 'host_memory_free': 21651,
@@ -114,7 +114,7 @@ class ArchSchedulerTestCase(test.TestCase):
                                         'num_instances': 1})
 
     
-    def test_archschedule_one_host_match_cap(self):
+    def test_one_host_match_cap(self):
         scheduler = manager.SchedulerManager()  
         caps = {'vcpus': 16, 'memory_mb': 32, 'local_gb': 100,
                'vcpus_used': 1, 'local_gb_used': 10, 'host_memory_free': 21651,
@@ -146,11 +146,12 @@ class ArchSchedulerTestCase(test.TestCase):
                            request_spec= request_spec)
 
     
-    def test_archschedule_two_host_one_match_cap(self):
+    def test_two_host_one_match_cap(self):
         scheduler = manager.SchedulerManager()  
         dict1 = {'vcpus': 16, 'memory_mb': 32, 'local_gb': 100,
                'vcpus_used': 1, 'local_gb_used': 10, 'host_memory_free': 21651,
                'host_memory_total': 23640, 'disk_total': 97, 'disk_used': 92,
+               'disk_available': 5,
                'hypervisor_type': 'qemu', 'hypervisor_version': 12003,
                'cpu_info': '{"vendor": "Intel", "model": "Nehalem", \
                "arch": "x86_64", "features": ["rdtscp", "dca", "xtpr", "tm2",\
@@ -164,6 +165,7 @@ class ArchSchedulerTestCase(test.TestCase):
         dict2 = {'vcpus': 16, 'memory_mb': 32, 'local_gb': 100,
                'vcpus_used': 1, 'local_gb_used': 10, 'host_memory_free': 21651,
                'host_memory_total': 23640, 'disk_total': 97, 'disk_used': 92,
+               'disk_available': 5,
                'hypervisor_type': 'qemu', 'hypervisor_version': 12003,
                'cpu_info': '{"vendor": "Intel", "model": "Nehalem", \
                "arch": "x86_64", "features": ["rdtscp", "dca", "xtpr", "tm2",\
@@ -184,15 +186,16 @@ class ArchSchedulerTestCase(test.TestCase):
                   'args': {'instance_id': self.inst_ref.id,
                             'request_spec': request_spec}})
         self.mox.ReplayAll()
-        host = scheduler.run_instance(self.context,
-                                      topic = 'compute',
-                                      instance_id = self.inst_ref.id,
-                                      request_spec = request_spec)
+        scheduler.run_instance(self.context,
+                               topic = 'compute',
+                               instance_id = self.inst_ref.id,
+                               request_spec = request_spec)
     
-    def test_archschedule_two_host_two_match_cap(self):
+    def two_host_two_match_cap(self):
         scheduler = manager.SchedulerManager()  
         dict1 = {'vcpus': 16, 'memory_mb': 32, 'local_gb': 100,
                'vcpus_used': 1, 'local_gb_used': 10, 'host_memory_free': 21651,
+               'disk_available': 5,
                'host_memory_total': 23640, 'disk_total': 97, 'disk_used': 92,
                'hypervisor_type': 'qemu', 'hypervisor_version': 12003,
                'cpu_info': '{"vendor": "Intel", "model": "Nehalem", \
@@ -204,6 +207,7 @@ class ArchSchedulerTestCase(test.TestCase):
         dict2 = {'vcpus': 16, 'memory_mb': 32, 'local_gb': 100,
                'vcpus_used': 1, 'local_gb_used': 10, 'host_memory_free': 21651,
                'host_memory_total': 23640, 'disk_total': 97, 'disk_used': 92,
+               'disk_available': 5,
                'hypervisor_type': 'qemu', 'hypervisor_version': 12003,
                'cpu_info': '{"vendor": "Intel", "model": "Nehalem", \
                "arch": "x86_64", "features": ["rdtscp", "dca", "xtpr", "tm2",\
@@ -211,6 +215,8 @@ class ArchSchedulerTestCase(test.TestCase):
                "acpi", "ds", "vme"], "topology": {"cores": "4", "threads": "1",\
                "sockets": "2"}}', 'cpu_arch': 'x86_64', 'xpus_used': 1,
                'xpu_arch': 'fermi', 'xpus': 1, 'xpu_model': "Tesla S2050"}
+        request_spec = {'instance_type': self.instance_type,
+                        'num_instances': 1}
         scheduler.zone_manager.update_service_capabilities("compute",
                                                            "host1",
                                                            dict1)
@@ -222,9 +228,11 @@ class ArchSchedulerTestCase(test.TestCase):
         random.random().AndReturn(0)
         rpc.cast(self.context,
                  'compute.host2',
-                 {'method': 'run',
-                  'args': {'instance_id': self.inst}})
+                 {'method': 'run_instance',
+                  'args': {'instance_id': self.inst_ref.id,
+                           'request_spec': request_spec}})
         self.mox.ReplayAll()
-        host = scheduler.run(self.context,
-                           topic = 'compute',
-                           instance_id = self.inst)
+        scheduler.run_instance(self.context,
+                               topic = 'compute',
+                               instance_id = self.inst_ref.id,
+                               request_spec = request_spec)
