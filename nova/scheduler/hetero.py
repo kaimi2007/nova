@@ -28,6 +28,7 @@ from nova import db
 from nova.scheduler import host_filter
 from nova.scheduler import driver
 
+
 class HeterogeneousScheduler(driver.Scheduler):
     """Very simple heterogeneous scheduler that selects at random
     from nodes that satisfy the instance requirements"""
@@ -35,18 +36,14 @@ class HeterogeneousScheduler(driver.Scheduler):
     def schedule_run_instance(self, context, instance_id, request_spec,
                               *args, **kwargs):
         """This method is called from nova.compute.api to provision
-        an instance."""                    
+        an instance."""
         instance_type = request_spec['instance_type']
         filter = host_filter.InstanceTypeFilter()
         name, cooked = filter.instance_type_to_filter(instance_type)
         # filter_hosts returns a list of (host, cap) pairs
         host_cap_pairs = filter.filter_hosts(self.zone_manager, cooked)
-        hosts = [x[0] for x in host_cap_pairs]        
-        if len(hosts)>0:
+        hosts = [x[0] for x in host_cap_pairs]
+        if len(hosts) > 0:
             return hosts[int(random.random() * len(hosts))]
         else:
             raise driver.NoValidHost(_("No hosts satisfy requirements"))
-
-
-        
-

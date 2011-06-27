@@ -1593,6 +1593,7 @@ class LibvirtConnection(driver.ComputeDriver):
            True, run the update first."""
         return self.HostState.get_host_stats(refresh=refresh)
 
+
 class HostState(object):
     """Manages information about the KVM host this compute
     node is running on.

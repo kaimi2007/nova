@@ -53,7 +53,6 @@ flags.DEFINE_string('default_host_filter',
                     'Which filter to use for filtering hosts.')
 
 
-
 class HostFilter(object):
     """Base class for host filters."""
 
