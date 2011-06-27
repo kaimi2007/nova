@@ -103,12 +103,8 @@ class HeteroSchedulerTestCase(test.TestCase):
                'host_memory_total': 23640, 'disk_total': 97, 'disk_used': 92,
                'disk_available': 5,
                'hypervisor_type': 'qemu', 'hypervisor_version': 12003,
-               'cpu_model': 'Nehalem',
-               'cpu_info': '{"vendor": "Intel", "model": "Nehalem", \
-               "arch": "x86_64", "features": ["rdtscp", "dca", "xtpr", "tm2",\
-               "est", "vmx", "ds_cpl", "monitor", "pbe", "tm", "ht", "ss", \
-               "acpi", "ds", "vme"], "topology": {"cores": "4", "threads": "1",\
-               "sockets": "2"}}', 'cpu_arch': 'x86_64', 'xpus_used': 1,
+               'cpu_arch': "x86_64",
+               'cpu_model': "Nehalem",
                'xpu_arch': 'fermi', 'xpus': 1, 'xpu_model': "Tesla S2050"}
         scheduler.zone_manager.update_service_capabilities("compute",
                                                            "host1",
@@ -135,11 +131,8 @@ class HeteroSchedulerTestCase(test.TestCase):
                'host_memory_total': 23640, 'disk_total': 97, 'disk_used': 92,
                'disk_available': 5,
                'hypervisor_type': 'qemu', 'hypervisor_version': 12003,
-               'cpu_info': '{"vendor": "Intel", "model": "Nehalem", \
-               "arch": "x86_64", "features": ["rdtscp", "dca", "xtpr", "tm2",\
-               "est", "vmx", "ds_cpl", "monitor", "pbe", "tm", "ht", "ss", \
-               "acpi", "ds", "vme"], "topology": {"cores": "4", "threads": "1",\
-               "sockets": "2"}}', 'cpu_arch': 'x86_64', 'xpus_used': 1,
+               'cpu_arch': "x86_64",
+               'cpu_model': "Nehalem",
                'xpu_arch': 'fermi', 'xpus': 1, 'xpu_model': ""}
         scheduler.zone_manager.update_service_capabilities("compute",
                                                            "host1",
@@ -148,12 +141,8 @@ class HeteroSchedulerTestCase(test.TestCase):
                'vcpus_used': 1, 'local_gb_used': 10, 'host_memory_free': 21651,
                'host_memory_total': 23640, 'disk_total': 97, 'disk_used': 92,
                'disk_available': 5,
-               'hypervisor_type': 'qemu', 'hypervisor_version': 12003,
-               'cpu_info': '{"vendor": "Intel", "model": "Nehalem", \
-               "arch": "x86_64", "features": ["rdtscp", "dca", "xtpr", "tm2",\
-               "est", "vmx", "ds_cpl", "monitor", "pbe", "tm", "ht", "ss", \
-               "acpi", "ds", "vme"], "topology": {"cores": "4", "threads": "1",\
-               "sockets": "2"}}', 'cpu_arch': 'x86_64', 'xpus_used': 1,
+               'cpu_arch': "x86_64",
+               'cpu_model': "Nehalem",
                'xpu_arch': 'fermi', 'xpus': 1, 'xpu_model': "Tesla S2050"}
         request_spec = {'instance_type': self.instance_type,
                         'num_instances': 1}
@@ -180,22 +169,16 @@ class HeteroSchedulerTestCase(test.TestCase):
                'disk_available': 5,
                'host_memory_total': 23640, 'disk_total': 97, 'disk_used': 92,
                'hypervisor_type': 'qemu', 'hypervisor_version': 12003,
-               'cpu_info': '{"vendor": "Intel", "model": "Nehalem", \
-               "arch": "x86_64", "features": ["rdtscp", "dca", "xtpr", "tm2",\
-               "est", "vmx", "ds_cpl", "monitor", "pbe", "tm", "ht", "ss", \
-               "acpi", "ds", "vme"], "topology": {"cores": "4", "threads": "1",\
-               "sockets": "2"}}', 'cpu_arch': 'x86_64', 'xpus_used': 1,
+               'cpu_arch': "x86_64",
+               'cpu_model': "Nehalem",
                'xpu_arch': 'fermi', 'xpus': 1, 'xpu_model': "Tesla S2050"}
         dict2 = {'vcpus': 16, 'memory_mb': 32, 'local_gb': 100,
                'vcpus_used': 1, 'local_gb_used': 10, 'host_memory_free': 21651,
                'host_memory_total': 23640, 'disk_total': 97, 'disk_used': 92,
                'disk_available': 5,
                'hypervisor_type': 'qemu', 'hypervisor_version': 12003,
-               'cpu_info': '{"vendor": "Intel", "model": "Nehalem", \
-               "arch": "x86_64", "features": ["rdtscp", "dca", "xtpr", "tm2",\
-               "est", "vmx", "ds_cpl", "monitor", "pbe", "tm", "ht", "ss", \
-               "acpi", "ds", "vme"], "topology": {"cores": "4", "threads": "1",\
-               "sockets": "2"}}', 'cpu_arch': 'x86_64', 'xpus_used': 1,
+               'cpu_arch': "x86_64",
+               'cpu_model': "Nehalem",
                'xpu_arch': 'fermi', 'xpus': 1, 'xpu_model': "Tesla S2050"}
         request_spec = {'instance_type': self.instance_type,
                         'num_instances': 1}
