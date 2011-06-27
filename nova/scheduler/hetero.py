@@ -37,16 +37,11 @@ class HeterogeneousScheduler(driver.Scheduler):
         """This method is called from nova.compute.api to provision
         an instance."""                    
         instance_type = request_spec['instance_type']
-        LOG.debug("instance_type: %s", instance_type)
         filter = host_filter.InstanceTypeFilter()
-        LOG.debug("About to filter")
         name, cooked = filter.instance_type_to_filter(instance_type)
-        LOG.debug("Cooked")
         # filter_hosts returns a list of (host, cap) pairs
         host_cap_pairs = filter.filter_hosts(self.zone_manager, cooked)
         hosts = [x[0] for x in host_cap_pairs]        
-        LOG.debug(hosts[0])
-        LOG.debug("Filtered")
         if len(hosts)>0:
             return hosts[int(random.random() * len(hosts))]
         else:
