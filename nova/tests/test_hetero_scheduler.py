@@ -79,7 +79,7 @@ class HeteroSchedulerTestCase(test.TestCase):
                'vcpus_used': 1, 'local_gb_used': 10, 'host_memory_free': 21651,
                'host_memory_total': 23640, 'disk_total': 97, 'disk_used': 92,
                'disk_available': 5,
-               'xpu_arch': 'radeon', 'xpus': 1, 'xpu_model': "ATI x345"}
+               'xpu_arch': 'radeon', 'xpu_model': "ATI x345"}
         scheduler.zone_manager.update_service_capabilities("compute",
                                                            "host1",
                                                            caps)
@@ -105,7 +105,7 @@ class HeteroSchedulerTestCase(test.TestCase):
                'hypervisor_type': 'qemu', 'hypervisor_version': 12003,
                'cpu_arch': "x86_64",
                'cpu_model': "Nehalem",
-               'xpu_arch': 'fermi', 'xpus': 1, 'xpu_model': "Tesla S2050"}
+               'xpu_arch': 'fermi', 'xpu_model': "Tesla S2050"}
         scheduler.zone_manager.update_service_capabilities("compute",
                                                            "host1",
                                                            caps)
@@ -126,30 +126,28 @@ class HeteroSchedulerTestCase(test.TestCase):
     
     def test_two_host_one_match_cap(self):
         scheduler = manager.SchedulerManager()  
-        dict1 = {'vcpus': 16, 'memory_mb': 32, 'local_gb': 100,
+        caps_host1 = {'vcpus': 16, 'memory_mb': 32, 'local_gb': 100,
                'vcpus_used': 1, 'local_gb_used': 10, 'host_memory_free': 21651,
                'host_memory_total': 23640, 'disk_total': 97, 'disk_used': 92,
                'disk_available': 5,
                'hypervisor_type': 'qemu', 'hypervisor_version': 12003,
-               'cpu_arch': "x86_64",
-               'cpu_model': "Nehalem",
-               'xpu_arch': 'fermi', 'xpus': 1, 'xpu_model': ""}
+               'cpu_arch': "x86_6"}
         scheduler.zone_manager.update_service_capabilities("compute",
                                                            "host1",
-                                                           dict1)
-        dict2 = {'vcpus': 16, 'memory_mb': 32, 'local_gb': 100,
+                                                           caps_host1)
+        caps_host2 = {'vcpus': 16, 'memory_mb': 32, 'local_gb': 100,
                'vcpus_used': 1, 'local_gb_used': 10, 'host_memory_free': 21651,
                'host_memory_total': 23640, 'disk_total': 97, 'disk_used': 92,
                'disk_available': 5,
                'cpu_arch': "x86_64",
                'cpu_model': "Nehalem",
-               'xpu_arch': 'fermi', 'xpus': 1, 'xpu_model': "Tesla S2050"}
+               'xpu_arch': 'fermi', 'xpu_model': "Tesla S2050"}
         request_spec = {'instance_type': self.instance_type,
                         'num_instances': 1}
 
         scheduler.zone_manager.update_service_capabilities("compute",
                                                            "host2",
-                                                           dict2)
+                                                           caps_host2)
         self.mox.StubOutWithMock(rpc, 'cast', use_mock_anything = True)
         rpc.cast(self.context,
                  'compute.host2',
@@ -164,30 +162,30 @@ class HeteroSchedulerTestCase(test.TestCase):
     
     def two_host_two_match_cap(self):
         scheduler = manager.SchedulerManager()  
-        dict1 = {'vcpus': 16, 'memory_mb': 32, 'local_gb': 100,
+        caps_host1 = {'vcpus': 16, 'memory_mb': 32, 'local_gb': 100,
                'vcpus_used': 1, 'local_gb_used': 10, 'host_memory_free': 21651,
                'disk_available': 5,
                'host_memory_total': 23640, 'disk_total': 97, 'disk_used': 92,
                'hypervisor_type': 'qemu', 'hypervisor_version': 12003,
                'cpu_arch': "x86_64",
                'cpu_model': "Nehalem",
-               'xpu_arch': 'fermi', 'xpus': 1, 'xpu_model': "Tesla S2050"}
-        dict2 = {'vcpus': 16, 'memory_mb': 32, 'local_gb': 100,
+               'xpu_arch': 'fermi',  'xpu_model': "Tesla S2050"}
+        caps_host2 = {'vcpus': 16, 'memory_mb': 32, 'local_gb': 100,
                'vcpus_used': 1, 'local_gb_used': 10, 'host_memory_free': 21651,
                'host_memory_total': 23640, 'disk_total': 97, 'disk_used': 92,
                'disk_available': 5,
                'hypervisor_type': 'qemu', 'hypervisor_version': 12003,
                'cpu_arch': "x86_64",
                'cpu_model': "Nehalem",
-               'xpu_arch': 'fermi', 'xpus': 1, 'xpu_model': "Tesla S2050"}
+               'xpu_arch': 'fermi', 'xpu_model': "Tesla S2050"}
         request_spec = {'instance_type': self.instance_type,
                         'num_instances': 1}
         scheduler.zone_manager.update_service_capabilities("compute",
                                                            "host1",
-                                                           dict1)
+                                                           caps_host1)
         scheduler.zone_manager.update_service_capabilities("compute",
                                                            "host2",
-                                                           dict2)
+                                                           caps_host2)
         self.mox.StubOutWithMock(rpc, 'cast', use_mock_anything = True)
         self.mox.StubOutWithMock(random, 'random', use_mock_anything = True)
         random.random().AndReturn(0)
