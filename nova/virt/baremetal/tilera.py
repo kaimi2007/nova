@@ -239,7 +239,7 @@ class BareMetalNodes(object):
             '/fs.tar.gz', '--quit')
         utils.execute('rm', path1)
         utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
-            '--resume', '--net', node_ip, '--run', '-', 'mount', \
+            '--resume', '--net', node_ip, '--run', '-', 'sudo', 'mount', \
             '/dev/sda1', '/mnt', '-', '--wait', '--run', '-', 'rm', \
             '-rf', '/mnt/*', '-', '--wait', \
             #'-rf', '/mnt/root/.ssh/authorized_keys', '-', '--wait', \
@@ -291,7 +291,8 @@ class BareMetalNodes(object):
     def set_image(self, bpath, node_id):
         path1 = bpath + "/root"
         path2 = "/tftpboot/fs_" + str(node_id)
-        utils.execute('mount', '-o', 'loop', path1, path2)
+        utils.execute('sudo', 'mount', '-o', 'loop', path1, path2)
+        utils.execute('sudo', 'chown', '-R', 'nova', path2)
         path1 = "/tftpboot/fs_" + str(node_id)
         os.chdir(path1)
         path2 = "../fs_" + str(node_id) + ".tar.gz"
@@ -299,7 +300,7 @@ class BareMetalNodes(object):
         path1 = bpath + "/../../.."
         os.chdir(path1)
         path4 = "/tftpboot/fs_" + str(node_id)
-        utils.execute('umount', '-l', path4)
+        utils.execute('sudo', 'umount', '-l', path4)
 
     def init_kmsg(self, node_id):
         kmsg_dump_file = "/tftpboot/kmsg_dump_" + str(node_id)
