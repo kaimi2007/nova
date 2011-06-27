@@ -34,7 +34,8 @@ class HeterogeneousScheduler(driver.Scheduler):
 
     def schedule_run_instance(self, context, instance_id, request_spec,
                               *args, **kwargs):
-                              
+        """This method is called from nova.compute.api to provision
+        an instance."""                    
         instance_type = request_spec['instance_type']
         it_filter = InstanceTypeFilter()
         name, cooked = it_filter.instance_type_to_filter(instance_type)
