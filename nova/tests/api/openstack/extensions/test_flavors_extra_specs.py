@@ -63,6 +63,7 @@ def stub_flavor_extra_specs():
 
 
 class FlavorsExtraSpecsTest(unittest.TestCase):
+    """Tests for flavors extra specs API"""
 
     def setUp(self):
         super(FlavorsExtraSpecsTest, self).setUp()
