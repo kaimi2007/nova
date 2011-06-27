@@ -2616,6 +2616,8 @@ def instance_type_create(_context, values):
         instance_type_ref = models.InstanceTypes()
         instance_type_ref.update(values)
         instance_type_ref.save()
+        # restore original dict so it doesn't get modified as a side-effect
+        values['extra_specs'] = specs
     except Exception, e:
         raise exception.DBError(e)
     return instance_type_ref

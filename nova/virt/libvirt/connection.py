@@ -1584,9 +1584,49 @@ class LibvirtConnection(driver.ComputeDriver):
         self.firewall_driver.unfilter_instance(instance_ref)
 
     def update_host_status(self):
-        """See xenapi_conn.py implementation."""
-        pass
+        """Update the status info of the host, and return those values
+            to the calling program."""
+        return self.HostState.update_status()
 
     def get_host_stats(self, refresh=False):
-        """See xenapi_conn.py implementation."""
-        pass
+        """Return the current state of the host. If 'refresh' is
+           True, run the update first."""
+        return self.HostState.get_host_stats(refresh=refresh)
+
+
+class HostState(object):
+    """Manages information about the KVM host this compute
+    node is running on.
+    """
+    def __init__(self, read_only):
+        super(HostState, self).__init__()
+        self.read_only = read_only
+        self._stats = {}
+        self.update_status()
+
+    def get_host_stats(self, refresh=False):
+        """Return the current state of the host. If 'refresh' is
+        True, run the update first.
+        """
+        if refresh:
+            self.update_status()
+        return self._stats
+
+    def update_status(self):
+        LOG.debug(_("Updating host stats"))
+        connection = get_connection(self.read_only)
+        data = {}
+        data["vcpus"] = connection.get_vcpu_total()
+        data["vcpus_used"] = connection.get_vcpu_used()
+        cpu_info = connection.get_cpu_info()
+        data["cpu_arch"] = cpu_info['arch']
+        data["cpu_model"] = cpu_info['model']
+        data["disk_total"] = connection.get_local_gb_total()
+        data["disk_used"] = connection.get_local_gb_used()
+        data["disk_available"] = data["disk_total"] - data["disk_used"]
+        data["host_memory_total"] = connection.get_memory_mb_total()
+        data["host_memory_free"] = data["host_memory_total"] - \
+            connection.get_memory_mb_used()
+        data["hypervisor_type"] = connection.get_hypervisor_type()
+        data["hypervisor_version"] = connection.get_hypervisor_version()
+        self._stats = data

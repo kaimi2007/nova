@@ -96,7 +96,6 @@ class InstanceTypeFilter(HostFilter):
     def _satisfies_extra_specs(self, capabilities, instance_type):
         """Check that the capabilities provided by the compute service
         satisfy the extra specs associated with the instance type"""
-
         if 'extra_specs' not in instance_type:
             return True
 
@@ -106,7 +105,7 @@ class InstanceTypeFilter(HostFilter):
 
         try:
             for key, value in instance_type['extra_specs'].iteritems():
-                if capabilities[key] != value:
+                if str(capabilities[key]) != str(value):
                     return False
         except KeyError:
             return False
