@@ -305,6 +305,7 @@ class BareMetalNodes(object):
     def init_kmsg(self, node_id):
         kmsg_dump_file = "/tftpboot/kmsg_dump_" + str(node_id)
         utils.execute('touch', kmsg_dump_file)
+        utils.execute('sudo', 'chown', 'nova', kmsg_dump_file)
 
     def delete_kmsg(self, node_id):
         kmsg_dump_file = "/tftpboot/kmsg_dump_" + str(node_id)
