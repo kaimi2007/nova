@@ -239,7 +239,7 @@ class BareMetalNodes(object):
             '/fs.tar.gz', '--quit')
         utils.execute('rm', path1)
         utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
-            '--resume', '--net', node_ip, '--run', '-', 'sudo', 'mount', \
+            '--resume', '--net', node_ip, '--run', '-', 'mount', \
             '/dev/sda1', '/mnt', '-', '--wait', '--run', '-', 'rm', \
             '-rf', '/mnt/*', '-', '--wait', \
             #'-rf', '/mnt/root/.ssh/authorized_keys', '-', '--wait', \
