@@ -107,10 +107,8 @@ class InstanceTypeFilter(HostFilter):
         try:
             for key, value in instance_type['extra_specs'].iteritems():
                 if str(capabilities[key]) != str(value):
-                    raise ValueError("Mismatch: %s, %s, %s", key, value, capabilities[key])
                     return False
         except KeyError:
-            raise ValueError("KeyError")
             return False
 
         return True
