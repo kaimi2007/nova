@@ -26,6 +26,8 @@ from nova import test
 from nova import rpc
 from nova.scheduler import manager
 
+instance_type = dict()
+
 class ArchSchedulerTestCase(test.TestCase):
     """Test case for Archscheduler"""
     def setUp(self):
@@ -34,6 +36,22 @@ class ArchSchedulerTestCase(test.TestCase):
         self.context = context.get_admin_context()
         self.flags(scheduler_driver = driver)
         self.inst_1 = self._create_instance()
+        values = dict(name="cg1.4xlarge",
+                      memory_mb=22000,
+                      vcpus=8,
+                      local_gb=1690,
+                      flavorid=105)
+        specs = dict(cpu_arch="x86_64",
+                        cpu_model="Nehalem",
+                        xpu_arch="fermi",
+                        xpus=2,
+                        xpu_model="Tesla 2050")
+        values['extra_specs'] = specs
+        ref = db.api.instance_type_create(self.context,
+                                          values)
+        self.instance_type_id = ref.id
+        
+
 
     def tearDown(self):
         db.instance_destroy(self.context,self.inst_1)  
@@ -48,11 +66,6 @@ class ArchSchedulerTestCase(test.TestCase):
         inst['memory_mb'] = kwargs.get('memory_mb', 10)
         inst['local_gb'] = kwargs.get('local_gb', 2)
         inst['flavorid'] = kwargs.get('flavorid', 999)
-        specs = dict(cpu_arch = "x86_64",
-                        model = "Nehalem",
-                        xpu_arch = "fermi",
-                        xpus = 1,
-                        xpu_model = "Tesla S2050")
         inst['extra_specs'] = specs
         ref = db.api.instance_type_create(self.context,
                                           inst)
