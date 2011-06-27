@@ -84,11 +84,16 @@ class SchedulerManager(manager.Manager):
         Falls back to schedule(context, topic) if method doesn't exist.
         """
         driver_method = 'schedule_%s' % method
+        LOG.debug(_("**************** _schedule"))
         elevated = context.elevated()
         try:
+            LOG.debug(_("**************** trying"))
             host = getattr(self.driver, driver_method)(elevated, *args,
                                                        **kwargs)
+            LOG.debug(_("**************** success"))            
+            LOG.debug(_("**************** %s"), host)
         except AttributeError, e:
+            LOG.debug(_("**************** exception"))            
             LOG.warning(_("Driver Method %(driver_method)s missing: %(e)s."
                             "Reverting to schedule()") % locals())
             host = self.driver.schedule(elevated, topic, *args, **kwargs)

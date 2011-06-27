@@ -53,6 +53,7 @@ flags.DEFINE_string('default_host_filter',
                     'Which filter to use for filtering hosts.')
 
 
+
 class HostFilter(object):
     """Base class for host filters."""
 
@@ -96,7 +97,6 @@ class InstanceTypeFilter(HostFilter):
     def _satisfies_extra_specs(self, capabilities, instance_type):
         """Check that the capabilities provided by the compute service
         satisfy the extra specs associated with the instance type"""
-
         if 'extra_specs' not in instance_type:
             return True
 
@@ -106,9 +106,11 @@ class InstanceTypeFilter(HostFilter):
 
         try:
             for key, value in instance_type['extra_specs'].iteritems():
-                if capabilities[key] != value:
+                if str(capabilities[key]) != str(value):
+                    raise ValueError("Mismatch: %s, %s, %s", key, value, capabilities[key])
                     return False
         except KeyError:
+            raise ValueError("KeyError")
             return False
 
         return True
