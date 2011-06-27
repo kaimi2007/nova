@@ -1626,7 +1626,7 @@ class HostState(object):
         data = {}
         data["vcpus"] = connection.get_vcpu_total()
         data["vcpus_used"] = connection.get_vcpu_used()
-        cpu_info = connection.get_cpu_info()
+        cpu_info = utils.loads(connection.get_cpu_info())
         data["cpu_arch"] = cpu_info['arch']
         data["cpu_model"] = cpu_info['model']
         data["disk_total"] = connection.get_local_gb_total()
