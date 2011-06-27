@@ -114,7 +114,7 @@ class BareMetalNodes(object):
     def set_status(self, node_id, status):
         for node in self.nodes:
             if node['node_id'] == node_id:
-                node['node_id'] = status
+                node['status'] = status
                 return 1
         return 0
 
