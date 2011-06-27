@@ -165,6 +165,14 @@ class LibvirtConnection(driver.ComputeDriver):
 
         fw_class = utils.import_class(FLAGS.firewall_driver)
         self.firewall_driver = fw_class(get_connection=self._get_connection)
+        self._host_state = None        
+
+    @property
+    def HostState(self):
+        if not self._host_state:
+            self._host_state = HostState(self.read_only)
+        return self._host_state
+
 
     def init_host(self, host):
         # Adopt existing VM's running here
