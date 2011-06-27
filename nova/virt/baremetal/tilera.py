@@ -292,7 +292,7 @@ class BareMetalNodes(object):
         path1 = bpath + "/root"
         path2 = "/tftpboot/fs_" + str(node_id)
         utils.execute('sudo', 'mount', '-o', 'loop', path1, path2)
-        utils.execute('sudo', 'chown', '-R', 'nova', path2)
+        #utils.execute('sudo', 'chown', '-R', 'nova', path2)
         path1 = "/tftpboot/fs_" + str(node_id)
         os.chdir(path1)
         path2 = "../fs_" + str(node_id) + ".tar.gz"
@@ -305,7 +305,7 @@ class BareMetalNodes(object):
     def init_kmsg(self, node_id):
         kmsg_dump_file = "/tftpboot/kmsg_dump_" + str(node_id)
         utils.execute('touch', kmsg_dump_file)
-        utils.execute('sudo', 'chown', 'nova', kmsg_dump_file)
+        #utils.execute('sudo', 'chown', 'nova', kmsg_dump_file)
 
     def delete_kmsg(self, node_id):
         kmsg_dump_file = "/tftpboot/kmsg_dump_" + str(node_id)
