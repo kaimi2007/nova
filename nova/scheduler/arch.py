@@ -42,7 +42,6 @@ class ArchitectureScheduler(driver.Scheduler):
         return local_list
 
     def hosts_up_with_arch(self, context, topic, instance_id):
-#    def hosts_up_with_arch(self, context, topic, instance_id, instance_type):
 
         """Return the list of hosts that have a running service
         for cpu_arch and others.
@@ -50,12 +49,11 @@ class ArchitectureScheduler(driver.Scheduler):
 
 #        """Figure out what is requested
 #        """
-        instances = db.instance_get_all_by_instance_id(context,
-                                                       instance_id)
+        instance = db.instance_get(context, instance_id)
 
-        LOG.debug(_("## instances %s"), instances)
-        LOG.debug(_("## instance.id %s"), instances[0].id)
-        LOG.debug(_("## instance.cpu_arch %s"), instances[0].cpu_arch)
+        LOG.debug(_("## instance %s"), instance)
+        LOG.debug(_("## instance.id %s"), instance.id)
+        LOG.debug(_("## instance.cpu_arch %s"), instance.cpu_arch)
 
         services = db.service_get_all_by_topic(context, topic)
         LOG.debug(_("## services %s"), services)
@@ -63,9 +61,9 @@ class ArchitectureScheduler(driver.Scheduler):
         hosts = []
 
         # from instance table
-        wanted_vcpus = instances[0].vcpus
-        wanted_memory_mb = instances[0].memory_mb
-        wanted_local_gb = instances[0].local_gb
+        wanted_vcpus = instance.vcpus
+        wanted_memory_mb = instance.memory_mb
+        wanted_local_gb = instance.local_gb
 
         LOG.debug(_("## wanted-vcpus=%s"), wanted_vcpus)
         LOG.debug(_("## wanted-memory=%s"), wanted_memory_mb)
@@ -77,7 +75,7 @@ class ArchitectureScheduler(driver.Scheduler):
 
         # from instance_type_extra_specs table
         instance_extra = db.instance_type_extra_specs_get( \
-            context, instances[0].instance_type_id)
+            context, instance.instance_type_id)
         LOG.debug(_("## inst-extra=%s"), instance_extra)
 
         # combine to inatance_meta
