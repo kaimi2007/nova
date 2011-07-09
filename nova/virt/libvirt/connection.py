@@ -1099,7 +1099,7 @@ class LibvirtConnection(driver.ComputeDriver):
                     'volumes': block_device_mapping}
 
         if FLAGS.vnc_enabled:
-            if FLAGS.libvirt_type != 'lxc':
+            if FLAGS.libvirt_type != 'lxc' or FLAGS.libvirt_type != 'uml':
                 xml_info['vncserver_host'] = FLAGS.vncserver_host
                 xml_info['vnc_keymap'] = FLAGS.vnc_keymap
         if not rescue:
@@ -1688,6 +1688,10 @@ class LibvirtConnection(driver.ComputeDriver):
            True, run the update first."""
         print 'Updating!'
         return self.HostState.get_host_stats(refresh=refresh)
+
+    def set_host_enabled(self, host, enabled):
+        """Sets the specified host's ability to accept new instances."""
+        pass
 
 
 class HostState(object):
