@@ -117,7 +117,8 @@ class HeteroSchedulerTestCase(test.TestCase):
         request_spec = {'instance_type': self.instance_type,
                         'instance_properties': instance_properties,
                         'num_instances': 1}
-        self.mox.StubOutWithMock(compute.api.API,"create_db_entry_for_new_instance")
+        self.mox.StubOutWithMock(compute.api.API,
+                                 "create_db_entry_for_new_instance")
         self.mox.StubOutWithMock(rpc, 'cast', use_mock_anything=True)
         compute.api.API().create_db_entry_for_new_instance(\
             mox.IsA(context.RequestContext), instance_properties, None, []).\
@@ -125,7 +126,7 @@ class HeteroSchedulerTestCase(test.TestCase):
         rpc.cast(mox.IsA(context.RequestContext),
                 'compute.host1',
                  {'method': 'run_instance',
-                  'args': {'instance_id': instance_id}, 
+                  'args': {'instance_id': instance_id},
                   'method': 'run_instance'})
         self.mox.ReplayAll()
         scheduler.run_instance(self.context,
@@ -151,26 +152,33 @@ class HeteroSchedulerTestCase(test.TestCase):
                'cpu_arch': "x86_64",
                'cpu_model': "Nehalem",
                'xpu_arch': 'fermi', 'xpu_model': "Tesla S2050"}
+        instance_id = 1
+        instance_properties = {}
         request_spec = {'instance_type': self.instance_type,
-                        'instance_properties': {},
+                        'instance_properties': instance_properties,
                         'num_instances': 1}
 
         scheduler.zone_manager.update_service_capabilities("compute",
                                                            "host2",
                                                            caps_host2)
+        self.mox.StubOutWithMock(compute.api.API,
+                                 "create_db_entry_for_new_instance")
         self.mox.StubOutWithMock(rpc, 'cast', use_mock_anything=True)
-        rpc.cast(self.context,
-                 'compute.host2',
+        compute.api.API().create_db_entry_for_new_instance(\
+            mox.IsA(context.RequestContext), instance_properties, None, []).\
+            AndReturn({'id': instance_id})
+        rpc.cast(mox.IsA(context.RequestContext),
+                'compute.host2',
                  {'method': 'run_instance',
-                  'args': {'instance_id': self.inst_ref.id,
-                            'request_spec': request_spec}})
+                  'args': {'instance_id': instance_id},
+                  'method': 'run_instance'})
         self.mox.ReplayAll()
         scheduler.run_instance(self.context,
                                topic='compute',
                                instance_id=self.inst_ref.id,
                                request_spec=request_spec)
 
-    def two_host_two_match_cap(self):
+    def test_two_host_two_match_cap(self):
         scheduler = manager.SchedulerManager()
         caps_host1 = {'vcpus': 16, 'memory_mb': 32, 'local_gb': 100,
                'vcpus_used': 1, 'local_gb_used': 10, 'host_memory_free': 21651,
@@ -179,7 +187,7 @@ class HeteroSchedulerTestCase(test.TestCase):
                'hypervisor_type': 'qemu', 'hypervisor_version': 12003,
                'cpu_arch': "x86_64",
                'cpu_model': "Nehalem",
-               'xpu_arch': 'fermi',  'xpu_model': "Tesla S2050"}
+               'xpu_arch': 'fermi', 'xpu_model': "Tesla S2050"}
         caps_host2 = {'vcpus': 16, 'memory_mb': 32, 'local_gb': 100,
                'vcpus_used': 1, 'local_gb_used': 10, 'host_memory_free': 21651,
                'host_memory_total': 23640, 'disk_total': 97, 'disk_used': 92,
@@ -188,8 +196,10 @@ class HeteroSchedulerTestCase(test.TestCase):
                'cpu_arch': "x86_64",
                'cpu_model': "Nehalem",
                'xpu_arch': 'fermi', 'xpu_model': "Tesla S2050"}
+        instance_id = 1
+        instance_properties = {}
         request_spec = {'instance_type': self.instance_type,
-                        'instance_properties': {},
+                        'instance_properties': instance_properties,
                         'num_instances': 1}
         scheduler.zone_manager.update_service_capabilities("compute",
                                                            "host1",
@@ -197,14 +207,17 @@ class HeteroSchedulerTestCase(test.TestCase):
         scheduler.zone_manager.update_service_capabilities("compute",
                                                            "host2",
                                                            caps_host2)
+        self.mox.StubOutWithMock(compute.api.API,
+                                 "create_db_entry_for_new_instance")
         self.mox.StubOutWithMock(rpc, 'cast', use_mock_anything=True)
-        self.mox.StubOutWithMock(random, 'random', use_mock_anything=True)
-        random.random().AndReturn(0)
-        rpc.cast(self.context,
-                 'compute.host2',
+        compute.api.API().create_db_entry_for_new_instance(\
+            mox.IsA(context.RequestContext), instance_properties, None, []).\
+            AndReturn({'id': instance_id})
+        rpc.cast(mox.IsA(context.RequestContext),
+                'compute.host2',
                  {'method': 'run_instance',
-                  'args': {'instance_id': self.inst_ref.id,
-                           'request_spec': request_spec}})
+                  'args': {'instance_id': instance_id},
+                  'method': 'run_instance'})
         self.mox.ReplayAll()
         scheduler.run_instance(self.context,
                                topic='compute',
