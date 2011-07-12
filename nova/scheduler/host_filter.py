@@ -251,6 +251,7 @@ class JsonFilter(HostFilter):
         query = ['and',
                     ['>=', '$compute.host_memory_free', required_ram],
                     ['>=', '$compute.disk_available', required_disk]]
+        #TODO(lorinh): Do the instance type extra specs check here
         return (self._full_name(), json.dumps(query))
 
     def _parse_string(self, string, host, services):
