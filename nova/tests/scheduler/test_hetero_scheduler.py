@@ -38,6 +38,7 @@ class HeteroSchedulerTestCase(test.TestCase):
         driver = 'nova.scheduler.host_filter.HostFilterScheduler'
         self.context = context.get_admin_context()
         self.flags(scheduler_driver=driver)
+        self.filter_name = 'nova.scheduler.host_filter.InstanceTypeFilter'
         specs = dict(cpu_arch="x86_64",
                      xpu_arch="fermi",
                      xpu_model="Tesla S2050")
@@ -75,6 +76,7 @@ class HeteroSchedulerTestCase(test.TestCase):
                           instance_id=self.inst_ref.id,
                           request_spec={'instance_type': self.instance_type,
                                         'instance_properties': {},
+                                        'filter': self.filter_name,
                                         'num_instances': 1})
 
     def test_one_host_no_match_cap(self):
@@ -97,6 +99,7 @@ class HeteroSchedulerTestCase(test.TestCase):
                           instance_id=self.inst_ref.id,
                           request_spec={'instance_type': self.instance_type,
                                         'instance_properties': {},
+                                        'filter': self.filter_name,
                                         'num_instances': 1})
 
     def test_one_host_match_cap(self):
@@ -116,6 +119,7 @@ class HeteroSchedulerTestCase(test.TestCase):
         instance_properties = {}
         request_spec = {'instance_type': self.instance_type,
                         'instance_properties': instance_properties,
+                        'filter': self.filter_name,
                         'num_instances': 1}
         self.mox.StubOutWithMock(compute.api.API,
                                  "create_db_entry_for_new_instance")
@@ -156,6 +160,7 @@ class HeteroSchedulerTestCase(test.TestCase):
         instance_properties = {}
         request_spec = {'instance_type': self.instance_type,
                         'instance_properties': instance_properties,
+                        'filter': self.filter_name,
                         'num_instances': 1}
 
         scheduler.zone_manager.update_service_capabilities("compute",
@@ -200,6 +205,7 @@ class HeteroSchedulerTestCase(test.TestCase):
         instance_properties = {}
         request_spec = {'instance_type': self.instance_type,
                         'instance_properties': instance_properties,
+                        'filter': self.filter_name,
                         'num_instances': 1}
         scheduler.zone_manager.update_service_capabilities("compute",
                                                            "host1",
