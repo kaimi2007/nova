@@ -19,11 +19,13 @@ Tests for architecture-aware scheduler
 
 import mox
 import random
+from nova import compute
 from nova import context
 from nova import db
 from nova import exception
 from nova import test
 from nova import rpc
+from nova.compute import api as compute_api
 from nova.scheduler import driver
 from nova.scheduler import manager
 
@@ -33,7 +35,7 @@ class HeteroSchedulerTestCase(test.TestCase):
 
     def setUp(self):
         super(HeteroSchedulerTestCase, self).setUp()
-        driver = 'nova.scheduler.hetero.HeterogeneousScheduler'
+        driver = 'nova.scheduler.host_filter.HostFilterScheduler'
         self.context = context.get_admin_context()
         self.flags(scheduler_driver=driver)
         specs = dict(cpu_arch="x86_64",
@@ -72,6 +74,7 @@ class HeteroSchedulerTestCase(test.TestCase):
                           topic='compute',
                           instance_id=self.inst_ref.id,
                           request_spec={'instance_type': self.instance_type,
+                                        'instance_properties': {},
                                         'num_instances': 1})
 
     def test_one_host_no_match_cap(self):
@@ -93,6 +96,7 @@ class HeteroSchedulerTestCase(test.TestCase):
                           topic='compute',
                           instance_id=self.inst_ref.id,
                           request_spec={'instance_type': self.instance_type,
+                                        'instance_properties': {},
                                         'num_instances': 1})
 
     def test_one_host_match_cap(self):
@@ -108,14 +112,21 @@ class HeteroSchedulerTestCase(test.TestCase):
         scheduler.zone_manager.update_service_capabilities("compute",
                                                            "host1",
                                                            caps)
+        instance_id = 1
+        instance_properties = {}
         request_spec = {'instance_type': self.instance_type,
+                        'instance_properties': instance_properties,
                         'num_instances': 1}
+        self.mox.StubOutWithMock(compute.api.API,"create_db_entry_for_new_instance")
         self.mox.StubOutWithMock(rpc, 'cast', use_mock_anything=True)
-        rpc.cast(self.context,
-                 'compute.host1',
+        compute.api.API().create_db_entry_for_new_instance(\
+            mox.IsA(context.RequestContext), instance_properties, None, []).\
+            AndReturn({'id': instance_id})
+        rpc.cast(mox.IsA(context.RequestContext),
+                'compute.host1',
                  {'method': 'run_instance',
-                  'args': {'instance_id': self.inst_ref.id,
-                           'request_spec': request_spec}})
+                  'args': {'instance_id': instance_id}, 
+                  'method': 'run_instance'})
         self.mox.ReplayAll()
         scheduler.run_instance(self.context,
                            topic='compute',
@@ -141,6 +152,7 @@ class HeteroSchedulerTestCase(test.TestCase):
                'cpu_model': "Nehalem",
                'xpu_arch': 'fermi', 'xpu_model': "Tesla S2050"}
         request_spec = {'instance_type': self.instance_type,
+                        'instance_properties': {},
                         'num_instances': 1}
 
         scheduler.zone_manager.update_service_capabilities("compute",
@@ -177,6 +189,7 @@ class HeteroSchedulerTestCase(test.TestCase):
                'cpu_model': "Nehalem",
                'xpu_arch': 'fermi', 'xpu_model': "Tesla S2050"}
         request_spec = {'instance_type': self.instance_type,
+                        'instance_properties': {},
                         'num_instances': 1}
         scheduler.zone_manager.update_service_capabilities("compute",
                                                            "host1",
