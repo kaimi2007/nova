@@ -905,7 +905,7 @@ class ServersTest(test.TestCase):
         req = webob.Request.blank('/v1.0/servers/1')
         req.method = 'PUT'
         res = req.get_response(fakes.wsgi_app())
-        self.assertEqual(res.status_int, 422)
+        self.assertEqual(res.status_int, 400)
 
     def test_update_nonstring_name(self):
         """ Confirm that update is filtering params """
@@ -1433,6 +1433,57 @@ class ServersTest(test.TestCase):
         self.assertEqual(res.status, '202 Accepted')
         self.assertEqual(self.server_delete_called, True)
 
+    def test_rescue_accepted(self):
+        FLAGS.allow_admin_api = True
+        body = {}
+
+        self.called = False
+
+        def rescue_mock(*args, **kwargs):
+            self.called = True
+
+        self.stubs.Set(nova.compute.api.API, 'rescue', rescue_mock)
+        req = webob.Request.blank('/v1.0/servers/1/rescue')
+        req.method = 'POST'
+        req.content_type = 'application/json'
+
+        res = req.get_response(fakes.wsgi_app())
+
+        self.assertEqual(self.called, True)
+        self.assertEqual(res.status_int, 202)
+
+    def test_rescue_raises_handled(self):
+        FLAGS.allow_admin_api = True
+        body = {}
+
+        def rescue_mock(*args, **kwargs):
+            raise Exception('Who cares?')
+
+        self.stubs.Set(nova.compute.api.API, 'rescue', rescue_mock)
+        req = webob.Request.blank('/v1.0/servers/1/rescue')
+        req.method = 'POST'
+        req.content_type = 'application/json'
+
+        res = req.get_response(fakes.wsgi_app())
+
+        self.assertEqual(res.status_int, 422)
+
+    def test_delete_server_instance_v1_1(self):
+        req = webob.Request.blank('/v1.1/servers/1')
+        req.method = 'DELETE'
+
+        self.server_delete_called = False
+
+        def instance_destroy_mock(context, id):
+            self.server_delete_called = True
+
+        self.stubs.Set(nova.db.api, 'instance_destroy',
+            instance_destroy_mock)
+
+        res = req.get_response(fakes.wsgi_app())
+        self.assertEqual(res.status_int, 204)
+        self.assertEqual(self.server_delete_called, True)
+
     def test_resize_server(self):
         req = self.webreq('/1/action', 'POST', dict(resize=dict(flavorId=3)))
 
@@ -1608,7 +1659,7 @@ class TestServerCreateRequestXMLDeserializer(unittest.TestCase):
                 "imageId": "1",
                 "flavorId": "1",
                 }}
-        self.assertEquals(request, expected)
+        self.assertEquals(request['body'], expected)
 
     def test_request_with_empty_metadata(self):
         serial_request = """
@@ -1623,7 +1674,7 @@ class TestServerCreateRequestXMLDeserializer(unittest.TestCase):
                 "flavorId": "1",
                 "metadata": {},
                 }}
-        self.assertEquals(request, expected)
+        self.assertEquals(request['body'], expected)
 
     def test_request_with_empty_personality(self):
         serial_request = """
@@ -1638,7 +1689,7 @@ class TestServerCreateRequestXMLDeserializer(unittest.TestCase):
                 "flavorId": "1",
                 "personality": [],
                 }}
-        self.assertEquals(request, expected)
+        self.assertEquals(request['body'], expected)
 
     def test_request_with_empty_metadata_and_personality(self):
         serial_request = """
@@ -1655,7 +1706,7 @@ class TestServerCreateRequestXMLDeserializer(unittest.TestCase):
                 "metadata": {},
                 "personality": [],
                 }}
-        self.assertEquals(request, expected)
+        self.assertEquals(request['body'], expected)
 
     def test_request_with_empty_metadata_and_personality_reversed(self):
         serial_request = """
@@ -1672,7 +1723,7 @@ class TestServerCreateRequestXMLDeserializer(unittest.TestCase):
                 "metadata": {},
                 "personality": [],
                 }}
-        self.assertEquals(request, expected)
+        self.assertEquals(request['body'], expected)
 
     def test_request_with_one_personality(self):
         serial_request = """
@@ -1684,7 +1735,7 @@ class TestServerCreateRequestXMLDeserializer(unittest.TestCase):
 </server>"""
         request = self.deserializer.deserialize(serial_request, 'create')
         expected = [{"path": "/etc/conf", "contents": "aabbccdd"}]
-        self.assertEquals(request["server"]["personality"], expected)
+        self.assertEquals(request['body']["server"]["personality"], expected)
 
     def test_request_with_two_personalities(self):
         serial_request = """
@@ -1695,7 +1746,7 @@ class TestServerCreateRequestXMLDeserializer(unittest.TestCase):
         request = self.deserializer.deserialize(serial_request, 'create')
         expected = [{"path": "/etc/conf", "contents": "aabbccdd"},
                     {"path": "/etc/sudoers", "contents": "abcd"}]
-        self.assertEquals(request["server"]["personality"], expected)
+        self.assertEquals(request['body']["server"]["personality"], expected)
 
     def test_request_second_personality_node_ignored(self):
         serial_request = """
@@ -1710,7 +1761,7 @@ class TestServerCreateRequestXMLDeserializer(unittest.TestCase):
 </server>"""
         request = self.deserializer.deserialize(serial_request, 'create')
         expected = [{"path": "/etc/conf", "contents": "aabbccdd"}]
-        self.assertEquals(request["server"]["personality"], expected)
+        self.assertEquals(request['body']["server"]["personality"], expected)
 
     def test_request_with_one_personality_missing_path(self):
         serial_request = """
@@ -1719,7 +1770,7 @@ class TestServerCreateRequestXMLDeserializer(unittest.TestCase):
 <personality><file>aabbccdd</file></personality></server>"""
         request = self.deserializer.deserialize(serial_request, 'create')
         expected = [{"contents": "aabbccdd"}]
-        self.assertEquals(request["server"]["personality"], expected)
+        self.assertEquals(request['body']["server"]["personality"], expected)
 
     def test_request_with_one_personality_empty_contents(self):
         serial_request = """
@@ -1728,7 +1779,7 @@ class TestServerCreateRequestXMLDeserializer(unittest.TestCase):
 <personality><file path="/etc/conf"></file></personality></server>"""
         request = self.deserializer.deserialize(serial_request, 'create')
         expected = [{"path": "/etc/conf", "contents": ""}]
-        self.assertEquals(request["server"]["personality"], expected)
+        self.assertEquals(request['body']["server"]["personality"], expected)
 
     def test_request_with_one_personality_empty_contents_variation(self):
         serial_request = """
@@ -1737,7 +1788,7 @@ class TestServerCreateRequestXMLDeserializer(unittest.TestCase):
 <personality><file path="/etc/conf"/></personality></server>"""
         request = self.deserializer.deserialize(serial_request, 'create')
         expected = [{"path": "/etc/conf", "contents": ""}]
-        self.assertEquals(request["server"]["personality"], expected)
+        self.assertEquals(request['body']["server"]["personality"], expected)
 
     def test_request_with_one_metadata(self):
         serial_request = """
@@ -1749,7 +1800,7 @@ class TestServerCreateRequestXMLDeserializer(unittest.TestCase):
 </server>"""
         request = self.deserializer.deserialize(serial_request, 'create')
         expected = {"alpha": "beta"}
-        self.assertEquals(request["server"]["metadata"], expected)
+        self.assertEquals(request['body']["server"]["metadata"], expected)
 
     def test_request_with_two_metadata(self):
         serial_request = """
@@ -1762,7 +1813,7 @@ class TestServerCreateRequestXMLDeserializer(unittest.TestCase):
 </server>"""
         request = self.deserializer.deserialize(serial_request, 'create')
         expected = {"alpha": "beta", "foo": "bar"}
-        self.assertEquals(request["server"]["metadata"], expected)
+        self.assertEquals(request['body']["server"]["metadata"], expected)
 
     def test_request_with_metadata_missing_value(self):
         serial_request = """
@@ -1774,7 +1825,7 @@ class TestServerCreateRequestXMLDeserializer(unittest.TestCase):
 </server>"""
         request = self.deserializer.deserialize(serial_request, 'create')
         expected = {"alpha": ""}
-        self.assertEquals(request["server"]["metadata"], expected)
+        self.assertEquals(request['body']["server"]["metadata"], expected)
 
     def test_request_with_two_metadata_missing_value(self):
         serial_request = """
@@ -1787,7 +1838,7 @@ class TestServerCreateRequestXMLDeserializer(unittest.TestCase):
 </server>"""
         request = self.deserializer.deserialize(serial_request, 'create')
         expected = {"alpha": "", "delta": ""}
-        self.assertEquals(request["server"]["metadata"], expected)
+        self.assertEquals(request['body']["server"]["metadata"], expected)
 
     def test_request_with_metadata_missing_key(self):
         serial_request = """
@@ -1799,7 +1850,7 @@ class TestServerCreateRequestXMLDeserializer(unittest.TestCase):
 </server>"""
         request = self.deserializer.deserialize(serial_request, 'create')
         expected = {"": "beta"}
-        self.assertEquals(request["server"]["metadata"], expected)
+        self.assertEquals(request['body']["server"]["metadata"], expected)
 
     def test_request_with_two_metadata_missing_key(self):
         serial_request = """
@@ -1812,7 +1863,7 @@ class TestServerCreateRequestXMLDeserializer(unittest.TestCase):
 </server>"""
         request = self.deserializer.deserialize(serial_request, 'create')
         expected = {"": "gamma"}
-        self.assertEquals(request["server"]["metadata"], expected)
+        self.assertEquals(request['body']["server"]["metadata"], expected)
 
     def test_request_with_metadata_duplicate_key(self):
         serial_request = """
@@ -1825,7 +1876,7 @@ class TestServerCreateRequestXMLDeserializer(unittest.TestCase):
 </server>"""
         request = self.deserializer.deserialize(serial_request, 'create')
         expected = {"foo": "baz"}
-        self.assertEquals(request["server"]["metadata"], expected)
+        self.assertEquals(request['body']["server"]["metadata"], expected)
 
     def test_canonical_request_from_docs(self):
         serial_request = """
@@ -1871,7 +1922,7 @@ b25zLiINCg0KLVJpY2hhcmQgQmFjaA==""",
             ],
         }}
         request = self.deserializer.deserialize(serial_request, 'create')
-        self.assertEqual(request, expected)
+        self.assertEqual(request['body'], expected)
 
     def test_request_xmlser_with_flavor_image_href(self):
         serial_request = """
@@ -1881,9 +1932,9 @@ b25zLiINCg0KLVJpY2hhcmQgQmFjaA==""",
                     flavorRef="http://localhost:8774/v1.1/flavors/1">
                 </server>"""
         request = self.deserializer.deserialize(serial_request, 'create')
-        self.assertEquals(request["server"]["flavorRef"],
+        self.assertEquals(request['body']["server"]["flavorRef"],
                           "http://localhost:8774/v1.1/flavors/1")
-        self.assertEquals(request["server"]["imageRef"],
+        self.assertEquals(request['body']["server"]["imageRef"],
                           "http://localhost:8774/v1.1/images/1")
 
 
@@ -1948,7 +1999,7 @@ class TestServerInstanceCreation(test.TestCase):
 
     def _get_create_request_json(self, body_dict):
         req = webob.Request.blank('/v1.0/servers')
-        req.content_type = 'application/json'
+        req.headers['Content-Type'] = 'application/json'
         req.method = 'POST'
         req.body = json.dumps(body_dict)
         return req
