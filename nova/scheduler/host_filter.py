@@ -49,7 +49,7 @@ LOG = logging.getLogger('nova.scheduler.host_filter')
 
 FLAGS = flags.FLAGS
 flags.DEFINE_string('default_host_filter',
-                    'nova.scheduler.host_filter.AllHostsFilter',
+                    'nova.scheduler.host_filter.InstanceTypeFilter',
                     'Which filter to use for filtering hosts.')
 
 
@@ -331,8 +331,7 @@ class HostFilterScheduler(zone_aware_scheduler.ZoneAwareScheduler):
     def filter_hosts(self, topic, request_spec, hosts=None):
         """Filter the full host list (from the ZoneManager)"""
 
-        filter_name = request_spec.get('filter',
-                      'nova.scheduler.host_filter.InstanceTypeFilter')
+        filter_name = request_spec.get('filter', None)
         host_filter = choose_host_filter(filter_name)
 
         # TODO(sandy): We're only using InstanceType-based specs
