@@ -32,14 +32,12 @@ from nova.compute import power_state
 from nova.virt import disk
 from nova.virt import driver
 from nova.virt import images
+#from nova.virt.baremetal import tilera
+from nova.virt.baremetal import nodes
 
 FLAGS = flags.FLAGS
-if FLAGS.baremetal_driver == 'tilera':
-    from nova.virt.tilera import *
-#    __all__ = ['baremetal_nodes', 'baremetal_dom']
-#global baremetal_nodes
 
-LOG = logging.getLogger('nova.virt.baremetal_dom')
+LOG = logging.getLogger('nova.virt.baremetal.dom')
 
 
 class BareMetalDom(object):
@@ -47,6 +45,7 @@ class BareMetalDom(object):
     Implements the singleton pattern"""
 
     _instance = None
+    _is_init = False
 
     def __new__(cls, *args, **kwargs):
         """Returns the BareMetalDom singleton"""
@@ -55,40 +54,44 @@ class BareMetalDom(object):
         return cls._instance
 
     def __init__(self,
-                 fake_dom_file="/tftpboot/test_fake_dom_file",
-                 open_func=open):
+                 fake_dom_file="/tftpboot/test_fake_dom_file"):
+        # Only call __init__ the first time object is instantiated
+        if self._is_init:
+            return
+        self._is_init = True
+
         self.fake_dom_file = fake_dom_file
         self.domains = []
         self.fake_dom_nums = 0
-        self.domains = []
         self.fp = 0
+        self.baremetal_nodes = nodes.get_baremetal_nodes()
 
         utils.execute('rm', self.fake_dom_file)
         LOG.debug(_("open %s"), self.fake_dom_file)
         try:
-            self.fp = open_func(self.fake_dom_file, "r+")
+            self.fp = open(self.fake_dom_file, "r+")
             LOG.debug(_("fp = %s"), self.fp)
         except IOError:
             LOG.debug(_("%s file does not exist, will create it"),
                       self.fake_dom_file)
-            self.fp = open_func(self.fake_dom_file, "w")
+            self.fp = open(self.fake_dom_file, "w")
             self.fp.close()
-            self.fp = open_func(self.fake_dom_file, "r+")
-        self._read_domain_from_file(open_func)
+            self.fp = open(self.fake_dom_file, "r+")
+        self._read_domain_from_file()
         # (TODO) read pre-existing fake domains
 
-    def _read_domain_from_file(self, open_func):
+    def _read_domain_from_file(self):
         """
         Read the domains from a pickled representation.
         """
         try:
             self.domains = pickle.load(self.fp)
             self.fp.close()
-            self.fp = open_func(self.fake_dom_file, "w")
+            self.fp = open(self.fake_dom_file, "w")
         except EOFError:
             dom = []
             self.fp.close()
-            self.fp = open_func(self.fake_dom_file, "w")
+            self.fp = open(self.fake_dom_file, "w")
             LOG.debug(_("No domains exist."))
             return
         LOG.debug(_("============= initial domains ==========="))
@@ -99,7 +102,7 @@ class BareMetalDom(object):
                 LOG.debug(_("Not running domain: remove"))
                 self.domains.remove(dom)
                 continue
-            res = baremetal_nodes.set_status(dom['node_id'], \
+            res = self.baremetal_nodes.set_status(dom['node_id'], \
                                     dom['status'])
             if res > 0:  # no such node exixts
                 self.fake_dom_nums = self.fake_dom_nums + 1
@@ -115,16 +118,16 @@ class BareMetalDom(object):
         fd = self.find_domain(name)
         if fd == []:
             raise exception.NotFound("No such domain (%s)" % name)
-        node_ip = baremetal_nodes.find_ip_w_id(fd['node_id'])
+        node_ip = self.baremetal_nodes.find_ip_w_id(fd['node_id'])
 
         try:
-            baremetal_nodes.deactivate_node(fd['node_id'])
+            self.baremetal_nodes.deactivate_node(fd['node_id'])
         except:
             raise exception.NotFound("Failed power down \
                                       Bare-metal node %s" % fd['node_id'])
-        self.change_domain_state(name, power_state.NOSTATE)
+        self.change_domain_state(name, power_state.BUILDING)  # NOSTATE)
         try:
-            state = baremetal_nodes.activate_node(fd['node_id'], \
+            state = self.baremetal_nodes.activate_node(fd['node_id'], \
                 node_ip, name, fd['mac_address'], fd['ip_address'])
                 #node_ip, name, fd['mac_address']) #MK
                 #fd['ip_addr'], name)
@@ -144,16 +147,15 @@ class BareMetalDom(object):
             raise exception.NotFound("No such domain %s" % name)
 
         try:
-            baremetal_nodes.deactivate_node(fd['node_id'])
+            self.baremetal_nodes.deactivate_node(fd['node_id'])
             LOG.debug(_("--> after deactivate node"))
 
-            kmsg_dump_file = "/tftpboot/kmsg_dump_0"  # + str(fd['node_id'])
-            utils.execute('rm', kmsg_dump_file)
+            self.baremetal_nodes.delete_kmsg(fd['node_id'])
             self.domains.remove(fd)
             LOG.debug(_("domains: "))
             LOG.debug(_(self.domains))
             LOG.debug(_("nodes: "))
-            LOG.debug(_(baremetal_nodes.nodes))
+            LOG.debug(_(self.baremetal_nodes.nodes))
             self.store_domain()
             LOG.debug(_("after storing domains"))
             LOG.debug(_(self.domains))
@@ -164,7 +166,7 @@ class BareMetalDom(object):
     def create_domain(self, xml_dict, bpath):
         """add a domain to domains list
            and activate a idle Bare-metal node"""
-        LOG.debug(_("1////////////////////"))
+        LOG.debug(_("===== Domain is being created ====="))
         fd = self.find_domain(xml_dict['name'])
         if fd != []:
             LOG.debug(_("domain with the same name already exists"))
@@ -172,12 +174,9 @@ class BareMetalDom(object):
             #raise exception.NotFound("same name already exists")
         LOG.debug(_("create_domain: before get_idle_node"))
 
-        node_id = baremetal_nodes.get_idle_node()
-        if node_id == -1:
-            LOG.debug(_("No idle bare-metal node exits"))
-            raise exception.NotFound("No free nodes available")
-
-        node_ip = baremetal_nodes.find_ip_w_id(node_id)
+        node_id = self.baremetal_nodes.get_idle_node()
+        self.baremetal_nodes.init_kmsg(node_id)
+        node_ip = self.baremetal_nodes.find_ip_w_id(node_id)
 
         new_dom = {'node_id': node_id,
                     'name': xml_dict['name'],
@@ -189,39 +188,21 @@ class BareMetalDom(object):
                     'image_id': xml_dict['image_id'], \
                     'kernel_id': xml_dict['kernel_id'], \
                     'ramdisk_id': xml_dict['ramdisk_id'], \
-                     'status': power_state.NOSTATE}
+                     'status': power_state.BUILDING}  # NOSTATE}
         self.domains.append(new_dom)
         LOG.debug(_(new_dom))
-        self.change_domain_state(new_dom['name'], power_state.NOSTATE)
+        self.change_domain_state(new_dom['name'], power_state.BUILDING)
 
-        cmd = "mount -o loop " + bpath + "/root /tftpboot/fs_" \
-            + str(node_id)
-        LOG.debug(_(cmd))
-        path1 = bpath + "/root"
-        path2 = "/tftpboot/fs_" + str(node_id)
-        utils.execute('mount', '-o', 'loop', path1, path2)
-        cmd = "cd /tftpboot/fs_" + str(node_id) + \
-            "; tar -czpf ../fs_" + str(node_id) + ".tar.gz ."
-        LOG.debug(_(cmd))
-        path1 = "/tftpboot/fs_" + str(node_id)
-        os.chdir(path1)
-        path2 = "../fs_" + str(node_id) + ".tar.gz"
-        utils.execute('tar', '-czpf', path2, '.')
-        path1 = bpath + "/../../.."
-        os.chdir(path1)
-        cmd = "umount -l /tftpboot/fs_" + str(node_id)
-        LOG.debug(_(cmd))
-        path4 = "/tftpboot/fs_" + str(node_id)
-        utils.execute('umount', '-l', path4)
+        self.baremetal_nodes.set_image(bpath, node_id)
 
         try:
-            state = baremetal_nodes.activate_node(node_id,
+            state = self.baremetal_nodes.activate_node(node_id,
                 node_ip, new_dom['name'], new_dom['mac_address'], \
                 new_dom['ip_address'])
                 #node_ip, new_dom['name'], new_dom['mac_address']) #MK
         except:
             self.domains.remove(new_dom)
-            baremetal_nodes.free_node(node_id)
+            self.baremetal_nodes.free_node(node_id)
             raise exception.NotFound("Failed to boot Bare-metal node %s" \
                 % node_id)
 
@@ -274,6 +255,3 @@ class BareMetalDom(object):
             return [power_state.NOSTATE, '', '', '', '']
             #raise exception.NotFound("get_domain_info: No such doamin %s" \
             #                          % instance_name)
-
-baremetal_dom = BareMetalDom()
-#_MK

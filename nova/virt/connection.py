@@ -35,7 +35,7 @@ LOG = logging.getLogger("nova.virt.connection")
 FLAGS = flags.FLAGS
 
 if FLAGS.connection_type == 'baremetal':
-    from nova.virt import proxy_baremetal
+    from nova.virt.baremetal import proxy
 
 
 def get_connection(read_only=False):
@@ -77,7 +77,7 @@ def get_connection(read_only=False):
 #        conn = libvirt_conn_gpu.get_connection(read_only)
     elif t == 'baremetal':
         print 'Starting with Bare-metal support'
-        conn = proxy_baremetal.get_connection(read_only)
+        conn = proxy.get_connection(read_only)
     elif t == 'vmwareapi':
         conn = vmwareapi_conn.get_connection(read_only)
     else:
