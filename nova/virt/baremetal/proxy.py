@@ -51,8 +51,6 @@ from xml.etree import ElementTree
 from eventlet import greenthread
 from eventlet import tpool
 
-import IPy
-
 from nova import context
 from nova import db
 from nova import exception
@@ -109,21 +107,6 @@ def _late_load_cheetah():
         t = __import__('Cheetah.Template', globals(), locals(),
                        ['Template'], -1)
         Template = t.Template
-
-
-def _get_net_and_mask(cidr):
-    net = IPy.IP(cidr)
-    return str(net.net()), str(net.netmask())
-
-
-def _get_net_and_prefixlen(cidr):
-    net = IPy.IP(cidr)
-    return str(net.net()), str(net.prefixlen())
-
-
-def _get_ip_version(cidr):
-    net = IPy.IP(cidr)
-    return int(net.version())
 
 
 class ProxyConnection(driver.ComputeDriver):
@@ -655,10 +638,10 @@ class ProxyConnection(driver.ComputeDriver):
 
         if FLAGS.allow_project_net_traffic:
             template = "<parameter name=\"%s\"value=\"%s\" />\n"
-            net, mask = _get_net_and_mask(network['cidr'])
+            net, mask = netutils.get_net_and_mask(network['cidr'])
             values = [("PROJNET", net), ("PROJMASK", mask)]
             if FLAGS.use_ipv6:
-                net_v6, prefixlen_v6 = _get_net_and_prefixlen(
+                net_v6, prefixlen_v6 = netutils.get_net_and_prefixlen(
                                            network['cidr_v6'])
                 values.extend([("PROJNETV6", net_v6),
                                ("PROJMASKV6", prefixlen_v6)])
