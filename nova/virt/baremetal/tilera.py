@@ -36,21 +36,33 @@ def get_baremetal_nodes():
 
 
 class BareMetalNodes(object):
-    """Manages node information
-
-    Implementes singleton"""
+    """
+    BareMetalNodes class handles machine architectures of interest to
+    technical computing users have either poor or non-existent support
+    for virtualization.
+    This manages node information and implements singleton.
+    """
 
     _instance = None
     _is_init = False
 
     def __new__(cls, *args, **kwargs):
-        """Returns the BareMetalNodes singleton"""
+        """
+        Returns the BareMetalNodes singleton
+        """
         if not cls._instance or ('new' in kwargs and kwargs['new']):
             cls._instance = super(BareMetalNodes, cls).__new__(cls)
         return cls._instance
 
     def __init__(self, file_name="/tftpboot/tilera_boards"):
-        # Only call __init__ the first time object is instantiated
+        """
+        Only call __init__ the first time object is instantiated
+        From the bare-metal node list file,
+        Reads each item of each node
+            such as node ID, IP address, MAC address, vcpus,
+            memory, hdd, hypervisor type/version, and cpu
+        and appends each node information into nodes list
+        """
         if self._is_init:
             return
         self._is_init = True
@@ -90,6 +102,11 @@ class BareMetalNodes(object):
         fp.close()
 
     def get_hw_info(self, field):
+        """
+        Returns hardware information of bare-metal node by the given field
+            such as vcpus, memory_mb, local_gb, memory_mb_used,
+            local_gb_used, hypervisor_type, hypervisor_version, and cpu_info
+        """
         for node in self.nodes:
             if node['node_id'] == 9:
                 if field == 'vcpus':
@@ -110,6 +127,10 @@ class BareMetalNodes(object):
                     return node['cpu_info']
 
     def set_status(self, node_id, status):
+        """
+        Sets status of the given node by the given status
+        and Returns 1 if the node is in the nodes list
+        """
         for node in self.nodes:
             if node['node_id'] == node_id:
                 node['status'] = status
@@ -117,17 +138,28 @@ class BareMetalNodes(object):
         return 0
 
     def check_idle_node(self):
-        """check an idle node"""
+        """
+        Gets an idle node
+        and Returns the node ID
+        Leaves the status as-is (0) without changing it
+        """
         for item in self.nodes:
             if item['status'] == 0:
                 return item['node_id']
         raise exception.NotFound("No free nodes available")
 
     def get_status(self):
+        """
+        Gets status of the given node
+        """
         pass
 
     def get_idle_node(self):
-        """get an idle node"""
+        """
+        Gets an idle node,
+        Sets the status as 1 (RUNNING)
+        and Returns the node ID
+        """
         for item in self.nodes:
             if item['status'] == 0:
                 item['status'] = 1      # make status RUNNING
@@ -135,18 +167,28 @@ class BareMetalNodes(object):
         raise exception.NotFound("No free nodes available")
 
     def find_ip_w_id(self, id):
+        """
+        Returns default IP address of the given node
+        """
         for item in self.nodes:
             if item['node_id'] == id:
                 return item['ip_addr']
 
     def free_node(self, node_id):
+        """
+        Sets/frees status of the given node as 0 (IDLE)
+            so that the node can be used by other user
+        """
         LOG.debug(_("free_node...."))
         for item in self.nodes:
             if item['node_id'] == str(node_id):
                 item['status'] = 0  # make status IDLE
 
-    #PDU mode: 1-ON, 2-OFF, 3-REBOOT
     def power_mgr(self, node_id, mode):
+        """
+        Changes power state of the given node
+            according to the mode (1-ON, 2-OFF, 3-REBOOT)
+        """
         if node_id < 5:
             pdu_num = 1
             pdu_outlet_num = node_id + 5
@@ -158,6 +200,9 @@ class BareMetalNodes(object):
             str(mode), '>>', 'pdu_output')
 
     def deactivate_node(self, node_id):
+        """
+        Deactivates the given node by turnning it off
+        """
         node_ip = self.find_ip_w_id(node_id)
         LOG.debug(_("deactivate_node is called for \
                node_id = %(id)s node_ip = %(ip)s"),
@@ -169,6 +214,12 @@ class BareMetalNodes(object):
         self.power_mgr(node_id, 2)
 
     def network_set(self, node_ip, mac_address, ip_address):
+        """
+        Sets network configuration
+            based on the given ip_address and mac_address from nova
+            so that user can access the bare-metal node using ssh
+        and Sets security setting (iptables:port) if needed
+        """
         utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
             '--resume', '--net', node_ip, '--run', '-', \
             'ifconfig', 'xgbe0', 'hw', 'ether', mac_address, '-', \
@@ -178,11 +229,13 @@ class BareMetalNodes(object):
             '--resume', '--net', node_ip, '--run', '-', \
             'iptables', '-A', 'INPUT', '-p', 'tcp', '!', '-s', \
             '10.0.11.1', '--dport', '963', '-j', 'DROP', '-', '--wait', \
-            #'--run', '-', 'rm', '-rf', '/usr/sbin/iptables*', \
-            #'-', '--wait', \
             '--quit')
 
     def check_activated(self, node_id, node_ip):
+        """
+        Checks whether the given node is activated or not
+        """
+        #TODO
         #cmd = "/usr/local/TileraMDE/bin/tile-monitor --resume --net "
         # + node_ip + " --run - /usr/sbin/sshd - --wait -- ls
         #| grep bin >> tile_output"
@@ -205,8 +258,12 @@ class BareMetalNodes(object):
             + " is ready"
         LOG.debug(_(cmd))
 
-    #vmlinux mode: 0-NoSet, 1-FirstVmlinux, 2-SecondVmlinux, 9-RemoveVmlinux
     def vmlinux_set(self, mode, node_id):
+        """
+        Sets kernel into default path (/tftpboot) if needed
+            based on the given mode
+            such as 0-NoSet, 1-FirstVmlinux, 2-SecondVmlinux, 9-RemoveVmlinux
+        """
         if mode == 1:
             path1 = "/tftpboot/vmlinux_" + str(node_id) + "_1"
             path2 = "/tftpboot/vmlinux_" + str(node_id)
@@ -223,14 +280,24 @@ class BareMetalNodes(object):
             LOG.debug(_(cmd))
 
     def sleep_mgr(self, time):
+        """
+        Sleeps until the node is activated
+        """
         utils.execute('sleep', time)
 
     def ssh_set(self, node_ip):
+        """
+        Sets and Runs sshd in the node
+        """
         utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
             '--resume', '--net', node_ip, '--run', '-', \
             '/usr/sbin/sshd', '-', '--wait', '--quit')
 
     def fs_set(self, node_id, node_ip):
+        """
+        Sets file system in the given node if needed
+        Euca key should be already injected into the file system
+        """
         path1 = "/tftpboot/fs_" + str(node_id) + ".tar.gz"
         utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
             '--resume', '--net', node_ip, '--upload', path1, \
@@ -240,13 +307,15 @@ class BareMetalNodes(object):
             '--resume', '--net', node_ip, '--run', '-', 'mount', \
             '/dev/sda1', '/mnt', '-', '--wait', '--run', '-', 'rm', \
             '-rf', '/mnt/*', '-', '--wait', \
-            #'-rf', '/mnt/root/.ssh/authorized_keys', '-', '--wait', \
             '--run', '-', 'tar', \
             '-xzpf', '/fs.tar.gz', '-C', '/mnt/', '-', \
             '--wait', '--quit')
 
     def activate_node(self, node_id, node_ip, name, mac_address, \
                       ip_address):
+        """
+        Activates the given node using ID, IP, and MAC address
+        """
         LOG.debug(_("activate_node"))
 
         self.vmlinux_set(1, node_id)
@@ -266,6 +335,9 @@ class BareMetalNodes(object):
         return power_state.RUNNING
 
     def get_console_output(self, console_log, node_id):
+        """
+        Gets console output of the given node
+        """
         node_ip = self.find_ip_w_id(node_id)
         kmsg_dump_file = "/tftpboot/kmsg_dump_" + str(node_id)
         size = os.path.getsize(kmsg_dump_file)
@@ -275,22 +347,27 @@ class BareMetalNodes(object):
                 '--resume', '--net', node_ip, \
                 '--run', '-', head_cmd, '-', '--wait', \
                 '--download', '/etc/kmsg_dump', console_log, '--quit')
-                #'--download', '/proc/tile/hvconfig', console_log, '--quit')
             utils.execute('cp', console_log, kmsg_dump_file)
         else:
             utils.execute('cp', kmsg_dump_file, console_log)
 
     def get_image(self, bp):
+        """
+        Gets the bare-metal file system image into the given path
+        """
         node_id = self.check_idle_node()
         path_fs = "/tftpboot/tilera_fs_" + str(node_id)
         path_root = bp + "/root"
         utils.execute('cp', path_fs, path_root)
 
     def set_image(self, bpath, node_id):
+        """
+        Sets the bare-metal file system if modification is needed
+            after euca key is injected
+        """
         path1 = bpath + "/root"
         path2 = "/tftpboot/fs_" + str(node_id)
         utils.execute('sudo', 'mount', '-o', 'loop', path1, path2)
-        #utils.execute('sudo', 'chown', '-R', 'nova', path2)
         path1 = "/tftpboot/fs_" + str(node_id)
         os.chdir(path1)
         path2 = "../fs_" + str(node_id) + ".tar.gz"
@@ -301,13 +378,16 @@ class BareMetalNodes(object):
         utils.execute('sudo', 'umount', '-l', path4)
 
     def init_kmsg(self, node_id):
+        """
+        Sets an empty file for kernel message output of the given node
+        """
         kmsg_dump_file = "/tftpboot/kmsg_dump_" + str(node_id)
         utils.execute('touch', kmsg_dump_file)
         utils.execute('sudo', 'chown', 'nova', kmsg_dump_file)
 
     def delete_kmsg(self, node_id):
+        """
+        Deletes a file for kernel message output of the given node
+        """
         kmsg_dump_file = "/tftpboot/kmsg_dump_" + str(node_id)
         utils.execute('rm', kmsg_dump_file)
-
-#baremetal_nodes = _baremetal_nodes()
-#_MK

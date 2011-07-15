@@ -7,9 +7,7 @@ import sys
 import tempfile
 import time
 import uuid
-# MK
 import pickle
-# _MK
 from xml.dom import minidom
 from xml.etree import ElementTree
 
@@ -30,7 +28,6 @@ from nova.compute import power_state
 from nova.virt import disk
 from nova.virt import driver
 from nova.virt import images
-#from nova.virt.baremetal import tilera
 from nova.virt.baremetal import nodes
 
 FLAGS = flags.FLAGS
@@ -39,21 +36,28 @@ LOG = logging.getLogger('nova.virt.baremetal.dom')
 
 
 class BareMetalDom(object):
-    """Fake domain for bare metal back ends.
-    Implements the singleton pattern"""
+    """
+    BareMetalDom class handles fake domain for bare metal back ends
+    This implements the singleton pattern
+    """
 
     _instance = None
     _is_init = False
 
     def __new__(cls, *args, **kwargs):
-        """Returns the BareMetalDom singleton"""
+        """
+        Returns the BareMetalDom singleton
+        """
         if not cls._instance or ('new' in kwargs and kwargs['new']):
             cls._instance = super(BareMetalDom, cls).__new__(cls)
         return cls._instance
 
     def __init__(self,
                  fake_dom_file="/tftpboot/test_fake_dom_file"):
-        # Only call __init__ the first time object is instantiated
+        """
+        Only call __init__ the first time object is instantiated
+        Sets and Opens domain file
+        """
         if self._is_init:
             return
         self._is_init = True
@@ -76,11 +80,10 @@ class BareMetalDom(object):
             self.fp.close()
             self.fp = open(self.fake_dom_file, "r+")
         self._read_domain_from_file()
-        # (TODO) read pre-existing fake domains
 
     def _read_domain_from_file(self):
         """
-        Read the domains from a pickled representation.
+        Reads the domains from a pickled representation.
         """
         try:
             self.domains = pickle.load(self.fp)
@@ -102,7 +105,7 @@ class BareMetalDom(object):
                 continue
             res = self.baremetal_nodes.set_status(dom['node_id'], \
                                     dom['status'])
-            if res > 0:  # no such node exixts
+            if res > 0:
                 self.fake_dom_nums = self.fake_dom_nums + 1
             else:
                 LOG.debug(_("domain running on an unknown node: discarded"))
@@ -113,6 +116,12 @@ class BareMetalDom(object):
         LOG.debug(_(self.domains))
 
     def reboot_domain(self, name):
+        """
+        Finds domain and deactivates (power down)
+            the corresponding bare-metal node
+        Activates the node again
+        In case of fail, Destroys the domain from domains list
+        """
         fd = self.find_domain(name)
         if fd == []:
             raise exception.NotFound("No such domain (%s)" % name)
@@ -123,12 +132,10 @@ class BareMetalDom(object):
         except:
             raise exception.NotFound("Failed power down \
                                       Bare-metal node %s" % fd['node_id'])
-        self.change_domain_state(name, power_state.BUILDING)  # NOSTATE)
+        self.change_domain_state(name, power_state.BUILDING)
         try:
             state = self.baremetal_nodes.activate_node(fd['node_id'], \
                 node_ip, name, fd['mac_address'], fd['ip_address'])
-                #node_ip, name, fd['mac_address']) #MK
-                #fd['ip_addr'], name)
             self.change_domain_state(name, state)
             return state
         except:
@@ -137,8 +144,10 @@ class BareMetalDom(object):
             raise
 
     def destroy_domain(self, name):
-        """remove name instance from domains list
-           and power down the corresponding bare-metal node"""
+        """
+        Removes domain from domains list
+        and Deactivates the corresponding bare-metal node.
+        """
         fd = self.find_domain(name)
         if fd == []:
             LOG.debug(_("destroy_domain: no such domain"))
@@ -158,18 +167,18 @@ class BareMetalDom(object):
             LOG.debug(_("after storing domains"))
             LOG.debug(_(self.domains))
         except:
-            LOG.debug(_("what to do?"))
+            LOG.debug(_("deactivation/removing domain failed"))
             raise
 
     def create_domain(self, xml_dict, bpath):
-        """add a domain to domains list
-           and activate a idle Bare-metal node"""
+        """
+        Adds a domain to domains list
+        and Activates an idle bare-metal node
+        """
         LOG.debug(_("===== Domain is being created ====="))
         fd = self.find_domain(xml_dict['name'])
         if fd != []:
-            LOG.debug(_("domain with the same name already exists"))
-            raise
-            #raise exception.NotFound("same name already exists")
+            raise exception.NotFound("Same domain name already exists")
         LOG.debug(_("create_domain: before get_idle_node"))
 
         node_id = self.baremetal_nodes.get_idle_node()
@@ -182,11 +191,10 @@ class BareMetalDom(object):
                     'vcpus': xml_dict['vcpus'], \
                     'mac_address': xml_dict['mac_address'], \
                     'ip_address': xml_dict['ip_address'], \
-                    #'dhcp_server': xml_dict['dhcp_server'], \
                     'image_id': xml_dict['image_id'], \
                     'kernel_id': xml_dict['kernel_id'], \
                     'ramdisk_id': xml_dict['ramdisk_id'], \
-                     'status': power_state.BUILDING}  # NOSTATE}
+                     'status': power_state.BUILDING}
         self.domains.append(new_dom)
         LOG.debug(_(new_dom))
         self.change_domain_state(new_dom['name'], power_state.BUILDING)
@@ -197,7 +205,6 @@ class BareMetalDom(object):
             state = self.baremetal_nodes.activate_node(node_id,
                 node_ip, new_dom['name'], new_dom['mac_address'], \
                 new_dom['ip_address'])
-                #node_ip, new_dom['name'], new_dom['mac_address']) #MK
         except:
             self.domains.remove(new_dom)
             self.baremetal_nodes.free_node(node_id)
@@ -209,6 +216,10 @@ class BareMetalDom(object):
         return state
 
     def change_domain_state(self, name, state):
+        """
+        Changes domain state by the given state
+        and Updates domain file
+        """
         l = self.find_domain(name)
         if l == []:
             raise exception.NotFound("No such domain exists")
@@ -218,7 +229,9 @@ class BareMetalDom(object):
         self.store_domain()
 
     def store_domain(self):
-        # store fake domains to the file
+        """
+        Stores fake domains to the file
+        """
         LOG.debug(_("store fake domains to the file"))
         LOG.debug(_("-------"))
         LOG.debug(_(self.domains))
@@ -229,8 +242,10 @@ class BareMetalDom(object):
         LOG.debug(_("after successful pickle.dump"))
 
     def find_domain(self, name):
-        #LOG.debug(_("find_domain: self.domains %s"), name)
-        #LOG.debug(_(self.domains))
+        """
+        Finds domain by the given name
+        and Returns the domain
+        """
         for item in self.domains:
             if item['name'] == name:
                 return item
@@ -238,11 +253,19 @@ class BareMetalDom(object):
         return []
 
     def list_domains(self):
+        """
+        Returns the instance name from domains list
+        """
         if self.domains == []:
             return []
         return [x['name'] for x in self.domains]
 
     def get_domain_info(self, instance_name):
+        """
+        Finds domain by the given instance_name
+        and Returns the corresponding information
+            such as status, memory_kb, vcpus, etc.
+        """
         domain = self.find_domain(instance_name)
         if domain != []:
             return [domain['status'], domain['memory_kb'], \
@@ -251,5 +274,3 @@ class BareMetalDom(object):
                     100]
         else:
             return [power_state.NOSTATE, '', '', '', '']
-            #raise exception.NotFound("get_domain_info: No such doamin %s" \
-            #                          % instance_name)
