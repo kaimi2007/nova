@@ -72,9 +72,6 @@ def get_connection(read_only=False):
         conn = xenapi_conn.get_connection(read_only)
     elif t == 'hyperv':
         conn = hyperv.get_connection(read_only)
-#    elif t == 'gpu':
-#        print 'Starting with GPU support'
-#        conn = libvirt_conn_gpu.get_connection(read_only)
     elif t == 'baremetal':
         print 'Starting with Bare-metal support'
         conn = proxy.get_connection(read_only)
