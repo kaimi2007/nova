@@ -1,0 +1,393 @@
+import multiprocessing
+import os
+import random
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import uuid
+from xml.dom import minidom
+from xml.etree import ElementTree
+
+from eventlet import greenthread
+from eventlet import tpool
+
+from nova import context
+from nova import db
+from nova import exception
+from nova import flags
+from nova import ipv6
+from nova import log as logging
+from nova import utils
+from nova import vnc
+from nova.auth import manager
+from nova.compute import instance_types
+from nova.compute import power_state
+from nova.virt import disk
+from nova.virt import driver
+from nova.virt import images
+
+LOG = logging.getLogger('nova.virt.tilera')
+
+
+def get_baremetal_nodes():
+    return BareMetalNodes()
+
+
+class BareMetalNodes(object):
+    """
+    BareMetalNodes class handles machine architectures of interest to
+    technical computing users have either poor or non-existent support
+    for virtualization.
+    This manages node information and implements singleton.
+    """
+
+    _instance = None
+    _is_init = False
+
+    def __new__(cls, *args, **kwargs):
+        """
+        Returns the BareMetalNodes singleton
+        """
+        if not cls._instance or ('new' in kwargs and kwargs['new']):
+            cls._instance = super(BareMetalNodes, cls).__new__(cls)
+        return cls._instance
+
+    def __init__(self, file_name="/tftpboot/tilera_boards"):
+        """
+        Only call __init__ the first time object is instantiated
+        From the bare-metal node list file,
+        Reads each item of each node
+            such as node ID, IP address, MAC address, vcpus,
+            memory, hdd, hypervisor type/version, and cpu
+        and appends each node information into nodes list
+        """
+        if self._is_init:
+            return
+        self._is_init = True
+
+        self.nodes = []
+        self.BOARD_ID = 0
+        self.IP_ADDR = 1
+        self.MAC_ADDR = 2
+        self.VCPUS = 3
+        self.MEMORY_MB = 4
+        self.LOCAL_GB = 5
+        self.MEMORY_MB_USED = 6
+        self.LOCAL_GB_USED = 7
+        self.HYPERVISOR_TYPE = 8
+        self.HYPERVISOR_VER = 9
+        self.CPU_INFO = 10
+
+        fp = open(file_name, "r")
+        for item in fp:
+            l = item.split()
+            if l[0] == '#':
+                continue
+            l_d = {'node_id': int(l[self.BOARD_ID]),
+                    'ip_addr': l[self.IP_ADDR],
+                    'mac_addr': l[self.MAC_ADDR],
+                    'status': power_state.NOSTATE,
+                    'vcpus': int(l[self.VCPUS]),
+                    'memory_mb': int(l[self.MEMORY_MB]),
+                    'local_gb': int(l[self.LOCAL_GB]),
+                    'memory_mb_used': int(l[self.MEMORY_MB_USED]),
+                    'local_gb_used': int(l[self.LOCAL_GB_USED]),
+                    'hypervisor_type': l[self.HYPERVISOR_TYPE],
+                    'hypervisor_version': int(l[self.HYPERVISOR_VER]),
+                    'cpu_info': l[self.CPU_INFO]
+                  }
+            self.nodes.append(l_d)
+        fp.close()
+
+    def get_hw_info(self, field):
+        """
+        Returns hardware information of bare-metal node by the given field
+            such as vcpus, memory_mb, local_gb, memory_mb_used,
+            local_gb_used, hypervisor_type, hypervisor_version, and cpu_info
+        """
+        for node in self.nodes:
+            if node['node_id'] == 9:
+                if field == 'vcpus':
+                    return node['vcpus']
+                elif field == 'memory_mb':
+                    return node['memory_mb']
+                elif field == 'local_gb':
+                    return node['local_gb']
+                elif field == 'memory_mb_used':
+                    return node['memory_mb_used']
+                elif field == 'local_gb_used':
+                    return node['local_gb_used']
+                elif field == 'hypervisor_type':
+                    return node['hypervisor_type']
+                elif field == 'hypervisor_version':
+                    return node['hypervisor_version']
+                elif field == 'cpu_info':
+                    return node['cpu_info']
+
+    def set_status(self, node_id, status):
+        """
+        Sets status of the given node by the given status
+        and Returns 1 if the node is in the nodes list
+        """
+        for node in self.nodes:
+            if node['node_id'] == node_id:
+                node['status'] = status
+                return 1
+        return 0
+
+    def check_idle_node(self):
+        """
+        Gets an idle node
+        and Returns the node ID
+        Leaves the status as-is (0) without changing it
+        """
+        for item in self.nodes:
+            if item['status'] == 0:
+                return item['node_id']
+        raise exception.NotFound("No free nodes available")
+
+    def get_status(self):
+        """
+        Gets status of the given node
+        """
+        pass
+
+    def get_idle_node(self):
+        """
+        Gets an idle node,
+        Sets the status as 1 (RUNNING)
+        and Returns the node ID
+        """
+        for item in self.nodes:
+            if item['status'] == 0:
+                item['status'] = 1      # make status RUNNING
+                return item['node_id']
+        raise exception.NotFound("No free nodes available")
+
+    def find_ip_w_id(self, id):
+        """
+        Returns default IP address of the given node
+        """
+        for item in self.nodes:
+            if item['node_id'] == id:
+                return item['ip_addr']
+
+    def free_node(self, node_id):
+        """
+        Sets/frees status of the given node as 0 (IDLE)
+            so that the node can be used by other user
+        """
+        LOG.debug(_("free_node...."))
+        for item in self.nodes:
+            if item['node_id'] == str(node_id):
+                item['status'] = 0  # make status IDLE
+
+    def power_mgr(self, node_id, mode):
+        """
+        Changes power state of the given node
+            according to the mode (1-ON, 2-OFF, 3-REBOOT)
+        """
+        if node_id < 5:
+            pdu_num = 1
+            pdu_outlet_num = node_id + 5
+        else:
+            pdu_num = 2
+            pdu_outlet_num = node_id
+        path1 = "10.0.100." + str(pdu_num)
+        utils.execute('/tftpboot/pdu_mgr', path1, str(pdu_outlet_num), \
+            str(mode), '>>', 'pdu_output')
+
+    def deactivate_node(self, node_id):
+        """
+        Deactivates the given node by turnning it off
+        """
+        node_ip = self.find_ip_w_id(node_id)
+        LOG.debug(_("deactivate_node is called for \
+               node_id = %(id)s node_ip = %(ip)s"),
+               {'id': str(node_id), 'ip': node_ip})
+        for item in self.nodes:
+            if item['node_id'] == node_id:
+                LOG.debug(_("status of node is set to 0"))
+                item['status'] = 0
+        self.power_mgr(node_id, 2)
+
+    def network_set(self, node_ip, mac_address, ip_address):
+        """
+        Sets network configuration
+            based on the given ip_address and mac_address from nova
+            so that user can access the bare-metal node using ssh
+        and Sets security setting (iptables:port) if needed
+        """
+        utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
+            '--resume', '--net', node_ip, '--run', '-', \
+            'ifconfig', 'xgbe0', 'hw', 'ether', mac_address, '-', \
+            '--wait', '--run', '-', 'ifconfig', 'xgbe0', ip_address, \
+            '-', '--wait', '--quit')
+        utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
+            '--resume', '--net', node_ip, '--run', '-', \
+            'iptables', '-A', 'INPUT', '-p', 'tcp', '!', '-s', \
+            '10.0.11.1', '--dport', '963', '-j', 'DROP', '-', '--wait', \
+            '--quit')
+
+    def check_activated(self, node_id, node_ip):
+        """
+        Checks whether the given node is activated or not
+        """
+        #TODO
+        #cmd = "/usr/local/TileraMDE/bin/tile-monitor --resume --net "
+        # + node_ip + " --run - /usr/sbin/sshd - --wait -- ls
+        #| grep bin >> tile_output"
+        #utils.execute('/usr/local/TileraMDE/bin/tile-monitor',
+        #'--resume', '--net', node_ip, '--run', '-', '/usr/sbin/sshd', \
+        #'-', '--wait', '--', 'ls', '|', 'grep', 'bin', \
+        #'>>', 'tile_output')
+        #file = open("./tile_output")
+        #out_msg = file.readline()
+        #print "tile_output: " + out_msg
+        #utils.execute('rm', './tile_output')
+        #file.close()
+        #if out_msg.find("bin") < 0:
+        #    cmd = "TILERA_BOARD_#" + str(node_id) + " " \
+        #+ node_ip + " is not ready, out_msg=" + out_msg
+        #    print cmd
+        #    return power_state.NOSTATE
+        #else:
+        cmd = "TILERA_BOARD_#" + str(node_id) + " " + node_ip \
+            + " is ready"
+        LOG.debug(_(cmd))
+
+    def vmlinux_set(self, mode, node_id):
+        """
+        Sets kernel into default path (/tftpboot) if needed
+            based on the given mode
+            such as 0-NoSet, 1-FirstVmlinux, 2-SecondVmlinux, 9-RemoveVmlinux
+        """
+        if mode == 1:
+            path1 = "/tftpboot/vmlinux_" + str(node_id) + "_1"
+            path2 = "/tftpboot/vmlinux_" + str(node_id)
+            utils.execute('cp', path1, path2)
+        elif mode == 2:
+            path1 = "/tftpboot/vmlinux_" + str(node_id) + "_2"
+            path2 = "/tftpboot/vmlinux_" + str(node_id)
+            utils.execute('cp', path1, path2)
+        elif mode == 9:
+            path1 = "/tftpboot/vmlinux_" + str(node_id)
+            utils.execute('rm', path1)
+        else:
+            cmd = "Noting to do"
+            LOG.debug(_(cmd))
+
+    def sleep_mgr(self, time):
+        """
+        Sleeps until the node is activated
+        """
+        utils.execute('sleep', time)
+
+    def ssh_set(self, node_ip):
+        """
+        Sets and Runs sshd in the node
+        """
+        utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
+            '--resume', '--net', node_ip, '--run', '-', \
+            '/usr/sbin/sshd', '-', '--wait', '--quit')
+
+    def fs_set(self, node_id, node_ip):
+        """
+        Sets file system in the given node if needed
+        Euca key should be already injected into the file system
+        """
+        path1 = "/tftpboot/fs_" + str(node_id) + ".tar.gz"
+        utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
+            '--resume', '--net', node_ip, '--upload', path1, \
+            '/fs.tar.gz', '--quit')
+        utils.execute('rm', path1)
+        utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
+            '--resume', '--net', node_ip, '--run', '-', 'mount', \
+            '/dev/sda1', '/mnt', '-', '--wait', '--run', '-', 'rm', \
+            '-rf', '/mnt/*', '-', '--wait', \
+            '--run', '-', 'tar', \
+            '-xzpf', '/fs.tar.gz', '-C', '/mnt/', '-', \
+            '--wait', '--quit')
+
+    def activate_node(self, node_id, node_ip, name, mac_address, \
+                      ip_address):
+        """
+        Activates the given node using ID, IP, and MAC address
+        """
+        LOG.debug(_("activate_node"))
+
+        self.vmlinux_set(1, node_id)
+        self.power_mgr(node_id, 3)
+        self.sleep_mgr(60)
+
+        self.fs_set(node_id, node_ip)
+        self.vmlinux_set(2, node_id)
+        self.power_mgr(node_id, 3)
+        self.sleep_mgr(80)
+
+        self.check_activated(node_id, node_ip)
+        self.ssh_set(node_ip)
+        self.vmlinux_set(9, node_id)
+        self.network_set(node_ip, mac_address, ip_address)
+
+        return power_state.RUNNING
+
+    def get_console_output(self, console_log, node_id):
+        """
+        Gets console output of the given node
+        """
+        node_ip = self.find_ip_w_id(node_id)
+        kmsg_dump_file = "/tftpboot/kmsg_dump_" + str(node_id)
+        size = os.path.getsize(kmsg_dump_file)
+        head_cmd = "head -400 /proc/kmsg >> /etc/kmsg_dump"
+        if size <= 0:
+            utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
+                '--resume', '--net', node_ip, \
+                '--run', '-', head_cmd, '-', '--wait', \
+                '--download', '/etc/kmsg_dump', console_log, '--quit')
+            utils.execute('cp', console_log, kmsg_dump_file)
+        else:
+            utils.execute('cp', kmsg_dump_file, console_log)
+
+    def get_image(self, bp):
+        """
+        Gets the bare-metal file system image into the given path
+        """
+        node_id = self.check_idle_node()
+        path_fs = "/tftpboot/tilera_fs_" + str(node_id)
+        path_root = bp + "/root"
+        utils.execute('cp', path_fs, path_root)
+
+    def set_image(self, bpath, node_id):
+        """
+        Sets the bare-metal file system if modification is needed
+            after euca key is injected
+        """
+        path1 = bpath + "/root"
+        path2 = "/tftpboot/fs_" + str(node_id)
+        utils.execute('sudo', 'mount', '-o', 'loop', path1, path2)
+        path1 = "/tftpboot/fs_" + str(node_id)
+        os.chdir(path1)
+        path2 = "../fs_" + str(node_id) + ".tar.gz"
+        utils.execute('sudo', 'tar', '-czpf', path2, '.')
+        path1 = bpath + "/../../.."
+        os.chdir(path1)
+        path4 = "/tftpboot/fs_" + str(node_id)
+        utils.execute('sudo', 'umount', '-l', path4)
+
+    def init_kmsg(self, node_id):
+        """
+        Sets an empty file for kernel message output of the given node
+        """
+        kmsg_dump_file = "/tftpboot/kmsg_dump_" + str(node_id)
+        utils.execute('touch', kmsg_dump_file)
+        utils.execute('sudo', 'chown', 'nova', kmsg_dump_file)
+
+    def delete_kmsg(self, node_id):
+        """
+        Deletes a file for kernel message output of the given node
+        """
+        kmsg_dump_file = "/tftpboot/kmsg_dump_" + str(node_id)
+        utils.execute('rm', kmsg_dump_file)
