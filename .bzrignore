@@ -14,3 +14,7 @@ clean.sqlite
 run_tests.log
 tests.sqlite
 .ropeproject
+nova/tests/instance-*
+tags
+.coverage
+covhtml
