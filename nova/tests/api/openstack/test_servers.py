@@ -21,7 +21,6 @@ import json
 import unittest
 from xml.dom import minidom
 
-import stubout
 import webob
 
 from nova import context
@@ -104,8 +103,8 @@ def return_server_with_uuid_and_power_state(power_state):
     return _return_server
 
 
-def return_servers(context, user_id=1):
-    return [stub_instance(i, user_id) for i in xrange(5)]
+def return_servers(context, *args, **kwargs):
+    return [stub_instance(i, 'fake', 'fake') for i in xrange(5)]
 
 
 def return_servers_by_reservation(context, reservation_id=""):
@@ -148,10 +147,10 @@ def instance_addresses(context, instance_id):
     return None
 
 
-def stub_instance(id, user_id=1, private_address=None, public_addresses=None,
-                  host=None, power_state=0, reservation_id="",
-                  uuid=FAKE_UUID, image_ref="10", flavor_id="1",
-                  interfaces=None):
+def stub_instance(id, user_id='fake', project_id='fake', private_address=None,
+                  public_addresses=None, host=None, power_state=0,
+                  reservation_id="", uuid=FAKE_UUID, image_ref="10",
+                  flavor_id="1", interfaces=None):
     metadata = []
     metadata.append(InstanceMetadata(key='seq', value=id))
 
@@ -177,7 +176,7 @@ def stub_instance(id, user_id=1, private_address=None, public_addresses=None,
         "updated_at": datetime.datetime(2010, 11, 11, 11, 0, 0),
         "admin_pass": "",
         "user_id": user_id,
-        "project_id": "",
+        "project_id": project_id,
         "image_ref": image_ref,
         "kernel_id": "",
         "ramdisk_id": "",
@@ -236,12 +235,8 @@ class ServersTest(test.TestCase):
     def setUp(self):
         self.maxDiff = None
         super(ServersTest, self).setUp()
-        self.stubs = stubout.StubOutForTesting()
-        fakes.FakeAuthManager.reset_fake_data()
-        fakes.FakeAuthDatabase.data = {}
         fakes.stub_out_networking(self.stubs)
         fakes.stub_out_rate_limiting(self.stubs)
-        fakes.stub_out_auth(self.stubs)
         fakes.stub_out_key_pair_funcs(self.stubs)
         fakes.stub_out_image_service(self.stubs)
         self.stubs.Set(utils, 'gen_uuid', fake_gen_uuid)
@@ -249,7 +244,7 @@ class ServersTest(test.TestCase):
         self.stubs.Set(nova.db.api, 'instance_get', return_server_by_id)
         self.stubs.Set(nova.db, 'instance_get_by_uuid',
                        return_server_by_uuid)
-        self.stubs.Set(nova.db.api, 'instance_get_all_by_user',
+        self.stubs.Set(nova.db.api, 'instance_get_all_by_project',
                        return_servers)
         self.stubs.Set(nova.db.api, 'instance_add_security_group',
                        return_security_group)
@@ -264,14 +259,19 @@ class ServersTest(test.TestCase):
         self.stubs.Set(nova.compute.API, 'resume', fake_compute_api)
         self.stubs.Set(nova.compute.API, "get_diagnostics", fake_compute_api)
         self.stubs.Set(nova.compute.API, "get_actions", fake_compute_api)
+
+        fakes.stub_out_glance(self.stubs)
+        fakes.stub_out_compute_api_snapshot(self.stubs)
+        service_class = 'nova.image.glance.GlanceImageService'
+        self.service = utils.import_object(service_class)
+        self.context = context.RequestContext(1, None)
+        self.service.delete_all()
+        self.sent_to_glance = {}
+        fakes.stub_out_glance_add_image(self.stubs, self.sent_to_glance)
+
         self.allow_admin = FLAGS.allow_admin_api
 
         self.webreq = common.webob_factory('/v1.0/servers')
-
-    def tearDown(self):
-        self.stubs.UnsetAll()
-        FLAGS.allow_admin_api = self.allow_admin
-        super(ServersTest, self).tearDown()
 
     def test_get_server_by_id(self):
         req = webob.Request.blank('/v1.0/servers/1')
@@ -972,6 +972,7 @@ class ServersTest(test.TestCase):
         res = req.get_response(fakes.wsgi_app())
         res_dict = json.loads(res.body)
 
+        self.assertEqual(len(res_dict['servers']), 5)
         i = 0
         for s in res_dict['servers']:
             self.assertEqual(s['id'], i)
@@ -1035,6 +1036,7 @@ class ServersTest(test.TestCase):
         res = req.get_response(fakes.wsgi_app())
         res_dict = json.loads(res.body)
 
+        self.assertEqual(len(res_dict['servers']), 5)
         for i, s in enumerate(res_dict['servers']):
             self.assertEqual(s['id'], i)
             self.assertEqual(s['name'], 'server%d' % i)
@@ -1197,7 +1199,7 @@ class ServersTest(test.TestCase):
     def test_create_instance_via_zones(self):
         """Server generated ReservationID"""
         self._setup_for_create_instance()
-        FLAGS.allow_admin_api = True
+        self.flags(allow_admin_api=True)
 
         body = dict(server=dict(
             name='server_test', imageId=3, flavorId=2,
@@ -1219,7 +1221,7 @@ class ServersTest(test.TestCase):
     def test_create_instance_via_zones_with_resid(self):
         """User supplied ReservationID"""
         self._setup_for_create_instance()
-        FLAGS.allow_admin_api = True
+        self.flags(allow_admin_api=True)
 
         body = dict(server=dict(
             name='server_test', imageId=3, flavorId=2,
@@ -1323,7 +1325,8 @@ class ServersTest(test.TestCase):
     def test_create_instance_v1_1(self):
         self._setup_for_create_instance()
 
-        image_href = 'http://localhost/images/2'
+        # proper local hrefs must start with 'http://localhost/v1.1/'
+        image_href = 'http://localhost/v1.1/images/2'
         flavor_ref = 'http://localhost/flavors/3'
         expected_flavor = {
             "id": "3",
@@ -1728,10 +1731,11 @@ class ServersTest(test.TestCase):
         instances - 2 on one host and 3 on another.
         '''
 
-        def return_servers_with_host(context, user_id=1):
-            return [stub_instance(i, 1, None, None, i % 2) for i in xrange(5)]
+        def return_servers_with_host(context, *args, **kwargs):
+            return [stub_instance(i, 'fake', 'fake', None, None, i % 2)
+                    for i in xrange(5)]
 
-        self.stubs.Set(nova.db.api, 'instance_get_all_by_user',
+        self.stubs.Set(nova.db.api, 'instance_get_all_by_project',
             return_servers_with_host)
 
         req = webob.Request.blank('/v1.0/servers/detail')
@@ -1751,7 +1755,7 @@ class ServersTest(test.TestCase):
             self.assertEqual(s['flavorId'], 1)
 
     def test_server_pause(self):
-        FLAGS.allow_admin_api = True
+        self.flags(allow_admin_api=True)
         body = dict(server=dict(
             name='server_test', imageId=2, flavorId=2, metadata={},
             personality={}))
@@ -1763,7 +1767,7 @@ class ServersTest(test.TestCase):
         self.assertEqual(res.status_int, 202)
 
     def test_server_unpause(self):
-        FLAGS.allow_admin_api = True
+        self.flags(allow_admin_api=True)
         body = dict(server=dict(
             name='server_test', imageId=2, flavorId=2, metadata={},
             personality={}))
@@ -1775,7 +1779,7 @@ class ServersTest(test.TestCase):
         self.assertEqual(res.status_int, 202)
 
     def test_server_suspend(self):
-        FLAGS.allow_admin_api = True
+        self.flags(allow_admin_api=True)
         body = dict(server=dict(
             name='server_test', imageId=2, flavorId=2, metadata={},
             personality={}))
@@ -1787,7 +1791,7 @@ class ServersTest(test.TestCase):
         self.assertEqual(res.status_int, 202)
 
     def test_server_resume(self):
-        FLAGS.allow_admin_api = True
+        self.flags(allow_admin_api=True)
         body = dict(server=dict(
             name='server_test', imageId=2, flavorId=2, metadata={},
             personality={}))
@@ -1799,7 +1803,7 @@ class ServersTest(test.TestCase):
         self.assertEqual(res.status_int, 202)
 
     def test_server_reset_network(self):
-        FLAGS.allow_admin_api = True
+        self.flags(allow_admin_api=True)
         body = dict(server=dict(
             name='server_test', imageId=2, flavorId=2, metadata={},
             personality={}))
@@ -1811,7 +1815,7 @@ class ServersTest(test.TestCase):
         self.assertEqual(res.status_int, 202)
 
     def test_server_inject_network_info(self):
-        FLAGS.allow_admin_api = True
+        self.flags(allow_admin_api=True)
         body = dict(server=dict(
             name='server_test', imageId=2, flavorId=2, metadata={},
             personality={}))
@@ -2102,7 +2106,7 @@ class ServersTest(test.TestCase):
         self.assertEqual(self.server_delete_called, True)
 
     def test_rescue_accepted(self):
-        FLAGS.allow_admin_api = True
+        self.flags(allow_admin_api=True)
         body = {}
 
         self.called = False
@@ -2121,7 +2125,7 @@ class ServersTest(test.TestCase):
         self.assertEqual(res.status_int, 202)
 
     def test_rescue_raises_handled(self):
-        FLAGS.allow_admin_api = True
+        self.flags(allow_admin_api=True)
         body = {}
 
         def rescue_mock(*args, **kwargs):
@@ -2167,11 +2171,14 @@ class ServersTest(test.TestCase):
         self.assertEqual(self.resize_called, True)
 
     def test_resize_server_v11(self):
-
         req = webob.Request.blank('/v1.1/servers/1/action')
         req.content_type = 'application/json'
         req.method = 'POST'
-        body_dict = dict(resize=dict(flavorRef="http://localhost/3"))
+        body_dict = {
+            "resize": {
+                "flavorRef": 3,
+            },
+        }
         req.body = json.dumps(body_dict)
 
         self.resize_called = False
@@ -2185,8 +2192,8 @@ class ServersTest(test.TestCase):
         self.assertEqual(res.status_int, 202)
         self.assertEqual(self.resize_called, True)
 
-    def test_resize_bad_flavor_fails(self):
-        req = self.webreq('/1/action', 'POST', dict(resize=dict(derp=3)))
+    def test_resize_bad_flavor_data(self):
+        req = self.webreq('/1/action', 'POST', {"resize": "bad_data"})
 
         self.resize_called = False
 
@@ -2196,14 +2203,54 @@ class ServersTest(test.TestCase):
         self.stubs.Set(nova.compute.api.API, 'resize', resize_mock)
 
         res = req.get_response(fakes.wsgi_app())
-        self.assertEqual(res.status_int, 422)
+        self.assertEqual(res.status_int, 400)
         self.assertEqual(self.resize_called, False)
+
+    def test_resize_invalid_flavorid(self):
+        req = self.webreq('/1/action', 'POST', {"resize": {"flavorId": 300}})
+        res = req.get_response(fakes.wsgi_app())
+        self.assertEqual(res.status_int, 400)
+
+    def test_resize_nonint_flavorid(self):
+        req = self.webreq('/1/action', 'POST', {"resize": {"flavorId": "a"}})
+        res = req.get_response(fakes.wsgi_app())
+        self.assertEqual(res.status_int, 400)
+
+    def test_resize_invalid_flavorid_v1_1(self):
+        req = webob.Request.blank('/v1.1/servers/1/action')
+        req.content_type = 'application/json'
+        req.method = 'POST'
+        resize_body = {
+            "resize": {
+                "image": {
+                    "id": 300,
+                },
+            },
+        }
+        req.body = json.dumps(resize_body)
+        res = req.get_response(fakes.wsgi_app())
+        self.assertEqual(res.status_int, 400)
+
+    def test_resize_nonint_flavorid_v1_1(self):
+        req = webob.Request.blank('/v1.1/servers/1/action')
+        req.content_type = 'application/json'
+        req.method = 'POST'
+        resize_body = {
+            "resize": {
+                "image": {
+                    "id": "a",
+                },
+            },
+        }
+        req.body = json.dumps(resize_body)
+        res = req.get_response(fakes.wsgi_app())
+        self.assertEqual(res.status_int, 400)
 
     def test_resize_raises_fails(self):
         req = self.webreq('/1/action', 'POST', dict(resize=dict(flavorId=3)))
 
         def resize_mock(*args):
-            raise Exception('hurr durr')
+            raise Exception("An error occurred.")
 
         self.stubs.Set(nova.compute.api.API, 'resize', resize_mock)
 
@@ -2241,7 +2288,7 @@ class ServersTest(test.TestCase):
         req = self.webreq('/1/action', 'POST', dict(confirmResize=None))
 
         def confirm_resize_mock(*args):
-            raise Exception('hurr durr')
+            raise Exception("An error occurred.")
 
         self.stubs.Set(nova.compute.api.API, 'confirm_resize',
                 confirm_resize_mock)
@@ -2268,7 +2315,7 @@ class ServersTest(test.TestCase):
         req = self.webreq('/1/action', 'POST', dict(revertResize=None))
 
         def revert_resize_mock(*args):
-            raise Exception('hurr durr')
+            raise Exception("An error occurred.")
 
         self.stubs.Set(nova.compute.api.API, 'revert_resize',
                 revert_resize_mock)
@@ -2310,6 +2357,268 @@ class ServersTest(test.TestCase):
         self.assertEqual(res.status_int, 200)
         res_dict = json.loads(res.body)
         self.assertEqual(res_dict['server']['status'], 'SHUTOFF')
+
+    def test_create_image_v1_1(self):
+        body = {
+            'createImage': {
+                'name': 'Snapshot 1',
+            },
+        }
+        req = webob.Request.blank('/v1.1/servers/1/action')
+        req.method = 'POST'
+        req.body = json.dumps(body)
+        req.headers["content-type"] = "application/json"
+        response = req.get_response(fakes.wsgi_app())
+        self.assertEqual(202, response.status_int)
+        location = response.headers['Location']
+        self.assertEqual('http://localhost/v1.1/images/123', location)
+
+    def test_create_image_v1_1_with_metadata(self):
+        body = {
+            'createImage': {
+                'name': 'Snapshot 1',
+                'metadata': {'key': 'asdf'},
+            },
+        }
+        req = webob.Request.blank('/v1.1/servers/1/action')
+        req.method = 'POST'
+        req.body = json.dumps(body)
+        req.headers["content-type"] = "application/json"
+        response = req.get_response(fakes.wsgi_app())
+        self.assertEqual(202, response.status_int)
+        location = response.headers['Location']
+        self.assertEqual('http://localhost/v1.1/images/123', location)
+
+    def test_create_image_v1_1_no_name(self):
+        body = {
+            'createImage': {},
+        }
+        req = webob.Request.blank('/v1.1/servers/1/action')
+        req.method = 'POST'
+        req.body = json.dumps(body)
+        req.headers["content-type"] = "application/json"
+        response = req.get_response(fakes.wsgi_app())
+        self.assertEqual(400, response.status_int)
+
+    def test_create_image_v1_1_bad_metadata(self):
+        body = {
+            'createImage': {
+                'name': 'geoff',
+                'metadata': 'henry',
+            },
+        }
+        req = webob.Request.blank('/v1.1/servers/1/action')
+        req.method = 'POST'
+        req.body = json.dumps(body)
+        req.headers["content-type"] = "application/json"
+        response = req.get_response(fakes.wsgi_app())
+        self.assertEqual(400, response.status_int)
+
+    def test_create_backup(self):
+        """The happy path for creating backups"""
+        FLAGS.allow_admin_api = True
+
+        body = {
+            'createBackup': {
+                'name': 'Backup 1',
+                'backup_type': 'daily',
+                'rotation': 1,
+            },
+        }
+
+        req = webob.Request.blank('/v1.0/servers/1/action')
+        req.method = 'POST'
+        req.body = json.dumps(body)
+        req.headers["content-type"] = "application/json"
+        response = req.get_response(fakes.wsgi_app())
+        self.assertEqual(202, response.status_int)
+        self.assertTrue(response.headers['Location'])
+
+    def test_create_backup_v1_1(self):
+        """The happy path for creating backups through v1.1 api"""
+        FLAGS.allow_admin_api = True
+
+        body = {
+            'createBackup': {
+                'name': 'Backup 1',
+                'backup_type': 'daily',
+                'rotation': 1,
+            },
+        }
+
+        req = webob.Request.blank('/v1.1/servers/1/action')
+        req.method = 'POST'
+        req.body = json.dumps(body)
+        req.headers["content-type"] = "application/json"
+        response = req.get_response(fakes.wsgi_app())
+        self.assertEqual(202, response.status_int)
+        self.assertTrue(response.headers['Location'])
+
+    def test_create_backup_admin_api_off(self):
+        """The happy path for creating backups"""
+        FLAGS.allow_admin_api = False
+
+        body = {
+            'createBackup': {
+                'name': 'Backup 1',
+                'backup_type': 'daily',
+                'rotation': 1,
+            },
+        }
+
+        req = webob.Request.blank('/v1.0/servers/1/action')
+        req.method = 'POST'
+        req.body = json.dumps(body)
+        req.headers["content-type"] = "application/json"
+        response = req.get_response(fakes.wsgi_app())
+        self.assertEqual(501, response.status_int)
+
+    def test_create_backup_with_metadata(self):
+        FLAGS.allow_admin_api = True
+
+        body = {
+            'createBackup': {
+                'name': 'Backup 1',
+                'backup_type': 'daily',
+                'rotation': 1,
+                'metadata': {'123': 'asdf'},
+            },
+        }
+
+        req = webob.Request.blank('/v1.0/servers/1/action')
+        req.method = 'POST'
+        req.body = json.dumps(body)
+        req.headers["content-type"] = "application/json"
+        response = req.get_response(fakes.wsgi_app())
+        self.assertEqual(202, response.status_int)
+        self.assertTrue(response.headers['Location'])
+
+    def test_create_backup_no_name(self):
+        """Name is required for backups"""
+        FLAGS.allow_admin_api = True
+
+        body = {
+            'createBackup': {
+                'backup_type': 'daily',
+                'rotation': 1,
+            },
+        }
+
+        req = webob.Request.blank('/v1.0/images')
+        req.method = 'POST'
+        req.body = json.dumps(body)
+        req.headers["content-type"] = "application/json"
+        response = req.get_response(fakes.wsgi_app())
+        self.assertEqual(400, response.status_int)
+
+    def test_create_backup_no_rotation(self):
+        """Rotation is required for backup requests"""
+        FLAGS.allow_admin_api = True
+
+        body = {
+            'createBackup': {
+                'name': 'Backup 1',
+                'backup_type': 'daily',
+            },
+        }
+
+        req = webob.Request.blank('/v1.0/images')
+        req.method = 'POST'
+        req.body = json.dumps(body)
+        req.headers["content-type"] = "application/json"
+
+        response = req.get_response(fakes.wsgi_app())
+        self.assertEqual(400, response.status_int)
+
+    def test_create_backup_no_backup_type(self):
+        """Backup Type (daily or weekly) is required for backup requests"""
+        FLAGS.allow_admin_api = True
+
+        body = {
+            'createBackup': {
+                'name': 'Backup 1',
+                'rotation': 1,
+            },
+        }
+        req = webob.Request.blank('/v1.0/images')
+        req.method = 'POST'
+        req.body = json.dumps(body)
+        req.headers["content-type"] = "application/json"
+
+        response = req.get_response(fakes.wsgi_app())
+        self.assertEqual(400, response.status_int)
+
+    def test_create_backup_bad_entity(self):
+        FLAGS.allow_admin_api = True
+
+        body = {'createBackup': 'go'}
+        req = webob.Request.blank('/v1.0/images')
+        req.method = 'POST'
+        req.body = json.dumps(body)
+        req.headers["content-type"] = "application/json"
+
+        response = req.get_response(fakes.wsgi_app())
+        self.assertEqual(400, response.status_int)
+
+
+class TestServerActionXMLDeserializer(test.TestCase):
+
+    def setUp(self):
+        self.deserializer = create_instance_helper.ServerXMLDeserializer()
+
+    def tearDown(self):
+        pass
+
+    def test_create_image(self):
+        serial_request = """
+<createImage xmlns="http://docs.openstack.org/compute/api/v1.1"
+             name="new-server-test"/>"""
+        request = self.deserializer.deserialize(serial_request, 'action')
+        expected = {
+            "createImage": {
+                "name": "new-server-test",
+                "metadata": {},
+            },
+        }
+        self.assertEquals(request['body'], expected)
+
+    def test_create_image_with_metadata(self):
+        serial_request = """
+<createImage xmlns="http://docs.openstack.org/compute/api/v1.1"
+             name="new-server-test">
+    <metadata>
+        <meta key="key1">value1</meta>
+    </metadata>
+</createImage>"""
+        request = self.deserializer.deserialize(serial_request, 'action')
+        expected = {
+            "createImage": {
+                "name": "new-server-test",
+                "metadata": {"key1": "value1"},
+            },
+        }
+        self.assertEquals(request['body'], expected)
+
+    def test_create_backup_with_metadata(self):
+        serial_request = """
+<createBackup xmlns="http://docs.openstack.org/compute/api/v1.1"
+             name="new-server-test"
+             rotation="12"
+             backup_type="daily">
+    <metadata>
+        <meta key="key1">value1</meta>
+    </metadata>
+</createBackup>"""
+        request = self.deserializer.deserialize(serial_request, 'action')
+        expected = {
+            "createBackup": {
+                "name": "new-server-test",
+                "rotation": "12",
+                "backup_type": "daily",
+                "metadata": {"key1": "value1"},
+            },
+        }
+        self.assertEquals(request['body'], expected)
 
 
 class TestServerCreateRequestXMLDeserializerV10(unittest.TestCase):
@@ -2780,7 +3089,7 @@ class TestServerCreateRequestXMLDeserializerV11(unittest.TestCase):
         self.assertEquals(request['body'], expected)
 
 
-class TextAddressesXMLSerialization(test.TestCase):
+class TestAddressesXMLSerialization(test.TestCase):
 
     serializer = nova.api.openstack.ips.IPXMLSerializer()
 
@@ -2840,18 +3149,8 @@ class TestServerInstanceCreation(test.TestCase):
 
     def setUp(self):
         super(TestServerInstanceCreation, self).setUp()
-        self.stubs = stubout.StubOutForTesting()
-        fakes.FakeAuthManager.auth_data = {}
-        fakes.FakeAuthDatabase.data = {}
-        fakes.stub_out_auth(self.stubs)
         fakes.stub_out_image_service(self.stubs)
         fakes.stub_out_key_pair_funcs(self.stubs)
-        self.allow_admin = FLAGS.allow_admin_api
-
-    def tearDown(self):
-        self.stubs.UnsetAll()
-        FLAGS.allow_admin_api = self.allow_admin
-        super(TestServerInstanceCreation, self).tearDown()
 
     def _setup_mock_compute_api_for_personality(self):
 
