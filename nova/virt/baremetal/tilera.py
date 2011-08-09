@@ -205,7 +205,7 @@ class BareMetalNodes(object):
         path = "/tftpboot/fs_" + str(node_id)
         key = path + "/root/.ssh/authorized_keys"
         utils.execute('sudo', 'rm', key)
-        utils.execute('sudo', 'umount', '-l', path)
+        utils.execute('sudo', 'umount', '-l', '-d', path)
 
     def network_set(self, node_ip, mac_address, ip_address):
         """
@@ -277,7 +277,7 @@ class BareMetalNodes(object):
         LOG.debug(_("activate_node"))
 
         self.power_mgr(node_id, 3)
-        self.sleep_mgr(120)
+        self.sleep_mgr(90)
 
         self.check_activated(node_id, node_ip)
         self.ssh_set(node_ip)
