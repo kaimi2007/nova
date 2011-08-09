@@ -157,7 +157,6 @@ class BareMetalDom(object):
             self.baremetal_nodes.deactivate_node(fd['node_id'])
             LOG.debug(_("--> after deactivate node"))
 
-            self.baremetal_nodes.delete_kmsg(fd['node_id'])
             self.domains.remove(fd)
             LOG.debug(_("domains: "))
             LOG.debug(_(self.domains))
@@ -182,7 +181,6 @@ class BareMetalDom(object):
         LOG.debug(_("create_domain: before get_idle_node"))
 
         node_id = self.baremetal_nodes.get_idle_node()
-        self.baremetal_nodes.init_kmsg(node_id)
         node_ip = self.baremetal_nodes.find_ip_w_id(node_id)
 
         new_dom = {'node_id': node_id,
