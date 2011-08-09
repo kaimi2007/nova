@@ -46,7 +46,7 @@ class ArchitectureScheduler(driver.Scheduler):
 
         LOG.debug(_("## instance %s"), instance)
         LOG.debug(_("## instance.id %s"), instance.id)
-        LOG.debug(_("## instance.cpu_arch %s"), instance.cpu_arch)
+#        LOG.debug(_("## instance.cpu_arch %s"), instance.cpu_arch)
 
         services = db.service_get_all_by_topic(context, topic)
         LOG.debug(_("## services %s"), services)
