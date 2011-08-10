@@ -29,24 +29,25 @@ class InstanceTypeExtraSpecsTestCase(test.TestCase):
     def setUp(self):
         super(InstanceTypeExtraSpecsTestCase, self).setUp()
 
-        instance_types.create(name="cg1.4xlarge",
+        instance_types.create(name="cg1.100xlarge",
                               memory=22000,
                               vcpus=8,
                               local_gb=1690,
-                              flavorid=105,
-                              extra_specs = dict(cpu_arch="x86_64",
-                                                 cpu_model="Nehalem",
-                                                 xpu_arch="fermi",
-                                                 xpus=2,
-                                                 xpu_model="Tesla 2050"))
-                                                 
+                              flavorid=106,
+                              extra_specs=dict(cpu_arch="x86_64",
+                                              cpu_model="Nehalem",
+                                              xpu_arch="fermi",
+                                              xpus=2,
+                                              xpu_model="Tesla 2050"))
+
         self.instance_type_id = db.api.instance_type_get_by_flavor_id(
                                      context.get_admin_context(),
-                                     105)['id']
+                                     106)['id']
 
     def tearDown(self):
         # Remove the instance type from the database
-        db.api.instance_type_purge(context.get_admin_context(), "cg1.4xlarge")
+        db.api.instance_type_purge(context.get_admin_context(),
+                                   "cg1.100xlarge")
         super(InstanceTypeExtraSpecsTestCase, self).tearDown()
 
     def test_instance_type_specs_get(self):
@@ -124,7 +125,7 @@ class InstanceTypeExtraSpecsTestCase(test.TestCase):
     def test_instance_type_get_by_name_with_extra_specs(self):
         instance_type = db.api.instance_type_get_by_name(
                             context.get_admin_context(),
-                            "cg1.4xlarge")
+                            "cg1.100xlarge")
         self.assertEquals(instance_type['extra_specs'],
                           dict(cpu_arch="x86_64",
                                cpu_model="Nehalem",
@@ -140,7 +141,7 @@ class InstanceTypeExtraSpecsTestCase(test.TestCase):
     def test_instance_type_get_with_extra_specs(self):
         instance_type = db.api.instance_type_get_by_flavor_id(
                             context.get_admin_context(),
-                            105)
+                            106)
         self.assertEquals(instance_type['extra_specs'],
                           dict(cpu_arch="x86_64",
                                cpu_model="Nehalem",
@@ -162,5 +163,5 @@ class InstanceTypeExtraSpecsTestCase(test.TestCase):
 
         types = db.api.instance_type_get_all(context.get_admin_context())
 
-        self.assertEquals(types['cg1.4xlarge']['extra_specs'], specs)
+        self.assertEquals(types['cg1.100xlarge']['extra_specs'], specs)
         self.assertEquals(types['m1.small']['extra_specs'], {})

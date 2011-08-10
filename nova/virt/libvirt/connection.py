@@ -130,6 +130,9 @@ flags.DEFINE_string('libvirt_vif_type', 'bridge',
 flags.DEFINE_string('libvirt_vif_driver',
                     'nova.virt.libvirt.vif.LibvirtBridgeDriver',
                     'The libvirt VIF driver to configure the VIFs.')
+flags.DEFINE_list('extra_node_capabilities',
+                   [],
+                   'Key/value list with extra caps of the compute node')
 
 if FLAGS.connection_type == 'gpu':
     gvirtus_pids = {}
@@ -1713,4 +1716,10 @@ class HostState(object):
             connection.get_memory_mb_used()
         data["hypervisor_type"] = connection.get_hypervisor_type()
         data["hypervisor_version"] = connection.get_hypervisor_version()
+
+        # Add user-defined capabilities
+        caps = FLAGS.extra_node_capabilities
+        for cap in caps:
+            key, value = cap.split('=')
+            data[key] = value
         self._stats = data
