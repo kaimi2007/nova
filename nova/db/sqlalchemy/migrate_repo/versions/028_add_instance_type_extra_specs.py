@@ -16,7 +16,9 @@
 
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer
 from sqlalchemy import MetaData, String, Table
+from nova import compute
 from nova import log as logging
+
 
 meta = MetaData()
 
@@ -55,6 +57,17 @@ def upgrade(migrate_engine):
     for table in (instance_type_extra_specs_table, ):
         try:
             table.create()
+            # We're using a helper method here instead of direct table
+            # manipulation
+            compute.instance_types.create(name="cg1.small",
+                                          memory=2048,
+                                          vcpus=1,
+                                          local_gb=20,
+                                          flavorid=100,
+                                          extra_specs = dict(
+                                            cpu_arch="x86_64",
+                                            xpu_arch="fermi",
+                                            xpus=1))            
         except Exception:
             logging.info(repr(table))
             logging.exception('Exception while creating table')
