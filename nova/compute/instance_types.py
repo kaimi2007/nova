@@ -31,7 +31,7 @@ LOG = logging.getLogger('nova.instance_types')
 
 
 def create(name, memory, vcpus, local_gb, flavorid, swap=0,
-           rxtx_quota=0, rxtx_cap=0):
+           rxtx_quota=0, rxtx_cap=0, extra_specs={}):
     """Creates instance types."""
     for option in [memory, vcpus, local_gb, flavorid]:
         try:
@@ -53,7 +53,8 @@ def create(name, memory, vcpus, local_gb, flavorid, swap=0,
                     flavorid=flavorid,
                     swap=swap,
                     rxtx_quota=rxtx_quota,
-                    rxtx_cap=rxtx_cap))
+                    rxtx_cap=rxtx_cap,
+                    extra_specs=extra_specs))
     except exception.DBError, e:
         LOG.exception(_('DB error: %s') % e)
         raise exception.ApiError(_("Cannot create instance_type with "

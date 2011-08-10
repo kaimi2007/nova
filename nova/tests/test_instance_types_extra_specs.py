@@ -19,6 +19,7 @@ Unit Tests for instance types extra specs code
 from nova import context
 from nova import db
 from nova import test
+from nova.compute import instance_types
 from nova.db.sqlalchemy.session import get_session
 from nova.db.sqlalchemy import models
 
@@ -27,21 +28,21 @@ class InstanceTypeExtraSpecsTestCase(test.TestCase):
 
     def setUp(self):
         super(InstanceTypeExtraSpecsTestCase, self).setUp()
-        self.context = context.get_admin_context()
-        values = dict(name="cg1.4xlarge",
-                      memory_mb=22000,
-                      vcpus=8,
-                      local_gb=1690,
-                      flavorid=105)
-        specs = dict(cpu_arch="x86_64",
-                        cpu_model="Nehalem",
-                        xpu_arch="fermi",
-                        xpus=2,
-                        xpu_model="Tesla 2050")
-        values['extra_specs'] = specs
-        ref = db.api.instance_type_create(self.context,
-                                          values)
-        self.instance_type_id = ref.id
+
+        instance_types.create(name="cg1.4xlarge",
+                              memory=22000,
+                              vcpus=8,
+                              local_gb=1690,
+                              flavorid=105,
+                              extra_specs = dict(cpu_arch="x86_64",
+                                                 cpu_model="Nehalem",
+                                                 xpu_arch="fermi",
+                                                 xpus=2,
+                                                 xpu_model="Tesla 2050"))
+                                                 
+        self.instance_type_id = db.api.instance_type_get_by_flavor_id(
+                                     context.get_admin_context(),
+                                     105)['id']
 
     def tearDown(self):
         # Remove the instance type from the database
