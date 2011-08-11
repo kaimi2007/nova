@@ -330,7 +330,8 @@ class ProxyConnection(driver.ComputeDriver):
                               instance['id'],
                               power_state.BUILDING,  # NOSTATE,
                               'launching')
-        self._create_image(context, instance, xml_dict, network_info=network_info,
+        self._create_image(context, instance, xml_dict,
+                           network_info=network_info,
                            block_device_mapping=block_device_mapping)
         LOG.debug(_("instance %s: is running"), instance['name'])
 

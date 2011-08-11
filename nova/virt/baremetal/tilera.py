@@ -206,7 +206,8 @@ class BareMetalNodes(object):
         pathx = "/tftpboot/root_" + str(node_id)
         key = path + "/root/.ssh/authorized_keys"
         utils.execute('sudo', 'rm', key)
-        utils.execute('sudo', 'umount', '-lf', pathx)
+        utils.execute('sudo', '/usr/sbin/rpc.mountd')
+        utils.execute('sudo', 'umount', '-f', pathx)
         utils.execute('sudo', 'rm', '-f', pathx)
 
     def network_set(self, node_ip, mac_address, ip_address):
