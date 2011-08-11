@@ -203,9 +203,11 @@ class BareMetalNodes(object):
         self.power_mgr(node_id, 2)
         self.sleep_mgr(5)
         path = "/tftpboot/fs_" + str(node_id)
+        pathx = "/tftpboot/root_" + str(node_id)
         key = path + "/root/.ssh/authorized_keys"
         utils.execute('sudo', 'rm', key)
-        utils.execute('sudo', 'umount', '-l', '-d', path)
+        utils.execute('sudo', 'umount', '-lf', pathx)
+        utils.execute('sudo', 'rm', '-f', pathx)
 
     def network_set(self, node_ip, mac_address, ip_address):
         """
@@ -276,6 +278,7 @@ class BareMetalNodes(object):
         """
         LOG.debug(_("activate_node"))
 
+        self.power_mgr(node_id, 2)
         self.power_mgr(node_id, 3)
         self.sleep_mgr(90)
 
@@ -290,13 +293,13 @@ class BareMetalNodes(object):
         Gets console output of the given node
         """
         node_ip = self.find_ip_w_id(node_id)
-        kmsg_dump_file = "/tftpboot/kmsg_dump_" + str(node_id)
-        head_cmd = "dmesg >> /etc/kmsg_dump"
-        utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
-            '--resume', '--net', node_ip, \
-            '--run', '-', head_cmd, '-', '--wait', \
-            '--download', '/etc/kmsg_dump', console_log, '--quit')
-        utils.execute('cp', console_log, kmsg_dump_file)
+        log_path = "/tftpboot/log_" + str(node_id)
+        kmsg_cmd = "/usr/local/TileraMDE/bin/tile-monitor" + \
+                   " --resume --net " + node_ip + \
+                   " -- dmesg > " + log_path
+        subprocess.Popen(kmsg_cmd, shell=True)
+        self.sleep_mgr(5)
+        utils.execute('cp', log_path, console_log)
 
     def get_image(self, bp):
         """
@@ -312,5 +315,7 @@ class BareMetalNodes(object):
             after euca key is injected
         """
         path1 = bpath + "/root"
+        pathx = "/tftpboot/root_" + str(node_id)
         path2 = "/tftpboot/fs_" + str(node_id)
-        utils.execute('sudo', 'mount', '-o', 'loop', path1, path2)
+        utils.execute('sudo', 'mv', path1, pathx)
+        utils.execute('sudo', 'mount', '-o', 'loop', pathx, path2)
