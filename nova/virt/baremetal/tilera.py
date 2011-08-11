@@ -137,17 +137,6 @@ class BareMetalNodes(object):
                 return 1
         return 0
 
-    def check_idle_node(self):
-        """
-        Gets an idle node
-        and Returns the node ID
-        Leaves the status as-is (0) without changing it
-        """
-        for item in self.nodes:
-            if item['status'] == 0:
-                return item['node_id']
-        raise exception.NotFound("No free nodes available")
-
     def get_status(self):
         """
         Gets status of the given node
@@ -212,6 +201,13 @@ class BareMetalNodes(object):
                 LOG.debug(_("status of node is set to 0"))
                 item['status'] = 0
         self.power_mgr(node_id, 2)
+        self.sleep_mgr(5)
+        path = "/tftpboot/fs_" + str(node_id)
+        pathx = "/tftpboot/root_" + str(node_id)
+        key = path + "/root/.ssh/authorized_keys"
+        utils.execute('sudo', 'rm', key)
+        utils.execute('sudo', 'umount', '-lf', pathx)
+        utils.execute('sudo', 'rm', '-f', pathx)
 
     def network_set(self, node_ip, mac_address, ip_address):
         """
@@ -225,59 +221,41 @@ class BareMetalNodes(object):
             'ifconfig', 'xgbe0', 'hw', 'ether', mac_address, '-', \
             '--wait', '--run', '-', 'ifconfig', 'xgbe0', ip_address, \
             '-', '--wait', '--quit')
-        utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
+        """utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
             '--resume', '--net', node_ip, '--run', '-', \
             'iptables', '-A', 'INPUT', '-p', 'tcp', '!', '-s', \
             '10.0.11.1', '--dport', '963', '-j', 'DROP', '-', '--wait', \
-            '--quit')
+            '--quit')"""
 
     def check_activated(self, node_id, node_ip):
         """
         Checks whether the given node is activated or not
         """
-        #TODO
-        #cmd = "/usr/local/TileraMDE/bin/tile-monitor --resume --net "
-        # + node_ip + " --run - /usr/sbin/sshd - --wait -- ls
-        #| grep bin >> tile_output"
-        #utils.execute('/usr/local/TileraMDE/bin/tile-monitor',
-        #'--resume', '--net', node_ip, '--run', '-', '/usr/sbin/sshd', \
-        #'-', '--wait', '--', 'ls', '|', 'grep', 'bin', \
-        #'>>', 'tile_output')
-        #file = open("./tile_output")
-        #out_msg = file.readline()
-        #print "tile_output: " + out_msg
-        #utils.execute('rm', './tile_output')
-        #file.close()
-        #if out_msg.find("bin") < 0:
-        #    cmd = "TILERA_BOARD_#" + str(node_id) + " " \
-        #+ node_ip + " is not ready, out_msg=" + out_msg
-        #    print cmd
-        #    return power_state.NOSTATE
-        #else:
+        """grep_cmd = "ls | grep bin >> tile_output"
+        utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
+                '--resume', '--net', node_ip, '--', grep_cmd)
+        file = open("./tile_output")
+        out_msg = file.readline()
+        utils.execute('rm', './tile_output')
+        file.close()
+        if out_msg.find("bin") < 0:
+            cmd = "TILERA_BOARD_#" + str(node_id) + " " \
+                + node_ip + " is not ready, out_msg=" + out_msg
+            print cmd
+            return power_state.NOSTATE
+        else:"""
         cmd = "TILERA_BOARD_#" + str(node_id) + " " + node_ip \
-            + " is ready"
+                + " is ready"
         LOG.debug(_(cmd))
 
-    def vmlinux_set(self, mode, node_id):
+    def vmlinux_set(self, node_id, mode):
         """
         Sets kernel into default path (/tftpboot) if needed
             based on the given mode
-            such as 0-NoSet, 1-FirstVmlinux, 2-SecondVmlinux, 9-RemoveVmlinux
+            such as 0-NoSet, 1-SetVmlinux, 9-RemoveVmlinux
         """
-        if mode == 1:
-            path1 = "/tftpboot/vmlinux_" + str(node_id) + "_1"
-            path2 = "/tftpboot/vmlinux_" + str(node_id)
-            utils.execute('cp', path1, path2)
-        elif mode == 2:
-            path1 = "/tftpboot/vmlinux_" + str(node_id) + "_2"
-            path2 = "/tftpboot/vmlinux_" + str(node_id)
-            utils.execute('cp', path1, path2)
-        elif mode == 9:
-            path1 = "/tftpboot/vmlinux_" + str(node_id)
-            utils.execute('rm', path1)
-        else:
-            cmd = "Noting to do"
-            LOG.debug(_(cmd))
+        cmd = "Noting to do for tilera nodes: vmlinux is in CF"
+        LOG.debug(_(cmd))
 
     def sleep_mgr(self, time):
         """
@@ -293,24 +271,6 @@ class BareMetalNodes(object):
             '--resume', '--net', node_ip, '--run', '-', \
             '/usr/sbin/sshd', '-', '--wait', '--quit')
 
-    def fs_set(self, node_id, node_ip):
-        """
-        Sets file system in the given node if needed
-        Euca key should be already injected into the file system
-        """
-        path1 = "/tftpboot/fs_" + str(node_id) + ".tar.gz"
-        utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
-            '--resume', '--net', node_ip, '--upload', path1, \
-            '/fs.tar.gz', '--quit')
-        utils.execute('rm', path1)
-        utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
-            '--resume', '--net', node_ip, '--run', '-', 'mount', \
-            '/dev/sda1', '/mnt', '-', '--wait', '--run', '-', 'rm', \
-            '-rf', '/mnt/*', '-', '--wait', \
-            '--run', '-', 'tar', \
-            '-xzpf', '/fs.tar.gz', '-C', '/mnt/', '-', \
-            '--wait', '--quit')
-
     def activate_node(self, node_id, node_ip, name, mac_address, \
                       ip_address):
         """
@@ -318,18 +278,12 @@ class BareMetalNodes(object):
         """
         LOG.debug(_("activate_node"))
 
-        self.vmlinux_set(1, node_id)
+        self.power_mgr(node_id, 2)
         self.power_mgr(node_id, 3)
-        self.sleep_mgr(60)
-
-        self.fs_set(node_id, node_ip)
-        self.vmlinux_set(2, node_id)
-        self.power_mgr(node_id, 3)
-        self.sleep_mgr(80)
+        self.sleep_mgr(90)
 
         self.check_activated(node_id, node_ip)
         self.ssh_set(node_ip)
-        self.vmlinux_set(9, node_id)
         self.network_set(node_ip, mac_address, ip_address)
 
         return power_state.RUNNING
@@ -339,55 +293,29 @@ class BareMetalNodes(object):
         Gets console output of the given node
         """
         node_ip = self.find_ip_w_id(node_id)
-        kmsg_dump_file = "/tftpboot/kmsg_dump_" + str(node_id)
-        size = os.path.getsize(kmsg_dump_file)
-        head_cmd = "head -400 /proc/kmsg >> /etc/kmsg_dump"
-        if size <= 0:
-            utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
-                '--resume', '--net', node_ip, \
-                '--run', '-', head_cmd, '-', '--wait', \
-                '--download', '/etc/kmsg_dump', console_log, '--quit')
-            utils.execute('cp', console_log, kmsg_dump_file)
-        else:
-            utils.execute('cp', kmsg_dump_file, console_log)
+        log_path = "/tftpboot/log_" + str(node_id)
+        kmsg_cmd = "/usr/local/TileraMDE/bin/tile-monitor" + \
+                   " --resume --net " + node_ip + \
+                   " -- dmesg > " + log_path
+        subprocess.Popen(kmsg_cmd, shell=True)
+        self.sleep_mgr(5)
+        utils.execute('cp', log_path, console_log)
 
     def get_image(self, bp):
         """
-        Gets the bare-metal file system image into the given path
+        Gets the bare-metal file system image into the instance path
         """
-        node_id = self.check_idle_node()
-        path_fs = "/tftpboot/tilera_fs_" + str(node_id)
+        path_fs = "/tftpboot/tilera_fs_5G"
         path_root = bp + "/root"
         utils.execute('cp', path_fs, path_root)
 
     def set_image(self, bpath, node_id):
         """
-        Sets the bare-metal file system if modification is needed
+        Sets the PXE bare-metal file system from the instance path
             after euca key is injected
         """
         path1 = bpath + "/root"
+        pathx = "/tftpboot/root_" + str(node_id)
         path2 = "/tftpboot/fs_" + str(node_id)
-        utils.execute('sudo', 'mount', '-o', 'loop', path1, path2)
-        path1 = "/tftpboot/fs_" + str(node_id)
-        os.chdir(path1)
-        path2 = "../fs_" + str(node_id) + ".tar.gz"
-        utils.execute('sudo', 'tar', '-czpf', path2, '.')
-        path1 = bpath + "/../../.."
-        os.chdir(path1)
-        path4 = "/tftpboot/fs_" + str(node_id)
-        utils.execute('sudo', 'umount', '-l', path4)
-
-    def init_kmsg(self, node_id):
-        """
-        Sets an empty file for kernel message output of the given node
-        """
-        kmsg_dump_file = "/tftpboot/kmsg_dump_" + str(node_id)
-        utils.execute('touch', kmsg_dump_file)
-        utils.execute('sudo', 'chown', 'nova', kmsg_dump_file)
-
-    def delete_kmsg(self, node_id):
-        """
-        Deletes a file for kernel message output of the given node
-        """
-        kmsg_dump_file = "/tftpboot/kmsg_dump_" + str(node_id)
-        utils.execute('rm', kmsg_dump_file)
+        utils.execute('sudo', 'mv', path1, pathx)
+        utils.execute('sudo', 'mount', '-o', 'loop', pathx, path2)

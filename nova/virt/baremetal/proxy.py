@@ -51,7 +51,7 @@ from xml.etree import ElementTree
 from eventlet import greenthread
 from eventlet import tpool
 
-from nova import context
+from nova import context as nova_context
 from nova import db
 from nova import exception
 from nova import flags
@@ -127,24 +127,8 @@ class ProxyConnection(driver.ComputeDriver):
         return self._host_state
 
     def init_host(self, host):
-        # Adopt existing VM's running here
-        ctxt = context.get_admin_context()
-        for instance in db.instance_get_all_by_host(ctxt, host):
-            try:
-                LOG.debug(_('Checking state of %s'), instance['name'])
-                state = self.get_info(instance['name'])['state']
-            except exception.NotFound:
-                state = power_state.SHUTOFF
-
-            LOG.debug(_('Current state of %(name)s was %(state)s.'),
-                          {'name': instance['name'], 'state': state})
-            db.instance_set_state(ctxt, instance['id'], state)
-
-            # NOTE(justinsb): We no longer delete SHUTOFF instances,
-            # the user may want to power them back on
-
-            if state != power_state.RUNNING:
-                continue
+        # NOTE(nsokolov): moved instance restarting to ComputeManager
+        pass
 
     def _get_connection(self):
         self._wrapped_conn = dom.BareMetalDom()
@@ -163,7 +147,7 @@ class ProxyConnection(driver.ComputeDriver):
     def list_instances(self):
         #return [self._conn.lookupByID(x).name()
         #        for x in self._conn.listDomainsID()]
-        return self._conn.list_domains()  # MK
+        return self._conn.list_domains()
 
     def _map_to_instance_info(self, domain_name):
         """Gets info from a virsh domain object into an InstanceInfo"""
@@ -194,7 +178,7 @@ class ProxyConnection(driver.ComputeDriver):
             infos.append(info)
         return infos
 
-    def destroy(self, instance, cleanup=True):
+    def destroy(self, instance, network_info, cleanup=True):
         timer = utils.LoopingCall(f=None)
 
         while True:
@@ -237,7 +221,7 @@ class ProxyConnection(driver.ComputeDriver):
         raise exception.APIError("detach_volume not supported for baremetal.")
 
     @exception.wrap_exception
-    def snapshot(self, instance, image_id):
+    def snapshot(self, context, instance, image_href):
         raise exception.APIError("snapshot not supported for baremetal.")
         """Create snapshot from a running VM instance.
 
@@ -247,7 +231,7 @@ class ProxyConnection(driver.ComputeDriver):
         """
 
     @exception.wrap_exception
-    def reboot(self, instance):
+    def reboot(self, instance, network_info):
         timer = utils.LoopingCall(f=None)
 
         def _wait_for_reboot():
@@ -258,7 +242,7 @@ class ProxyConnection(driver.ComputeDriver):
                 if state == power_state.RUNNING:
                     LOG.debug(_('instance %s: rebooted'), instance['name'])
                     timer.stop()
-            except:
+            except Exception:
                 LOG.exception(_('_wait_for_reboot failed'))
                 db.instance_set_state(context.get_admin_context(),
                               instance['id'],
@@ -284,7 +268,7 @@ class ProxyConnection(driver.ComputeDriver):
         raise exception.ApiError("resume not supported for baremetal")
 
     @exception.wrap_exception
-    def rescue(self, instance):
+    def rescue(self, context, instance, callback, network_info):
         """Loads a VM using rescue images.
 
         A rescue is normally performed when something goes wrong with the
@@ -293,13 +277,13 @@ class ProxyConnection(driver.ComputeDriver):
         data recovery.
 
         """
-        self.destroy(instance, False)
+        self.destroy(instance, network_info, cleanup=False)
 
         xml_dict = self.to_xml_dict(instance, rescue=True)
         rescue_images = {'image_id': FLAGS.baremetal_rescue_image_id,
                          'kernel_id': FLAGS.baremetal_rescue_kernel_id,
                          'ramdisk_id': FLAGS.baremetal_rescue_ramdisk_id}
-        #self._create_image(instance, xml, '.rescue', rescue_images)
+        #self._create_image(context, instance, xml, '.rescue', rescue_images)
         #self._create_new_domain(xml)
 
         timer = utils.LoopingCall(f=None)
@@ -312,7 +296,7 @@ class ProxyConnection(driver.ComputeDriver):
                 if state == power_state.RUNNING:
                     LOG.debug(_('instance %s: rescued'), instance['name'])
                     timer.stop()
-            except:
+            except Exception:
                 LOG.exception(_('_wait_for_rescue failed'))
                 db.instance_set_state(context.get_admin_context(),
                               instance['id'],
@@ -322,14 +306,14 @@ class ProxyConnection(driver.ComputeDriver):
         return timer.start(interval=0.5, now=True)
 
     @exception.wrap_exception
-    def unrescue(self, instance):
+    def unrescue(self, instance, network_info):
         """Reboot the VM which is being rescued back into primary images.
 
         Because reboot destroys and re-creates instances, unresue should
         simply call reboot.
 
         """
-        self.reboot(instance)
+        self.reboot(instance, network_info)
 
     @exception.wrap_exception
     def poll_rescued_instances(self, timeout):
@@ -338,14 +322,16 @@ class ProxyConnection(driver.ComputeDriver):
     # NOTE(ilyaalekseyev): Implementation like in multinics
     # for xenapi(tr3buchet)
     @exception.wrap_exception
-    def spawn(self, instance, network_info=None):
-        LOG.debug(_("<============= spawn of baremetal =============>"))  # MK
+    def spawn(self, context, instance, network_info,
+              block_device_mapping=None):
+        LOG.debug(_("<============= spawn of baremetal =============>"))
         xml_dict = self.to_xml_dict(instance, network_info)
         db.instance_set_state(context.get_admin_context(),
                               instance['id'],
                               power_state.BUILDING,  # NOSTATE,
                               'launching')
-        self._create_image(instance, xml_dict, network_info=network_info)
+        self._create_image(context, instance, xml_dict, network_info=network_info,
+                           block_device_mapping=block_device_mapping)
         LOG.debug(_("instance %s: is running"), instance['name'])
 
         def basepath(fname='', suffix=''):
@@ -359,13 +345,13 @@ class ProxyConnection(driver.ComputeDriver):
             try:
                 LOG.debug(_(xml_dict))
                 state = self._conn.create_domain(xml_dict, bpath)
-                LOG.debug(_('~~~~~~ current state = %s ~~~~~~'), state)  # MK
+                LOG.debug(_('~~~~~~ current state = %s ~~~~~~'), state)
                 db.instance_set_state(context.get_admin_context(),
                                       instance['id'], state, 'running')
                 if state == power_state.RUNNING:
                     LOG.debug(_('instance %s: booted'), instance['name'])
                     timer.stop()
-            except:
+            except Exception:
                 LOG.exception(_('instance %s: failed to boot'),
                               instance['name'])
                 db.instance_set_state(context.get_admin_context(),
@@ -459,17 +445,19 @@ class ProxyConnection(driver.ComputeDriver):
             else:
                 utils.execute('cp', base, target)
 
-    def _fetch_image(self, target, image_id, user, project, size=None):
+    def _fetch_image(self, context, target, image_id, user_id, project_id,
+                     size=None):
         """Grab image and optionally attempt to resize it"""
-        images.fetch(image_id, target, user, project)
+        images.fetch(context, image_id, target, user_id, project_id)
 
     def _create_local(self, target, local_gb):
         """Create a blank image of specified size"""
         utils.execute('truncate', target, '-s', "%dG" % local_gb)
         # TODO(vish): should we format disk by default?
 
-    def _create_image(self, inst, baremetal_xml, suffix='', disk_images=None,
-                        network_info=None):
+    def _create_image(self, context, inst, baremetal_xml, suffix='',
+                      disk_images=None, network_info=None,
+                      block_device_mapping=None):
         if not network_info:
             network_info = netutils.get_network_info(inst)
 
@@ -499,14 +487,9 @@ class ProxyConnection(driver.ComputeDriver):
         os.close(os.open(basepath('console.log', ''),
                          os.O_CREAT | os.O_WRONLY, 0660))
 
-        user = manager.AuthManager().get_user(inst['user_id'])
-        project = manager.AuthManager().get_project(inst['project_id'])
-
-        #MK
         #Test: copying original baremetal images
         bp = basepath(suffix='')
         self.baremetal_nodes.get_image(bp)
-        #_MK
 
         if not disk_images:
             disk_images = {'image_id': inst['image_ref'],
@@ -516,19 +499,21 @@ class ProxyConnection(driver.ComputeDriver):
         if disk_images['kernel_id']:
             fname = '%08x' % int(disk_images['kernel_id'])
             self._cache_image(fn=self._fetch_image,
+                              context=context,
                               target=basepath('kernel'),
                               fname=fname,
                               image_id=disk_images['kernel_id'],
-                              user=user,
-                              project=project)
+                              user_id=inst['user_id'],
+                              project_id=inst['project_id'])
             if disk_images['ramdisk_id']:
                 fname = '%08x' % int(disk_images['ramdisk_id'])
                 self._cache_image(fn=self._fetch_image,
+                                  context=context,
                                   target=basepath('ramdisk'),
                                   fname=fname,
                                   image_id=disk_images['ramdisk_id'],
-                                  user=user,
-                                  project=project)
+                                  user_id=inst['user_id'],
+                                  project_id=inst['project_id'])
 
         root_fname = '%08x' % int(disk_images['image_id'])
         size = FLAGS.minimum_root_size
@@ -540,12 +525,13 @@ class ProxyConnection(driver.ComputeDriver):
             root_fname += "_sm"
 
         self._cache_image(fn=self._fetch_image,
+                          context=context,
                           target=basepath('disk'),
                           fname=root_fname,
                           cow=FLAGS.use_cow_images,
                           image_id=disk_images['image_id'],
-                          user=user,
-                          project=project,
+                          user_id=inst['user_id'],
+                          project_id=inst['project_id'],
                           size=size)
 
         """if inst_type['local_gb']:
@@ -575,7 +561,7 @@ class ProxyConnection(driver.ComputeDriver):
         ifc_template = open(FLAGS.injected_network_template).read()
         ifc_num = -1
         have_injected_networks = False
-        admin_context = context.get_admin_context()
+        admin_context = nova_context.get_admin_context()
         for (network_ref, mapping) in network_info:
             ifc_num += 1
 
@@ -585,8 +571,12 @@ class ProxyConnection(driver.ComputeDriver):
             have_injected_networks = True
             address = mapping['ips'][0]['ip']
             address_v6 = None
+            gateway_v6 = None
+            netmask_v6 = None
             if FLAGS.use_ipv6:
                 address_v6 = mapping['ip6s'][0]['ip']
+                netmask_v6 = mapping['ip6s'][0]['netmask']
+                gateway_v6 = mapping['gateway6']
             net_info = {'name': 'eth%d' % ifc_num,
                    'address': address,
                    'netmask': network_ref['netmask'],
@@ -594,8 +584,8 @@ class ProxyConnection(driver.ComputeDriver):
                    'broadcast': network_ref['broadcast'],
                    'dns': network_ref['dns'],
                    'address_v6': address_v6,
-                   'gateway_v6': network_ref['gateway_v6'],
-                   'netmask_v6': network_ref['netmask_v6']}
+                   'gateway_v6': gateway_v6,
+                   'netmask_v6': netmask_v6}
             nets.append(net_info)
 
         if have_injected_networks:
@@ -613,7 +603,6 @@ class ProxyConnection(driver.ComputeDriver):
                 LOG.info(_('instance %(inst_name)s: injecting net into'
                         ' image %(img_id)s') % locals())
             try:
-                #disk.inject_data(basepath('disk'), key, net,
                 disk.inject_data(basepath('root'), key, net,
                                  partition=target_partition,
                                  nbd=FLAGS.use_cow_images)
@@ -630,40 +619,6 @@ class ProxyConnection(driver.ComputeDriver):
         if FLAGS.baremetal_type == 'uml':
             utils.execute('sudo', 'chown', 'root', basepath('disk'))
 
-    def _get_nic_for_xml(self, network, mapping):
-        # Assume that the gateway also acts as the dhcp server.
-        dhcp_server = network['gateway']
-        gateway_v6 = network['gateway_v6']
-        mac_id = mapping['mac'].replace(':', '')
-
-        if FLAGS.allow_project_net_traffic:
-            template = "<parameter name=\"%s\"value=\"%s\" />\n"
-            net, mask = netutils.get_net_and_mask(network['cidr'])
-            values = [("PROJNET", net), ("PROJMASK", mask)]
-            if FLAGS.use_ipv6:
-                net_v6, prefixlen_v6 = netutils.get_net_and_prefixlen(
-                                           network['cidr_v6'])
-                values.extend([("PROJNETV6", net_v6),
-                               ("PROJMASKV6", prefixlen_v6)])
-
-            extra_params = "".join([template % value for value in values])
-        else:
-            extra_params = "\n"
-
-        result = {
-            'id': mac_id,
-            'bridge_name': network['bridge'],
-            'mac_address': mapping['mac'],
-            'ip_address': mapping['ips'][0]['ip'],
-            'dhcp_server': dhcp_server,
-            'extra_params': extra_params,
-        }
-
-        if gateway_v6:
-            result['gateway_v6'] = gateway_v6 + "/128"
-
-        return result
-
     def _prepare_xml_info(self, instance, rescue=False, network_info=None):
         # TODO(adiantum) remove network_info creation code
         # when multinics will be completed
@@ -671,8 +626,8 @@ class ProxyConnection(driver.ComputeDriver):
             network_info = netutils.get_network_info(instance)
 
         nics = []
-        for (network, mapping) in network_info:
-            nics.append(self._get_nic_for_xml(network, mapping))
+        #for (network, mapping) in network_info:
+        #    nics.append(self.vif_driver.plug(instance, network, mapping))
         # FIXME(vish): stick this in db
         inst_type_id = instance['instance_type_id']
         inst_type = instance_types.get_instance_type(inst_type_id)
@@ -691,17 +646,17 @@ class ProxyConnection(driver.ComputeDriver):
                     'rescue': rescue,
                     'local': inst_type['local_gb'],
                     'driver_type': driver_type,
+                    'vif_type': FLAGS.libvirt_vif_type,
                     'nics': nics,
-                    'ip_address': mapping['ips'][0]['ip'],  # MK
-                    'mac_address': instance['mac_address'],  # MK
-                    'image_id': instance['image_ref'],  # MK
-                    'kernel_id': instance['kernel_id'],  # MK
-                    'ramdisk_id': instance['ramdisk_id']}  # MK
+                    'ip_address': mapping['ips'][0]['ip'],
+                    'mac_address': instance['mac_address'],
+                    'image_id': instance['image_ref'],
+                    'kernel_id': instance['kernel_id'],
+                    'ramdisk_id': instance['ramdisk_id']}
 
-        if FLAGS.vnc_enabled:
-            if FLAGS.baremetal_type != 'lxc':
-                xml_info['vncserver_host'] = FLAGS.vncserver_host
-                xml_info['vnc_keymap'] = FLAGS.vnc_keymap
+        if FLAGS.vnc_enabled and FLAGS.libvirt_type not in ('lxc', 'uml'):
+            xml_info['vncserver_host'] = FLAGS.vncserver_host
+            xml_info['vnc_keymap'] = FLAGS.vnc_keymap
         if not rescue:
             if instance['kernel_id']:
                 xml_info['kernel'] = xml_info['basepath'] + "/kernel"
@@ -749,8 +704,7 @@ class ProxyConnection(driver.ComputeDriver):
     def get_disks(self, instance_name):
         raise NotImplementedError()
         """
-        Note that this function takes an instance name, not an Instance, so
-        that it can be called by monitor.
+        Note that this function takes an instance name.
 
         Returns a list of all block devices for this domain.
         """
@@ -758,8 +712,7 @@ class ProxyConnection(driver.ComputeDriver):
     def get_interfaces(self, instance_name):
         raise NotImplementedError()
         """
-        Note that this function takes an instance name, not an Instance, so
-        that it can be called by monitor.
+        Note that this function takes an instance name.
 
         Returns a list of all network interfaces for this instance.
         """
@@ -904,15 +857,13 @@ class ProxyConnection(driver.ComputeDriver):
     def block_stats(self, instance_name, disk):
         raise NotImplementedError()
         """
-        Note that this function takes an instance name, not an Instance, so
-        that it can be called by monitor.
+        Note that this function takes an instance name.
         """
 
     def interface_stats(self, instance_name, interface):
         raise NotImplementedError()
         """
-        Note that this function takes an instance name, not an Instance, so
-        that it can be called by monitor.
+        Note that this function takes an instance name.
         """
 
     def get_console_pool_info(self, console_type):
@@ -987,7 +938,7 @@ class ProxyConnection(driver.ComputeDriver):
                        post_method, recover_method):
         raise NotImplementedError()
 
-    def unfilter_instance(self, instance_ref):
+    def unfilter_instance(self, instance_ref, network_info):
         """See comments of same method in firewall_driver."""
         pass
 

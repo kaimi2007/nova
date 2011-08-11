@@ -28,18 +28,6 @@ class BareMetalNodes(object):
     This manages node information and implements singleton.
     """
 
-    def find_ip_w_id(self, id):
-        """
-        Returns default IP address of the given node
-        """
-        return "127.0.0.1"
-
-    def deactivate_node(self, node_id):
-        """
-        Deactivates the given node by turnning it off
-        """
-        pass
-
     def get_hw_info(self, field):
         """
         Returns hardware information of bare-metal node by the given field
@@ -55,14 +43,6 @@ class BareMetalNodes(object):
         """
         return 1
 
-    def check_idle_node(self):
-        """
-        Gets an idle node
-        and Returns the node ID
-        Leaves the status as-is (0) without changing it
-        """
-        return 0
-
     def get_status(self):
         """
         Gets status of the given node
@@ -77,6 +57,12 @@ class BareMetalNodes(object):
         """
         return 0
 
+    def find_ip_w_id(self, id):
+        """
+        Returns default IP address of the given node
+        """
+        return "127.0.0.1"
+
     def free_node(self, node_id):
         """
         Sets/frees status of the given node as 0 (IDLE)
@@ -88,6 +74,12 @@ class BareMetalNodes(object):
         """
         Changes power state of the given node
             according to the mode (1-ON, 2-OFF, 3-REBOOT)
+        """
+        pass
+
+    def deactivate_node(self, node_id):
+        """
+        Deactivates the given node by turnning it off
         """
         pass
 
@@ -106,11 +98,11 @@ class BareMetalNodes(object):
         """
         pass
 
-    def vmlinux_set(self, mode, node_id):
+    def vmlinux_set(self, node_id, mode):
         """
         Sets kernel into default path (/tftpboot) if needed
             based on the given mode
-            such as 0-NoSet, 1-FirstVmlinux, 2-SecondVmlinux, 9-RemoveVmlinux
+            such as 0-NoSet, 1-SetVmlinux, 9-RemoveVmlinux
         """
         pass
 
@@ -123,13 +115,6 @@ class BareMetalNodes(object):
     def ssh_set(self, node_ip):
         """
         Sets and Runs sshd in the node
-        """
-        pass
-
-    def fs_set(self, node_id, node_ip):
-        """
-        Sets file system in the given node if needed
-        Euca key should be already injected into the file system
         """
         pass
 
@@ -148,25 +133,13 @@ class BareMetalNodes(object):
 
     def get_image(self, bp):
         """
-        Gets the bare-metal file system image into the given path
+        Gets the bare-metal file system image into the instance path
         """
         pass
 
     def set_image(self, bpath, node_id):
         """
-        Sets the bare-metal file system if modification is needed
+        Sets the PXE bare-metal file system from the instance path
             after euca key is injected
-        """
-        pass
-
-    def init_kmsg(self, node_id):
-        """
-        Sets an empty file for kernel message output of the given node
-        """
-        pass
-
-    def delete_kmsg(self, node_id):
-        """
-        Deletes a file for kernel message output of the given node
         """
         pass
