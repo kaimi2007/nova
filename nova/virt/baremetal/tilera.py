@@ -96,8 +96,7 @@ class BareMetalNodes(object):
                     'local_gb_used': int(l[self.LOCAL_GB_USED]),
                     'hypervisor_type': l[self.HYPERVISOR_TYPE],
                     'hypervisor_version': int(l[self.HYPERVISOR_VER]),
-                    'cpu_info': l[self.CPU_INFO]
-                  }
+                    'cpu_info': l[self.CPU_INFO]}
             self.nodes.append(l_d)
         fp.close()
 
