@@ -24,7 +24,9 @@ import operator
 import json
 
 import M2Crypto
-import novaclient
+
+from novaclient import v1_1 as novaclient
+from novaclient import exceptions as novaclient_exceptions
 
 from nova import crypto
 from nova import db
@@ -118,10 +120,9 @@ class ZoneAwareScheduler(driver.Scheduler):
                     % locals())
         nova = None
         try:
-            nova = novaclient.OpenStack(zone.username, zone.password, None,
-                                        url)
+            nova = novaclient.Client(zone.username, zone.password, None, url)
             nova.authenticate()
-        except novaclient.exceptions.BadRequest, e:
+        except novaclient_exceptions.BadRequest, e:
             raise exception.NotAuthorized(_("Bad credentials attempting "
                             "to talk to zone at %(url)s.") % locals())
 
@@ -265,8 +266,8 @@ class ZoneAwareScheduler(driver.Scheduler):
         """
 
         if topic != "compute":
-            raise NotImplemented(_("Zone Aware Scheduler only understands "
-                                   "Compute nodes (for now)"))
+            raise NotImplementedError(_("Zone Aware Scheduler only understands"
+                                        " Compute nodes (for now)"))
 
         num_instances = request_spec.get('num_instances', 1)
         instance_type = request_spec['instance_type']
