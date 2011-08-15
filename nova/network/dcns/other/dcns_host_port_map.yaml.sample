@@ -1,0 +1,8 @@
+---
+host: arlg-es1
+nic: eth1
+port: 10.10.29.14:50
+---
+host: arlg-es2
+nic: eth1
+port: 10.10.29.14:51

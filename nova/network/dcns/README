@@ -1,0 +1,15 @@
+To patch a branch with DCNS code
+1. copy other/nova-dcns.conf to /etc/nova/nova-dcns.conf
+2. copy other/*.yaml.sample to /etc/nova/*.yaml
+3. copy other/flags.py to $src/nova/flags.py
+4. copy other/db-api.py to $src/nova/db/api.py
+5. copy other/db-sqlalchemy-api.py to $src/nova/db/sqlalchemy/api.py 
+	other/db-sqlalchemy-models.py to $src/nova/db/sqlalchemy/models.py
+	other/036_dcns.py to $src/nova/db/sqlalchemy/migrate_repo/versions/036_dcns.py
+6. run service: ./bin/nova-dcns
+7. copy cli.py to bin/dcns_cli 
+8. run ./bin/dcns_cli. Examples:
+        ./bin/dcns-cli create projectA 100Mbps 101 arlg-es1:eth1 arlg-es2:eth1
+        ./bin/dcns-cli show projectA
+        ./bin/dcns-cli remove projectA
+

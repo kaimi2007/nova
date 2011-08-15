@@ -1,0 +1,38 @@
+#!/usr/bin/env python
+# vim: tabstop=4 shiftwidth=4 softtabstop=4
+
+#    License TBD 
+
+"""Starter script for Nova Dynamic Cloud Network Service (nova-dcns)."""
+
+import eventlet
+eventlet.monkey_patch()
+
+import gettext
+import os
+import sys
+
+# If ../nova/__init__.py exists, add ../ to Python search path, so that
+# it will override what happens to be installed in /usr/(local/)lib/python...
+possible_topdir = os.path.normpath(os.path.join(os.path.abspath(sys.argv[0]),
+                                   os.pardir,
+                                   os.pardir))
+if os.path.exists(os.path.join(possible_topdir, 'nova', '__init__.py')):
+    sys.path.insert(0, possible_topdir)
+
+gettext.install('nova', unicode=1)
+
+from nova import flags
+from nova import log as logging
+from nova import service
+from nova import utils
+
+if __name__ == '__main__':
+    utils.default_flagfile()
+    flags.FLAGS(sys.argv)
+    logging.setup()
+    manager_cls = 'nova.network.dcns.manager.DCNService'
+    dcns = service.Service.create(manager=manager_cls)
+    service.serve(dcns)
+    service.wait()
+
