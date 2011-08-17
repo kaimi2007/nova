@@ -105,7 +105,7 @@ def upgrade(migrate_engine):
                                             xpu_arch="fermi",
                                             xpus=2))
             compute.instance_types.create(name="cg1.4xlarge",
-                                          memory=2200,
+                                          memory=22000,
                                           vcpus=8,
                                           local_gb=1690,
                                           flavorid=105,
