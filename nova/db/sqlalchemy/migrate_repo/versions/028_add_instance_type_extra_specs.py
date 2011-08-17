@@ -162,7 +162,7 @@ def upgrade(migrate_engine):
                                             cpu_arch="x86_64",
                                             system_type="UV"))
             compute.instance_types.create(name="sh1.8xlarge",
-                                          memory=1310722,
+                                          memory=131072,
                                           vcpus=64,
                                           local_gb=500,
                                           flavorid=206,
