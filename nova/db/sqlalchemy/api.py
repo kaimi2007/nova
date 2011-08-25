@@ -736,23 +736,36 @@ def floating_ip_update(context, address, values):
 ###################
 
 
-@require_context
-def fixed_ip_associate(context, address, instance_id):
+@require_admin_context
+def fixed_ip_associate(context, address, instance_id, network_id=None):
     session = get_session()
     with session.begin():
-        instance = instance_get(context, instance_id, session=session)
+        network_or_none = or_(models.FixedIp.network_id == network_id,
+                              models.FixedIp.network_id == None)
         fixed_ip_ref = session.query(models.FixedIp).\
-                               filter_by(address=address).\
+                               filter(network_or_none).\
+                               filter_by(reserved=False).\
                                filter_by(deleted=False).\
-                               filter_by(instance=None).\
+                               filter_by(address=address).\
                                with_lockmode('update').\
                                first()
         # NOTE(vish): if with_lockmode isn't supported, as in sqlite,
         #             then this has concurrency issues
-        if not fixed_ip_ref:
-            raise exception.NoMoreFixedIps()
-        fixed_ip_ref.instance = instance
+        if fixed_ip_ref is None:
+            raise exception.FixedIpNotFoundForNetwork(address=address,
+                                            network_id=network_id)
+        if fixed_ip_ref.instance is not None:
+            raise exception.FixedIpAlreadyInUse(address=address)
+
+        if not fixed_ip_ref.network:
+            fixed_ip_ref.network = network_get(context,
+                                           network_id,
+                                           session=session)
+        fixed_ip_ref.instance = instance_get(context,
+                                             instance_id,
+                                             session=session)
         session.add(fixed_ip_ref)
+    return fixed_ip_ref['address']
 
 
 @require_admin_context
@@ -1223,7 +1236,10 @@ def instance_get_all(context):
     session = get_session()
     return session.query(models.Instance).\
                    options(joinedload_all('fixed_ips.floating_ips')).\
-                   options(joinedload('virtual_interfaces')).\
+                   options(joinedload_all('virtual_interfaces.network')).\
+                   options(joinedload_all(
+                           'virtual_interfaces.fixed_ips.floating_ips')).\
+                   options(joinedload('virtual_interfaces.instance')).\
                    options(joinedload('security_groups')).\
                    options(joinedload_all('fixed_ips.network')).\
                    options(joinedload('metadata')).\
@@ -1259,6 +1275,19 @@ def instance_get_all_by_filters(context, filters):
                         return True
         return False
 
+    def _regexp_filter_by_metadata(instance, meta):
+        inst_metadata = [{node['key']: node['value']} \
+                         for node in instance['metadata']]
+        if isinstance(meta, list):
+            for node in meta:
+                if node not in inst_metadata:
+                    return False
+        elif isinstance(meta, dict):
+            for k, v in meta.iteritems():
+                if {k: v} not in inst_metadata:
+                    return False
+        return True
+
     def _regexp_filter_by_column(instance, filter_name, filter_re):
         try:
             v = getattr(instance, filter_name)
@@ -1286,10 +1315,12 @@ def instance_get_all_by_filters(context, filters):
                    options(joinedload_all('virtual_interfaces.network')).\
                    options(joinedload_all(
                            'virtual_interfaces.fixed_ips.floating_ips')).\
+                   options(joinedload('virtual_interfaces.instance')).\
                    options(joinedload('security_groups')).\
                    options(joinedload_all('fixed_ips.network')).\
                    options(joinedload('metadata')).\
-                   options(joinedload('instance_type'))
+                   options(joinedload('instance_type')).\
+                   filter_by(deleted=can_read_deleted(context))
 
     # Make a copy of the filters dictionary to use going forward, as we'll
     # be modifying it and we shouldn't affect the caller's use of it.
@@ -1316,7 +1347,9 @@ def instance_get_all_by_filters(context, filters):
         query_prefix = _exact_match_filter(query_prefix, filter_name,
                 filters.pop(filter_name))
 
-    instances = query_prefix.all()
+    instances = query_prefix.\
+                    filter_by(deleted=can_read_deleted(context)).\
+                    all()
 
     if not instances:
         return []
@@ -1332,6 +1365,9 @@ def instance_get_all_by_filters(context, filters):
         filter_re = re.compile(str(filters[filter_name]))
         if filter_func:
             filter_l = lambda instance: filter_func(instance, filter_re)
+        elif filter_name == 'metadata':
+            filter_l = lambda instance: _regexp_filter_by_metadata(instance,
+                    filters[filter_name])
         else:
             filter_l = lambda instance: _regexp_filter_by_column(instance,
                     filter_name, filter_re)
@@ -1563,55 +1599,16 @@ def instance_add_security_group(context, instance_id, security_group_id):
 
 
 @require_context
-def instance_get_vcpu_sum_by_host_and_project(context, hostname, proj_id):
+def instance_remove_security_group(context, instance_id, security_group_id):
+    """Disassociate the given security group from the given instance"""
     session = get_session()
-    result = session.query(models.Instance).\
-                      filter_by(host=hostname).\
-                      filter_by(project_id=proj_id).\
-                      filter_by(deleted=False).\
-                      value(func.sum(models.Instance.vcpus))
-    if not result:
-        return 0
-    return result
 
-
-@require_context
-def instance_get_xpu_sum_by_host_and_project(context, hostname, proj_id):
-    session = get_session()
-    result = session.query(models.Instance).\
-                      filter_by(host=hostname).\
-                      filter_by(project_id=proj_id).\
-                      filter_by(deleted=False).\
-                      value(func.sum(models.Instance.xpus))
-    if not result:
-        return 0
-    return result
-
-
-@require_context
-def instance_get_memory_sum_by_host_and_project(context, hostname, proj_id):
-    session = get_session()
-    result = session.query(models.Instance).\
-                      filter_by(host=hostname).\
-                      filter_by(project_id=proj_id).\
-                      filter_by(deleted=False).\
-                      value(func.sum(models.Instance.memory_mb))
-    if not result:
-        return 0
-    return result
-
-
-@require_context
-def instance_get_disk_sum_by_host_and_project(context, hostname, proj_id):
-    session = get_session()
-    result = session.query(models.Instance).\
-                      filter_by(host=hostname).\
-                      filter_by(project_id=proj_id).\
-                      filter_by(deleted=False).\
-                      value(func.sum(models.Instance.local_gb))
-    if not result:
-        return 0
-    return result
+    session.query(models.SecurityGroupInstanceAssociation).\
+                filter_by(instance_id=instance_id).\
+                filter_by(security_group_id=security_group_id).\
+                update({'deleted': True,
+                        'deleted_at': utils.utcnow(),
+                        'updated_at': literal_column('updated_at')})
 
 
 @require_context
@@ -1855,6 +1852,40 @@ def network_get_all(context):
     return result
 
 
+@require_admin_context
+def network_get_all_by_uuids(context, network_uuids, project_id=None):
+    session = get_session()
+    project_or_none = or_(models.Network.project_id == project_id,
+                              models.Network.project_id == None)
+    result = session.query(models.Network).\
+                 filter(models.Network.uuid.in_(network_uuids)).\
+                 filter(project_or_none).\
+                 filter_by(deleted=False).all()
+    if not result:
+        raise exception.NoNetworksFound()
+
+    #check if host is set to all of the networks
+    # returned in the result
+    for network in result:
+            if network['host'] is None:
+                raise exception.NetworkHostNotSet(network_id=network['id'])
+
+    #check if the result contains all the networks
+    #we are looking for
+    for network_uuid in network_uuids:
+        found = False
+        for network in result:
+            if network['uuid'] == network_uuid:
+                found = True
+                break
+        if not found:
+            if project_id:
+                raise exception.NetworkNotFoundForProject(network_uuid=uuid,
+                                              project_id=context.project_id)
+            raise exception.NetworkNotFound(network_id=network_uuid)
+
+    return result
+
 # NOTE(vish): pylint complains because of the long method name, but
 #             it fits with the names of the rest of the methods
 # pylint: disable=C0103
@@ -2091,6 +2122,7 @@ def quota_get(context, project_id, resource, session=None):
 
 @require_context
 def quota_get_all_by_project(context, project_id):
+    authorize_project_context(context, project_id)
     session = get_session()
     result = {'project_id': project_id}
     rows = session.query(models.Quota).\
@@ -2549,6 +2581,7 @@ def security_group_get(context, security_group_id, session=None):
                          filter_by(deleted=can_read_deleted(context),).\
                          filter_by(id=security_group_id).\
                          options(joinedload_all('rules')).\
+                         options(joinedload_all('instances')).\
                          first()
     else:
         result = session.query(models.SecurityGroup).\
@@ -2556,6 +2589,7 @@ def security_group_get(context, security_group_id, session=None):
                          filter_by(id=security_group_id).\
                          filter_by(project_id=context.project_id).\
                          options(joinedload_all('rules')).\
+                         options(joinedload_all('instances')).\
                          first()
     if not result:
         raise exception.SecurityGroupNotFound(
