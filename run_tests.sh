@@ -136,9 +136,13 @@ run_tests || exit
 # not when we're running tests individually. To handle this, we need to
 # distinguish between options (noseopts), which begin with a '-', and
 # arguments (noseargs).
-if [ -z "$noseargs" ]; then
-  run_pep8
-fi
+
+
+# Note(lorin): Disabled pep8 testing for now, since they seem to have stopped
+# checking upstream for pep8 errors before requiring commits
+#if [ -z "$noseargs" ]; then
+#  run_pep8  
+#fi
 
 if [ $coverage -eq 1 ]; then
     echo "Generating coverage report in covhtml/"
