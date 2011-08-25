@@ -26,9 +26,10 @@ from nova.api.openstack.contrib.quotas import QuotaSetsController
 
 
 def quota_set(id):
+    # Note(lorin): These were changed because we uses larger defaults
     return {'quota_set': {'id': id, 'metadata_items': 128, 'volumes': 10,
-            'gigabytes': 1000, 'ram': 51200, 'floating_ips': 10,
-            'instances': 10, 'injected_files': 5, 'cores': 20,
+            'gigabytes': 1000, 'ram': 50 * 1024, 'floating_ips': 10,
+            'instances': 1000000, 'injected_files': 5, 'cores': 4000000,
             'injected_file_content_bytes': 10240}}
 
 
@@ -85,11 +86,12 @@ class QuotaSetsTest(test.TestCase):
         res = req.get_response(fakes.wsgi_app())
 
         self.assertEqual(res.status_int, 200)
+        # Note(lorin): These were changed because we uses larger defaults
         expected = {'quota_set': {
                     'id': 'fake_tenant',
-                    'instances': 10,
-                    'cores': 20,
-                    'ram': 51200,
+                    'instances': 1000000,
+                    'cores': 4000000,
+                    'ram': 50 * 1024,
                     'volumes': 10,
                     'gigabytes': 1000,
                     'floating_ips': 10,
