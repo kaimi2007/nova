@@ -99,7 +99,8 @@ class ArchitectureScheduler(driver.Scheduler):
                     if type(value) is int:  # value is int
                         resource_cap[cap] = value
 
-                    elif (type(value) is not str) and (type(value) is not unicode):
+                    elif (type(value) is not str) and \
+                         (type(value) is not unicode):
                         continue
 
                     # string and one value
