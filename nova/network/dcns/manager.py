@@ -40,6 +40,8 @@ class DCNService(nova_manager.SchedulerDependentManager):
 
         self.staticPCE = pce.StaticPCE()
 
+        self.cached_host_nics = {}
+
         super(DCNService, self).__init__(service_name='nova_dcns',
                                              *args, **kwargs)
 
@@ -58,9 +60,22 @@ class DCNService(nova_manager.SchedulerDependentManager):
         """Serve API call to set up layer2 physial network."""
         LOG.debug(_("setting up physical network"), context=context)
 
-        dcns_net = self.get_network_info(context, project_id)
         if dcns_net:
             raise Exception("A project DCNS network has already existed in DB.")
+
+        if (len(host_nics) == 1):
+            other_host_nics = self.cached_host_nics[project_id]
+            if other_host_nics == None:
+                self.set_cached_host_nics(project_id, host_nics)
+                return 1
+            elif len(other_host_nics) == 1:
+                if host_nics[0] != other_host_nics[0]:
+                    host_nics.append(other_host_nics[0])
+                    self.cached_host_nics[project_id] = None
+                else:
+                    raise Exception("The same host+nic has been added to project network!")
+            else:
+                raise Exception("cached_host_nics has length >= 2: this should never happen!")
 
         # get port maping from topology.HostPortMap
         if len(host_nics) < 2:
@@ -121,6 +136,9 @@ class DCNService(nova_manager.SchedulerDependentManager):
         if not project_id:
             project_id = 'unknown_project'
 
+        dcns_net = nova_db_api.dcns_network_get(context, project_id)
+        vlan = dcns_net.vlan_range
+
         # delete from database no matter what happens
         if forced: 
             nova_db_api.dcns_network_delete(context, project_id)
@@ -135,7 +153,7 @@ class DCNService(nova_manager.SchedulerDependentManager):
 
         # teardown path with l2dcn_driver
         gri = FLAGS.dcns_net_prefix + project_id
-        ret = self.driver.teardown_p2p_path(gri, path_hops)
+        ret = self.driver.teardown_p2p_path(gri, path_hops, vlan)
 
         # TODO: verify path down with l2dcn_driver ?
 
@@ -168,5 +186,3 @@ class DCNService(nova_manager.SchedulerDependentManager):
         #@ verify both paths with l2dcn_driver ?
         #@ update database upon success
         raise NotImplementedError()
-
-

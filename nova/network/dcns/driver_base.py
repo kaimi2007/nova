@@ -32,13 +32,13 @@ class L2DCNDriver(object):
         """
         raise NotImplementedError()
 
-    def teardown_p2p_path(self, gri, hops):
+    def teardown_p2p_path(self, gri, hops, vlan):
         """ Tear down p2p path with hops array
             Abstract
         """
         raise NotImplementedError()
 
-    def verify_p2p_path(self, gri, hops):
+    def verify_p2p_path(self, gri, hops, vlan):
         """ Verify p2p path with hops array
             Abstract
         """
@@ -56,13 +56,13 @@ class L2DCNDriver(object):
         """
         raise NotImplementedError()
 
-    def teardown_mp_path(self, gri, mp_hops):
+    def teardown_mp_path(self, gri, mp_hops, vlan):
         """ Tear down multipoint path with mp_hops array
             Abstract
         """
         raise NotImplementedError()
 
-    def verify_mp_path(self, gri, mp_hops):
+    def verify_mp_path(self, gri, mp_hops, vlan):
         """ Verify multipoint path with mp_hops array
             Abstract
         """
@@ -83,13 +83,13 @@ class StubL2DCNDriver(L2DCNDriver):
         LOG.debug(_("path committed on hops: %s") % self.get_path_hops_urn(hops))
         return 1
 
-    def teardown_p2p_path(self, gri, hops):
+    def teardown_p2p_path(self, gri, hops, vlan):
         """ Tear down p2p path with hops array """
         LOG.debug(_("tearing down path for gri: %s") % gri)
         LOG.debug(_("path deleted on hops: %s") % self.get_path_hops_urn(hops))
         return 1
 
-    def verify_p2p_path(self, gri, hops):
+    def verify_p2p_path(self, gri, hops, vlan):
         """ Verify p2p path with hops array """
         LOG.debug(_("verifying path for gri: %s") % gri)
         LOG.debug(_("path active for hops: %s") % self.get_path_hops_urn(hops))
@@ -109,10 +109,9 @@ class StubL2DCNDriver(L2DCNDriver):
     def setup_mp_path(self, gri, mp_hops, bw, vlan):
         raise NotImplementedError()
 
-    def teardown_mp_path(self, gri, mp_hops):
+    def teardown_mp_path(self, gri, mp_hops, vlan):
         raise NotImplementedError()
 
-    def verify_mp_path(self, gri, mp_hops):
+    def verify_mp_path(self, gri, mp_hops, vlan):
         raise NotImplementedError()
-
 
