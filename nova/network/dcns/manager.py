@@ -60,6 +60,7 @@ class DCNService(nova_manager.SchedulerDependentManager):
         """Serve API call to set up layer2 physial network."""
         LOG.debug(_("setting up physical network"), context=context)
 
+        dcns_net = self.get_network_info(context, project_id)
         if dcns_net:
             raise Exception("A project DCNS network has already existed in DB.")
 
