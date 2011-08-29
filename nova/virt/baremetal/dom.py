@@ -68,7 +68,7 @@ class BareMetalDom(object):
         self.fp = 0
         self.baremetal_nodes = nodes.get_baremetal_nodes()
 
-        utils.execute('rm', self.fake_dom_file)
+        utils.execute('sudo', 'rm', self.fake_dom_file)
         LOG.debug(_("open %s"), self.fake_dom_file)
         try:
             self.fp = open(self.fake_dom_file, "r+")
