@@ -149,7 +149,7 @@ def destroy_container(target, instance, nbd=False):
         out, err = utils.execute('sudo', 'losetup', '-a')
         for loop in out.splitlines():
             if instance['name'] in loop:
-                device = loop.split(loop, ':')
+                device, other = loop.split(':', 1)
                 _unlink_device(device, nbd)
 
 
