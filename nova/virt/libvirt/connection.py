@@ -1687,6 +1687,7 @@ class HostState(object):
         super(HostState, self).__init__()
         self.read_only = read_only
         self._stats = {}
+        self.connection = None
         self.update_status()
 
     def get_host_stats(self, refresh=False):
@@ -1706,14 +1707,15 @@ class HostState(object):
         """
         LOG.debug(_("Updating host stats"))
         print 'Updating statistics!!'
-        connection = get_connection(self.read_only)
+        if self.connection is None:
+            self.connection = get_connection(self.read_only)
         data = {}
-        data["vcpus"] = connection.get_vcpu_total()
+        data["vcpus"] = self.connection.get_vcpu_total()
         if FLAGS.libvirt_type != 'lxc':
-            data["vcpus_used"] = connection.get_vcpu_used()
+            data["vcpus_used"] = self.connection.get_vcpu_used()
         else:
             data["vcpus_used"] = vcpus_used
-        data["cpu_info"] = connection.get_cpu_info()
+        data["cpu_info"] = self.connection.get_cpu_info()
         data["cpu_arch"] = FLAGS.cpu_arch
         data["xpus"] = FLAGS.xpus
         data["xpu_arch"] = FLAGS.xpu_arch
@@ -1723,12 +1725,12 @@ class HostState(object):
         data["net_arch"] = FLAGS.net_arch
         data["net_info"] = FLAGS.net_info
         data["net_mbps"] = FLAGS.net_mbps
-        data["disk_total"] = connection.get_local_gb_total()
-        data["disk_used"] = connection.get_local_gb_used()
+        data["disk_total"] = self.connection.get_local_gb_total()
+        data["disk_used"] = self.connection.get_local_gb_used()
         data["disk_available"] = data["disk_total"] - data["disk_used"]
-        data["host_memory_total"] = connection.get_memory_mb_total()
+        data["host_memory_total"] = self.connection.get_memory_mb_total()
         data["host_memory_free"] = data["host_memory_total"] - \
-            connection.get_memory_mb_used()
-        data["hypervisor_type"] = connection.get_hypervisor_type()
-        data["hypervisor_version"] = connection.get_hypervisor_version()
+            self.connection.get_memory_mb_used()
+        data["hypervisor_type"] = self.connection.get_hypervisor_type()
+        data["hypervisor_version"] = self.connection.get_hypervisor_version()
         self._stats = data

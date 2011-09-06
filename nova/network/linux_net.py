@@ -558,6 +558,13 @@ def get_dhcp_hosts(context, network_id):
     hosts = []
     for fixed_ip_ref in db.network_get_associated_fixed_ips(context,
                                                             network_id):
+#        print 'JSUH nwid=', network_id
+#        print 'JSUH nwid=',fixed_ip_ref
+#        print 'JSUH nwid=',fixed_ip_ref.hostname
+#    (instance_ref['mac_address'],
+#                                   instance_ref['hostname'],
+#                                   FLAGS.dhcp_domain,
+#                                   fixed_ip_ref['address'])
         hosts.append(_host_dhcp(fixed_ip_ref))
     return '\n'.join(hosts)
 

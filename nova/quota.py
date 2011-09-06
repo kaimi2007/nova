@@ -28,7 +28,7 @@ flags.DEFINE_integer('quota_instances', 1000000,
                      'number of instances allowed per project')
 flags.DEFINE_integer('quota_cores', 4000000,
                      'number of instance cores allowed per project')
-flags.DEFINE_integer('quota_ram', 50 * 1024,
+flags.DEFINE_integer('quota_ram', 50 * 1024 * 1024,
                      'megabytes of instance ram allowed per project')
 flags.DEFINE_integer('quota_volumes', 10,
                      'number of volumes allowed per project')

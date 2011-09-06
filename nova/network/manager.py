@@ -133,6 +133,7 @@ class NetworkManager(manager.SchedulerDependentManager):
         # the designated network host.
         ctxt = context.get_admin_context()
         for network in self.db.host_get_networks(ctxt, self.host):
+            print 'JSUH: network=', network
             self._on_set_network_host(ctxt, network['id'])
         floating_ips = self.db.floating_ip_get_all_by_host(ctxt,
                                                            self.host)
