@@ -429,12 +429,18 @@ class LibvirtConnection(driver.ComputeDriver):
         instance_name = instance['name']
         LOG.info(_('instance %(instance_name)s: deleting instance files'
                 ' %(target)s') % locals())
-        if FLAGS.libvirt_type == 'lxc':
-            disk.destroy_container(target, instance, nbd=FLAGS.use_cow_images)
         if FLAGS.connection_type == 'gpu':
             self.deassign_gpus(instance)
+        if FLAGS.libvirt_type == 'lxc':
+            try:
+                disk.destroy_container(target, instance, nbd=FLAGS.use_cow_images)
+            except:
+                pass
         if os.path.exists(target):
-            shutil.rmtree(target)
+            try:
+                shutil.rmtree(target)
+            except:
+                pass
 
     @exception.wrap_exception
     def attach_volume(self, instance_name, device_path, mountpoint):
