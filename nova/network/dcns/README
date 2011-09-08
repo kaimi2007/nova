@@ -28,3 +28,10 @@ service nova-dcns start
 setup ssh key for ssh access (for user nova)
 try manual ssh login from user nova
 
+
+-----------------------------------------------------------------------------------------
+
+A patching package for Nova Lucid located at other/nova-lucid-patch.
+
+This is manual patch of for systems installed with release tagged 2011.2-0ubuntu0ppa1~lucid1.
+

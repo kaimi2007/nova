@@ -1,0 +1,2 @@
+This is the DCNS patch for 2011.2-0ubuntu0ppa1~lucid1
+To make the patch, run ./patchLucid.sh
