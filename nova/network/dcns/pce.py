@@ -58,5 +58,5 @@ class StaticPCE(PCEBase):
         self.project_paths[project] = path
 
     def get_project_path(self, project):
-        return self.project_paths[project]
+        return self.project_paths.get(project)
 

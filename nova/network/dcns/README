@@ -1,15 +1,30 @@
-To patch a branch with DCNS code
 1. copy other/nova-dcns.conf to /etc/nova/nova-dcns.conf
 2. copy other/*.yaml.sample to /etc/nova/*.yaml
 3. copy other/flags.py to $src/nova/flags.py
 4. copy other/db-api.py to $src/nova/db/api.py
-5. copy other/db-sqlalchemy-api.py to $src/nova/db/sqlalchemy/api.py 
-	other/db-sqlalchemy-models.py to $src/nova/db/sqlalchemy/models.py
-	other/036_dcns.py to $src/nova/db/sqlalchemy/migrate_repo/versions/036_dcns.py
+5. copy other/db-sqlalchemy-api.py to $src/nova/db/sqlalchemy/api.py and other/db-sqlalchemy-models.py to $src/nova/db/sqlalchemy/models.py
 6. run service: ./bin/nova-dcns
-7. copy cli.py to bin/dcns_cli 
-8. run ./bin/dcns_cli. Examples:
-        ./bin/dcns-cli create projectA 100Mbps 101 arlg-es1:eth1 arlg-es2:eth1
-        ./bin/dcns-cli show projectA
-        ./bin/dcns-cli remove projectA
+7. copy cli.py to bin/dcns_cli
+8. run ./bin/dcns_cli, examples:
+	./bin/dcns-cli create projectA 100Mbps 101 bespin102:eth1 bespin105:eth1
+	./bin/dcns-cli show projectA 
+	./bin/dcns-cli remove projectA
+
+9 copy other/network-manager.py to $src/nova/network/manager.py
+   run ./bin/nova-compute /etc/nova/nova.conf
+
+
+-----> service start patch 
+
+ln -s /lib/init/upstart-job /etc/init.d/nova-dcns
+cp nova-dcns /usr/bin/nova-dcns
+cp other/init-nova-dcns.conf /etc/init/nova-dcns.conf
+cp other/035_dcns.py $src/nova/db/sqlalchemy/migration_repo/versions/0xx_dcns.py
+nova-manage db sync
+service nova-dcns start
+
+----> openflow control
+
+setup ssh key for ssh access (for user nova)
+try manual ssh login from user nova
 

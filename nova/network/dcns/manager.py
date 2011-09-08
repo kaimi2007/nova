@@ -62,40 +62,61 @@ class DCNService(nova_manager.SchedulerDependentManager):
 
         dcns_net = self.get_network_info(context, project_id)
         if dcns_net:
-            raise Exception("A project DCNS network has already existed in DB.")
+            #raise Exception("A project DCNS network has already existed in DB.")
+            LOG.debug(_("A project DCNS network has already existed in DB"))
+            return 0
 
         if (len(host_nics) == 1):
-            other_host_nics = self.cached_host_nics[project_id]
+            other_host_nics = self.cached_host_nics.get(project_id)
             if other_host_nics == None:
-                self.set_cached_host_nics(project_id, host_nics)
+                self.cached_host_nics[project_id] = host_nics
                 return 1
             elif len(other_host_nics) == 1:
                 if host_nics[0] != other_host_nics[0]:
                     host_nics.append(other_host_nics[0])
                     self.cached_host_nics[project_id] = None
                 else:
-                    raise Exception("The same host+nic has been added to project network!")
+                    #raise Exception("The same host+nic has been added to project network!")
+                    LOG.debug(_("The same host+nic has been added to project network!"))
+                    return 0
             else:
-                raise Exception("cached_host_nics has length >= 2: this should never happen!")
+                LOG.error(_("len(cached_host_nics) >= 2: DCNS network must have existed!"))
+                return 0
+        elif (len(host_nics) == 2):
+           self.cached_host_nics[project_id] = host_nics
+        else:
+            #raise Exception("Multippoint network path is not supported yet")
+            LOG.error(_("Multippoint network path is not supported yet"))
+            return 0
 
         # get port maping from topology.HostPortMap
         if len(host_nics) < 2:
-            raise Exception("A network path must have at least two end points")
+            #raise Exception("A network path must have at least two end points")
+            LOG.error(_("A network path must have at least two end points"))
+            return 0
         elif len(host_nics) > 2:
-            raise Exception("Multippoint network path is not supported yet")
+            #raise Exception("Multippoint network path is not supported yet")
+            LOG.error(_("Multippoint network path is not supported yet"))
+            return 0
         (srcHost, srcNic) = host_nics[0].split(':')
         source = self.hostPortMapper.lookup_port_by_host(srcHost, srcNic)
         if not source:
-            raise Exception("Unknown source port for host:"+srcHost+" nic:"+srcNic)
+            #raise Exception("Unknown source port for host:"+srcHost+" nic:"+srcNic)
+            LOG.error(_("Unknown source port for host:%s nic:%s") % (srcHost, srcNic))
+            return 0
         (dstHost, dstNic) = host_nics[1].split(':')
         destination = self.hostPortMapper.lookup_port_by_host(dstHost, dstNic)
         if not destination:
-            raise Exception("Unknown destination port for host:"+dstHost+" nic:"+dstNic)
+            #raise Exception("Unknown destination port for host:"+dstHost+" nic:"+dstNic)
+            LOG.error(_("Unknown source port for host:%s nic:%s") % (dstHost, dstNic))
+            return 0
 
         # get path from pce.StaticPCE
         path = self.staticPCE.compute_p2p_path(source, destination)
         if not path:
-            raise Exception("No routing path between "+source+" and "+destination)
+            #raise Exception("No routing path between "+source+" and "+destination)
+            LOG.error(_("No routing path between %s and %s") % (source, destination))
+            return 0
         # TODO: regulate path hops format  
         path_hops =  path['hops'].split(' ')
 
@@ -137,7 +158,14 @@ class DCNService(nova_manager.SchedulerDependentManager):
         if not project_id:
             project_id = 'unknown_project'
 
+        other_host_nics = self.cached_host_nics.get(project_id)
+        if other_host_nics != None:
+                self.cached_host_nics[project_id] = None
+
         dcns_net = nova_db_api.dcns_network_get(context, project_id)
+        if dcns_net == None:
+            LOG.debug(_("No dcns_network for project %s to tear down") % project_id)
+            return 0
         vlan = dcns_net.vlan_range
 
         # delete from database no matter what happens
@@ -150,7 +178,9 @@ class DCNService(nova_manager.SchedulerDependentManager):
         # get path from pce.StaticPCE
         path_hops = self.staticPCE.get_project_path(project_id)
         if not path_hops:
-            raise Exception("No path record for project"+project_id)
+            #raise Exception("No path record for project"+project_id)
+            LOG.debug(_("No PCE path record for project %s") % project_id)
+            return 0
 
         # teardown path with l2dcn_driver
         gri = FLAGS.dcns_net_prefix + project_id
