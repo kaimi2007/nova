@@ -35,6 +35,7 @@ from nova import utils
 from nova.api.ec2 import cloud
 from nova.compute import power_state
 from nova.compute import vm_states
+from nova.virt import driver
 from nova.virt.libvirt import connection
 from nova.virt.libvirt import firewall
 from nova.tests import fake_network
@@ -700,7 +701,7 @@ class LibvirtConnTestCase(test.TestCase):
         # qemu-img should be mockd since test environment might not have
         # large disk space.
         self.mox.StubOutWithMock(utils, "execute")
-        utils.execute('sudo', 'qemu-img', 'create', '-f', 'raw',
+        utils.execute('qemu-img', 'create', '-f', 'raw',
                       '%s/%s/disk' % (tmpdir, instance_ref.name), '10G')
 
         self.mox.ReplayAll()
@@ -752,7 +753,7 @@ class LibvirtConnTestCase(test.TestCase):
         os.path.getsize("/test/disk").AndReturn(10 * 1024 * 1024 * 1024)
         # another is qcow image, so qemu-img should be mocked.
         self.mox.StubOutWithMock(utils, "execute")
-        utils.execute('sudo', 'qemu-img', 'info', '/test/disk.local').\
+        utils.execute('qemu-img', 'info', '/test/disk.local').\
             AndReturn((ret, ''))
 
         self.mox.ReplayAll()
@@ -839,6 +840,50 @@ class LibvirtConnTestCase(test.TestCase):
         _assert_volume_in_mapping('sdf', True)
         _assert_volume_in_mapping('sdg', False)
         _assert_volume_in_mapping('sdh1', False)
+
+    def test_reboot_signature(self):
+        """Test that libvirt driver method sig matches interface"""
+        def fake_reboot_with_correct_sig(ignore, instance,
+                                         network_info, reboot_type):
+            pass
+
+        def fake_destroy(instance, network_info, cleanup=False):
+            pass
+
+        def fake_plug_vifs(instance, network_info):
+            pass
+
+        def fake_create_new_domain(xml):
+            return
+
+        def fake_none(self, instance):
+            return
+
+        instance = db.instance_create(self.context, self.test_instance)
+        network_info = _fake_network_info(self.stubs, 1)
+
+        self.mox.StubOutWithMock(connection.LibvirtConnection, '_conn')
+        connection.LibvirtConnection._conn.lookupByName = self.fake_lookup
+
+        conn = connection.LibvirtConnection(False)
+        self.stubs.Set(conn, 'destroy', fake_destroy)
+        self.stubs.Set(conn, 'plug_vifs', fake_plug_vifs)
+        self.stubs.Set(conn.firewall_driver,
+                       'setup_basic_filtering',
+                       fake_none)
+        self.stubs.Set(conn.firewall_driver,
+                       'prepare_instance_filter',
+                       fake_none)
+        self.stubs.Set(conn, '_create_new_domain', fake_create_new_domain)
+        self.stubs.Set(conn.firewall_driver,
+                       'apply_instance_filter',
+                       fake_none)
+
+        args = [instance, network_info, 'SOFT']
+        conn.reboot(*args)
+
+        compute_driver = driver.ComputeDriver()
+        self.assertRaises(NotImplementedError, compute_driver.reboot, *args)
 
 
 class NWFilterFakes:
