@@ -613,7 +613,8 @@ def floating_ip_count_by_project(context, project_id):
 
 
 @require_context
-def floating_ip_fixed_ip_associate(context, floating_address, fixed_address):
+def floating_ip_fixed_ip_associate(context, floating_address,
+                                   fixed_address, host):
     session = get_session()
     with session.begin():
         # TODO(devcamcar): How to ensure floating_id belongs to user?
@@ -624,6 +625,7 @@ def floating_ip_fixed_ip_associate(context, floating_address, fixed_address):
                                                fixed_address,
                                                session=session)
         floating_ip_ref.fixed_ip = fixed_ip_ref
+        floating_ip_ref.host = host
         floating_ip_ref.save(session=session)
 
 
@@ -667,6 +669,7 @@ def floating_ip_disassociate(context, address):
         else:
             fixed_ip_address = None
         floating_ip_ref.fixed_ip = None
+        floating_ip_ref.host = None
         floating_ip_ref.save(session=session)
     return fixed_ip_address
 
