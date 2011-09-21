@@ -35,13 +35,13 @@ class OpenFlowDriver(driver_base.L2DCNDriver):
     def setup_p2p_path(self, gri, hops, bw, vlan):
         """ Set up p2p path with hops array """
         if not self.dpctl:
-            raise Excpetion("OpenFlow driver currently only uses dpctl, whose path has to be configured in nova-dcns.conf!") 
+            raise Exception("OpenFlow driver currently only uses dpctl, whose path has to be configured in nova-dcns.conf!") 
         if (len(hops) != 2):
-            raise Excpetion("Malformed path hops: OpenFlow driver currently only supports p2p hops!") 
+            raise Exception("Malformed path hops: OpenFlow driver currently only supports p2p hops!") 
         (src_ip, src_port) = hops[0].split(":")
         (dst_ip, dst_port) = hops[1].split(":")
         if ( src_ip != dst_ip):
-            raise Excpetion("Malformed path hops: hop IPs for the same swtich do not match!") 
+            raise Exception("Malformed path hops: hop IPs for the same swtich do not match!") 
         LOG.debug(_("setting up path for gri: %s") % gri)
         vlan_hex = "0x%04x" % vlan
         sys_cmd = self.dpctl + " add-flow " + "tcp:" + src_ip + ":6633" + "in_port=" + src_port \
@@ -58,13 +58,13 @@ class OpenFlowDriver(driver_base.L2DCNDriver):
     def teardown_p2p_path(self, gri, hops, vlan):
         """ Tear down p2p path with hops array """
         if not self.dpctl:
-            raise Excpetion("OpenFlow driver currently only uses dpctl, whose path has to be configured in nova-dcns.conf!") 
+            raise Exception("OpenFlow driver currently only uses dpctl, whose path has to be configured in nova-dcns.conf!") 
         if len(hops) != 2:
-            raise Excpetion("Malformed path hops: OpenFlow driver currently only supports p2p hops!") 
+            raise Exception("Malformed path hops: OpenFlow driver currently only supports p2p hops!") 
         (src_ip, src_port) = hops[0].split(":")
         (dst_ip, dst_port) = hops[1].split(":")
         if src_ip != dst_ip:
-            raise Excpetion("Malformed path hops: hop IPs for the same swtich do not match!") 
+            raise Exception("Malformed path hops: hop IPs for the same swtich do not match!") 
         LOG.debug(_("tearing down path for gri: %s") % gri)
         vlan_hex = "0x%04x" % vlan
         sys_cmd = self.dpctl + " del-flows " + "tcp:" + src_ip + ":6633" + "in_port="+src_port+",dl_vlan="+vlan_hex
@@ -79,13 +79,13 @@ class OpenFlowDriver(driver_base.L2DCNDriver):
     def verify_p2p_path(self, gri, hops, vlan):
         """ Verify p2p path with hops array """
         if not self.dpctl:
-            raise Excpetion("OpenFlow driver currently only uses dpctl, whose path has to be configured in nova-dcns.conf!") 
+            raise Exception("OpenFlow driver currently only uses dpctl, whose path has to be configured in nova-dcns.conf!") 
         if (len(hops) != 2):
-            raise Excpetion("Malformed path hops: OpenFlow driver currently only supports p2p hops!") 
+            raise Exception("Malformed path hops: OpenFlow driver currently only supports p2p hops!") 
         (src_ip, src_port) = hops[0].split(":")
         (dst_ip, dst_port) = hops[1].split(":")
         if src_ip != dst_ip:
-            raise Excpetion("Malformed path hops: hop IPs for the same swtich do not match!") 
+            raise Exception("Malformed path hops: hop IPs for the same swtich do not match!") 
         LOG.debug(_("verifying path for gri: %s") % gri)
         vlan_hex = "0x%04x" % vlan
         sys_cmd = self.dpctl + " dump-flows " + "tcp:" + src_ip + ":6633"
