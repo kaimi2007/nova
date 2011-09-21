@@ -20,12 +20,11 @@
 """
 A connection to a hypervisor through baremetal.
 
-Supports KVM, LXC, QEMU, UML, and XEN.
+Supports KVM, LXC, QEMU, UML, XEN, and baremetal.
 
 **Related Flags**
 
-:baremetal_type:  Libvirt domain type.  Can be kvm, qemu, uml, xen
-                (default: kvm).
+:baremetal_type:  Libvirt domain type.  Can be kvm, qemu, uml, xen, baremetal
 :baremetal_uri:  Override for the default baremetal URI (baremetal_type).
 :baremetal_xml_template:  Libvirt XML Template.
 :rescue_image_id:  Rescue ami image (default: ami-rescue).
@@ -180,7 +179,7 @@ class ProxyConnection(driver.ComputeDriver):
     def list_instances(self):
         #return [self._conn.lookupByID(x).name()
         #        for x in self._conn.listDomainsID()]
-        return self._conn.list_domains()  # MK
+        return self._conn.list_domains()
 
     def _map_to_instance_info(self, domain_name):
         """Gets info from a virsh domain object into an InstanceInfo"""
@@ -301,7 +300,7 @@ class ProxyConnection(driver.ComputeDriver):
         raise exception.ApiError("resume not supported for baremetal")
 
     @exception.wrap_exception
-    def rescue(self, instance):
+    def rescue(self, context, instance, callback, network_info):
         """Loads a VM using rescue images.
 
         A rescue is normally performed when something goes wrong with the
@@ -316,8 +315,8 @@ class ProxyConnection(driver.ComputeDriver):
         rescue_images = {'image_id': FLAGS.baremetal_rescue_image_id,
                          'kernel_id': FLAGS.baremetal_rescue_kernel_id,
                          'ramdisk_id': FLAGS.baremetal_rescue_ramdisk_id}
-        #self._create_image(instance, xml, '.rescue', rescue_images)
-        #self._create_new_domain(xml)
+        self._create_image(instance, xml, '.rescue', rescue_images,
+                           network_info=network_info)
 
         timer = utils.LoopingCall(f=None)
 
@@ -356,11 +355,11 @@ class ProxyConnection(driver.ComputeDriver):
     # for xenapi(tr3buchet)
     @exception.wrap_exception
     def spawn(self, instance, network_info=None):
-        LOG.debug(_("<============= spawn of baremetal =============>"))  # MK
+        LOG.debug(_("<============= spawn of baremetal =============>")) 
         xml_dict = self.to_xml_dict(instance, network_info)
         db.instance_set_state(context.get_admin_context(),
                               instance['id'],
-                              power_state.BUILDING,  # NOSTATE,
+                              power_state.BUILDING,
                               'launching')
         self._create_image(instance, xml_dict, network_info=network_info)
         LOG.debug(_("instance %s: is running"), instance['name'])
@@ -376,7 +375,7 @@ class ProxyConnection(driver.ComputeDriver):
             try:
                 LOG.debug(_(xml_dict))
                 state = self._conn.create_domain(xml_dict, bpath)
-                LOG.debug(_('~~~~~~ current state = %s ~~~~~~'), state)  # MK
+                LOG.debug(_('~~~~~~ current state = %s ~~~~~~'), state)
                 db.instance_set_state(context.get_admin_context(),
                                       instance['id'], state, 'running')
                 if state == power_state.RUNNING:
@@ -504,9 +503,6 @@ class ProxyConnection(driver.ComputeDriver):
         utils.execute('chmod', '0777', basepath(suffix=''))
 
         LOG.info(_('instance %s: Creating image'), inst['name'])
-        f = open(basepath('baremetal.xml'), 'w')
-        #f.write(baremetal_xml)
-        f.close()
 
         if FLAGS.baremetal_type == 'lxc':
             container_dir = '%s/rootfs' % basepath(suffix='')
@@ -519,11 +515,9 @@ class ProxyConnection(driver.ComputeDriver):
         user = manager.AuthManager().get_user(inst['user_id'])
         project = manager.AuthManager().get_project(inst['project_id'])
 
-        #MK
-        #Test: copying original baremetal images
+        # Copying original baremetal images
         bp = basepath(suffix='')
         self.baremetal_nodes.get_image(bp)
-        #_MK
 
         if not disk_images:
             disk_images = {'image_id': inst['image_ref'],
@@ -630,7 +624,6 @@ class ProxyConnection(driver.ComputeDriver):
                 LOG.info(_('instance %(inst_name)s: injecting net into'
                         ' image %(img_id)s') % locals())
             try:
-                #disk.inject_data(basepath('disk'), key, net,
                 disk.inject_data(basepath('root'), key, net,
                                  partition=target_partition,
                                  nbd=FLAGS.use_cow_images)
@@ -709,11 +702,11 @@ class ProxyConnection(driver.ComputeDriver):
                     'local': inst_type['local_gb'],
                     'driver_type': driver_type,
                     'nics': nics,
-                    'ip_address': mapping['ips'][0]['ip'],  # MK
-                    'mac_address': instance['mac_address'],  # MK
-                    'image_id': instance['image_ref'],  # MK
-                    'kernel_id': instance['kernel_id'],  # MK
-                    'ramdisk_id': instance['ramdisk_id']}  # MK
+                    'ip_address': mapping['ips'][0]['ip'],
+                    'mac_address': instance['mac_address'],
+                    'image_id': instance['image_ref'],
+                    'kernel_id': instance['kernel_id'],
+                    'ramdisk_id': instance['ramdisk_id']}
 
         if FLAGS.vnc_enabled:
             if FLAGS.baremetal_type != 'lxc':
@@ -1043,25 +1036,7 @@ class HostState(object):
         """Since under Xenserver, a compute node runs on a given host,
         we can get host status information using xenapi.
         """
-#        data = {'vcpus': self.get_vcpu_total(),
-#               'memory_mb': self.get_memory_mb_total(),
-#               'local_gb': self.get_local_gb_total(),
-#               'vcpus_used': self.get_vcpu_used(),
-#               'memory_mb_used': self.get_memory_mb_used(),
-#               'local_gb_used': self.get_local_gb_used(),
-#               'hypervisor_type': self.get_hypervisor_type(),
-#               'hypervisor_version': self.get_hypervisor_version(),
-#               'cpu_info': self.get_cpu_info(),
-#               #RLK
-#               'cpu_arch': FLAGS.cpu_arch,
-#               'xpu_arch': FLAGS.xpu_arch,
-#               'xpus': FLAGS.xpus,
-#               'xpu_info': FLAGS.xpu_info,
-#               'net_arch': FLAGS.net_arch,
-#               'net_info': FLAGS.net_info,
-#               'net_mbps': FLAGS.net_mbps}
         LOG.debug(_("Updating host stats"))
-        #LOG.debug(_("Updating statistics!!"))
         connection = get_connection(self.read_only)
         data = {}
         data["vcpus"] = connection.get_vcpu_total()
@@ -1070,7 +1045,6 @@ class HostState(object):
         data["cpu_arch"] = FLAGS.cpu_arch
         data["xpus"] = FLAGS.xpus
         data["xpu_arch"] = FLAGS.xpu_arch
-        #  data["xpus_used"] = 0
         data["xpu_info"] = FLAGS.xpu_info
         data["net_arch"] = FLAGS.net_arch
         data["net_info"] = FLAGS.net_info

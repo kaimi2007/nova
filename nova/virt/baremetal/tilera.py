@@ -231,9 +231,10 @@ class BareMetalNodes(object):
         """
         Checks whether the given node is activated or not
         """
-        """grep_cmd = "ls | grep bin >> tile_output"
-        utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
-                '--resume', '--net', node_ip, '--', grep_cmd)
+        grep_cmd = "/usr/local/TileraMDE/bin/tile-monitor" + \
+                   " --resume --net " + node_ip + \
+                   " -- ls | grep bin > " + tile_output
+        subprocess.Popen(grep_cmd, shell=True)
         file = open("./tile_output")
         out_msg = file.readline()
         utils.execute('rm', './tile_output')
@@ -241,12 +242,15 @@ class BareMetalNodes(object):
         if out_msg.find("bin") < 0:
             cmd = "TILERA_BOARD_#" + str(node_id) + " " \
                 + node_ip + " is not ready, out_msg=" + out_msg
-            print cmd
-            return power_state.NOSTATE
-        else:"""
-        cmd = "TILERA_BOARD_#" + str(node_id) + " " + node_ip \
+            LOG.debug(_(cmd))
+            self.power_mgr(node_id, 3)
+            cmd = "Rebooting board is being done... Please wait 90 secs more."
+            self.sleep_mgr(90)
+            LOG.debug(_(cmd))
+        else:
+            cmd = "TILERA_BOARD_#" + str(node_id) + " " + node_ip \
                 + " is ready"
-        LOG.debug(_(cmd))
+            LOG.debug(_(cmd))
 
     def vmlinux_set(self, node_id, mode):
         """
@@ -305,7 +309,7 @@ class BareMetalNodes(object):
         """
         Gets the bare-metal file system image into the instance path
         """
-        path_fs = "/tftpboot/tilera_fs_5G"
+        path_fs = "/tftpboot/tilera_fs"
         path_root = bp + "/root"
         utils.execute('cp', path_fs, path_root)
 
