@@ -70,7 +70,7 @@ def upgrade(migrate_engine):
                        'value': values["value"]
                        })
     except Exception:
-        logging.info(repr(instance_types))
+        logging.info(repr(instance_type_extra_specs_table))
         logging.exception('Exception while seeding instance_type_extra_specs table')
         raise
 
