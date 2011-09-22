@@ -231,15 +231,15 @@ class BareMetalNodes(object):
         """
         Checks whether the given node is activated or not
         """
-        grep_cmd = "/usr/local/TileraMDE/bin/tile-monitor" + \
-                   " --resume --net " + node_ip + \
-                   " -- ls | grep bin > " + tile_output
+        tile_output = "/tftpboot/tile_output_" + str(node_id)
+        grep_cmd = "ping -c1 " + node_ip + " | grep Unreachable > " \
+                   + tile_output
         subprocess.Popen(grep_cmd, shell=True)
-        file = open("./tile_output")
+        file = open(tile_output)
         out_msg = file.readline()
-        utils.execute('rm', './tile_output')
+        utils.execute('sudo', 'rm', tile_output)
         file.close()
-        if out_msg.find("bin") < 0:
+        if out_msg.find("Unreachable") >= 0:
             cmd = "TILERA_BOARD_#" + str(node_id) + " " \
                 + node_ip + " is not ready, out_msg=" + out_msg
             LOG.debug(_(cmd))
