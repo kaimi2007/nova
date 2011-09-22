@@ -100,8 +100,8 @@ INSTANCE_TYPE_EXTRA_SPECS = {
     '16': dict(instance_type_id=21, key='cpu_arch', value='x86_64'),
     '17': dict(instance_type_id=13, key='cpu_arch', value='x86_64'),
     '18': dict(instance_type_id=25, key='cpu_arch', value='x86_64'),
-    '19': dict(instance_type_id=12, key='cpu_arch', value='x86_64'),
 
+    '99': dict(instance_type_id=12, key='cpu_arch', value='tilepro64'),
     '100': dict(instance_type_id=6, key='cpu_arch', value='tilepro64'),
     '101': dict(instance_type_id=16, key='cpu_arch', value='tilepro64'),
     '102': dict(instance_type_id=20, key='cpu_arch', value='tilepro64'),
