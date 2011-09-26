@@ -26,8 +26,6 @@ include nova/db/sqlalchemy/migrate_repo/README
 include nova/virt/interfaces.template
 include nova/virt/libvirt*.xml.template
 include nova/virt/cpuinfo.xml.template
-include nova/virt/baremetal.xml.template
-include nova/virt/baremetal_interfaces.template
 include nova/tests/CA/
 include nova/tests/CA/cacert.pem
 include nova/tests/CA/private/

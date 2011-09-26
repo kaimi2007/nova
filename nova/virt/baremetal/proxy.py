@@ -20,13 +20,10 @@
 """
 A connection to a hypervisor through baremetal.
 
-Supports KVM, LXC, QEMU, UML, XEN, and baremetal.
-
 **Related Flags**
 
-:baremetal_type:  Libvirt domain type.  Can be kvm, qemu, uml, xen, baremetal
+:baremetal_type:  Baremetal domain type.
 :baremetal_uri:  Override for the default baremetal URI (baremetal_type).
-:baremetal_xml_template:  Libvirt XML Template.
 :rescue_image_id:  Rescue ami image (default: ami-rescue).
 :rescue_kernel_id:  Rescue aki image (default: aki-rescue).
 :rescue_ramdisk_id:  Rescue ari image (default: ari-rescue).
@@ -44,8 +41,6 @@ import sys
 import tempfile
 import time
 import uuid
-from xml.dom import minidom
-from xml.etree import ElementTree
 
 from eventlet import greenthread
 from eventlet import tpool
@@ -77,11 +72,8 @@ LOG = logging.getLogger('nova.virt.baremetal.proxy')
 
 FLAGS = flags.FLAGS
 flags.DEFINE_string('baremetal_injected_network_template',
-                    utils.abspath('virt/baremetal_interfaces.template'),
+                    utils.abspath('virt/interfaces.template'),
                     'Template file for injected network')
-flags.DEFINE_string('baremetal_xml_template',
-                    utils.abspath('virt/baremetal.xml.template'),
-                    'baremetal XML Template')
 flags.DEFINE_string('baremetal_type',
                     'baremetal',
                     'baremetal domain type')
@@ -130,7 +122,6 @@ class ProxyConnection(driver.ComputeDriver):
     def __init__(self, read_only):
         super(ProxyConnection, self).__init__()
         self.baremetal_nodes = nodes.get_baremetal_nodes()
-        self.baremetal_xml = open(FLAGS.baremetal_xml_template).read()
         self._wrapped_conn = None
         self.read_only = read_only
 
@@ -143,7 +134,6 @@ class ProxyConnection(driver.ComputeDriver):
         return self._host_state
 
     def init_host(self, host):
-        # Adopt existing VM's running here
         ctxt = context.get_admin_context()
         for instance in db.instance_get_all_by_host(ctxt, host):
             try:
@@ -168,31 +158,13 @@ class ProxyConnection(driver.ComputeDriver):
     _conn = property(_get_connection)
 
     def get_pty_for_instance(self, instance_name):
-        virt_dom = self._conn.lookupByName(instance_name)
-        xml = virt_dom.XMLDesc(0)
-        dom = minidom.parseString(xml)
-        for serial in dom.getElementsByTagName('serial'):
-            if serial.getAttribute('type') == 'pty':
-                source = serial.getElementsByTagName('source')[0]
-                return source.getAttribute('path')
+        raise NotImplementedError()
 
     def list_instances(self):
-        #return [self._conn.lookupByID(x).name()
-        #        for x in self._conn.listDomainsID()]
         return self._conn.list_domains()
 
     def _map_to_instance_info(self, domain_name):
         """Gets info from a virsh domain object into an InstanceInfo"""
-
-        # domain.info() returns a list of:
-        #    state:       one of the state values (virDomainState)
-        #    maxMemory:   the maximum memory used by the domain
-        #    memory:      the current amount of memory used by the domain
-        #    nbVirtCPU:   the number of virtual CPU
-        #    puTime:      the time used by the domain in nanoseconds
-
-        #(state, _max_mem, _mem, _num_cpu, _cpu_time) = domain.info()
-        #name = domain.name()
         (state, _max_mem, _mem, _num_cpu, _cpu_time) \
             = self._conn.get_domain_info(domain_name)
         name = domain_name
@@ -200,13 +172,8 @@ class ProxyConnection(driver.ComputeDriver):
 
     def list_instances_detail(self):
         infos = []
-        #for domain_id in self._conn.listDomainsID():
-        #    domain = self._conn.lookupByID(domain_id)
-        #    info = self._map_to_instance_info(domain)
-        #    infos.append(info)
         for domain_name in self._conn.list_domains():
             info = self._map_to_instance_info(domain_name)
-            #info = self._map_to_instance_info(domain['name'])
             infos.append(info)
         return infos
 
@@ -255,12 +222,6 @@ class ProxyConnection(driver.ComputeDriver):
     @exception.wrap_exception
     def snapshot(self, instance, image_id):
         raise exception.APIError("snapshot not supported for baremetal.")
-        """Create snapshot from a running VM instance.
-
-        This command only works with qemu 0.14+, the qemu_img flag is
-        provided so that a locally compiled binary of qemu-img can be used
-        to support this command.
-        """
 
     @exception.wrap_exception
     def reboot(self, instance):
@@ -315,7 +276,7 @@ class ProxyConnection(driver.ComputeDriver):
         rescue_images = {'image_id': FLAGS.baremetal_rescue_image_id,
                          'kernel_id': FLAGS.baremetal_rescue_kernel_id,
                          'ramdisk_id': FLAGS.baremetal_rescue_ramdisk_id}
-        self._create_image(instance, xml, '.rescue', rescue_images,
+        self._create_image(instance, '.rescue', rescue_images,
                            network_info=network_info)
 
         timer = utils.LoopingCall(f=None)
@@ -351,8 +312,6 @@ class ProxyConnection(driver.ComputeDriver):
     def poll_rescued_instances(self, timeout):
         pass
 
-    # NOTE(ilyaalekseyev): Implementation like in multinics
-    # for xenapi(tr3buchet)
     @exception.wrap_exception
     def spawn(self, instance, network_info=None):
         LOG.debug(_("<============= spawn of baremetal =============>")) 
@@ -361,7 +320,7 @@ class ProxyConnection(driver.ComputeDriver):
                               instance['id'],
                               power_state.BUILDING,
                               'launching')
-        self._create_image(instance, xml_dict, network_info=network_info)
+        self._create_image(instance, network_info=network_info)
         LOG.debug(_("instance %s: is running"), instance['name'])
 
         def basepath(fname='', suffix=''):
@@ -392,24 +351,7 @@ class ProxyConnection(driver.ComputeDriver):
         return timer.start(interval=0.5, now=True)
 
     def _flush_xen_console(self, virsh_output):
-        LOG.info(_('virsh said: %r'), virsh_output)
-        virsh_output = virsh_output[0].strip()
-
-        if virsh_output.startswith('/dev/'):
-            LOG.info(_("cool, it's a device"))
-            out, err = utils.execute('sudo', 'dd',
-                                     "if=%s" % virsh_output,
-                                     'iflag=nonblock',
-                                     check_exit_code=False)
-            return out
-        else:
-            return ''
-
-    def _append_to_file(self, data, fpath):
-        LOG.info(_('data: %(data)r, fpath: %(fpath)r') % locals())
-        fp = open(fpath, 'a+')
-        fp.write(data)
-        return fpath
+        raise NotImplementedError()
 
     def _dump_file(self, fpath):
         fp = open(fpath, 'r+')
@@ -479,12 +421,7 @@ class ProxyConnection(driver.ComputeDriver):
         """Grab image and optionally attempt to resize it"""
         images.fetch(image_id, target, user, project)
 
-    def _create_local(self, target, local_gb):
-        """Create a blank image of specified size"""
-        utils.execute('truncate', target, '-s', "%dG" % local_gb)
-        # TODO(vish): should we format disk by default?
-
-    def _create_image(self, inst, baremetal_xml, suffix='', disk_images=None,
+    def _create_image(self, inst, suffix='', disk_images=None,
                         network_info=None):
         if not network_info:
             network_info = netutils.get_network_info(inst)
@@ -515,7 +452,6 @@ class ProxyConnection(driver.ComputeDriver):
         user = manager.AuthManager().get_user(inst['user_id'])
         project = manager.AuthManager().get_project(inst['project_id'])
 
-        # Copying original baremetal images
         bp = basepath(suffix='')
         self.baremetal_nodes.get_image(bp)
 
@@ -558,13 +494,6 @@ class ProxyConnection(driver.ComputeDriver):
                           user=user,
                           project=project,
                           size=size)
-
-        """if inst_type['local_gb']:
-            self._cache_image(fn=self._create_local,
-                              target=basepath('disk.local'),
-                              fname="local_%s" % inst_type['local_gb'],
-                              cow=FLAGS.use_cow_images,
-                              local_gb=inst_type['local_gb'])"""
 
         # For now, we assume that if we're not using a kernel, we're using a
         # partitioned disk image where the target partition is the first
@@ -723,12 +652,9 @@ class ProxyConnection(driver.ComputeDriver):
         return xml_info
 
     def to_xml_dict(self, instance, rescue=False, network_info=None):
-        # TODO(termie): cache?
         LOG.debug(_('instance %s: starting toXML method'), instance['name'])
         xml_info = self._prepare_xml_info(instance, rescue, network_info)
-        xml = str(Template(self.baremetal_xml, searchList=[xml_info]))
         LOG.debug(_('instance %s: finished toXML method'), instance['name'])
-        #return xml
         return xml_info
 
     def get_info(self, instance_name):
@@ -739,8 +665,6 @@ class ProxyConnection(driver.ComputeDriver):
         baremetal error is.
 
         """
-        #virt_dom = self._lookup_by_name(instance_name)
-        #(state, max_mem, mem, num_cpu, cpu_time) = virt_dom.info()
         (state, max_mem, mem, num_cpu, cpu_time) \
                 = self._conn.get_domain_info(instance_name)
         return {'state': state,
@@ -749,7 +673,7 @@ class ProxyConnection(driver.ComputeDriver):
                 'num_cpu': num_cpu,
                 'cpu_time': cpu_time}
 
-    def _create_new_domain(self, xml, persistent=True, launch_flags=0):
+    def _create_new_domain(self, persistent=True, launch_flags=0):
         raise NotImplementedError()
 
     def get_diagnostics(self, instance_name):
@@ -758,21 +682,9 @@ class ProxyConnection(driver.ComputeDriver):
 
     def get_disks(self, instance_name):
         raise NotImplementedError()
-        """
-        Note that this function takes an instance name, not an Instance, so
-        that it can be called by monitor.
-
-        Returns a list of all block devices for this domain.
-        """
 
     def get_interfaces(self, instance_name):
         raise NotImplementedError()
-        """
-        Note that this function takes an instance name, not an Instance, so
-        that it can be called by monitor.
-
-        Returns a list of all network interfaces for this instance.
-        """
 
     def get_vcpu_total(self):
         """Get vcpu number of physical computer.
@@ -783,8 +695,7 @@ class ProxyConnection(driver.ComputeDriver):
 
         # On certain platforms, this will raise a NotImplementedError.
         try:
-            #return multiprocessing.cpu_count()
-            return self.baremetal_nodes.get_hw_info('vcpus')  # 10
+            return self.baremetal_nodes.get_hw_info('vcpus')
         except NotImplementedError:
             LOG.warn(_("Cannot get the number of cpu, because this "
                        "function is not implemented for this platform. "
@@ -797,15 +708,7 @@ class ProxyConnection(driver.ComputeDriver):
         :returns: the total amount of memory(MB).
 
         """
-
-        #if sys.platform.upper() != 'LINUX2':
-        #    return 0
-
-        #meminfo = open('/proc/meminfo').read().split()
-        #idx = meminfo.index('MemTotal:')
-        ## transforming kb to mb.
-        #return int(meminfo[idx + 1]) / 1024
-        return self.baremetal_nodes.get_hw_info('memory_mb')  # 16218
+        return self.baremetal_nodes.get_hw_info('memory_mb')
 
     def get_local_gb_total(self):
         """Get the total hdd size(GB) of physical computer.
@@ -816,10 +719,7 @@ class ProxyConnection(driver.ComputeDriver):
             NOVA-INST-DIR/instances mounts.
 
         """
-
-        #hddinfo = os.statvfs(FLAGS.instances_path)
-        #return hddinfo.f_frsize * hddinfo.f_blocks / 1024 / 1024 / 1024
-        return self.baremetal_nodes.get_hw_info('local_gb')  # 917
+        return self.baremetal_nodes.get_hw_info('local_gb')
 
     def get_vcpu_used(self):
         """ Get vcpu usage number of physical computer.
@@ -829,9 +729,6 @@ class ProxyConnection(driver.ComputeDriver):
         """
 
         total = 0
-        #for dom_id in self._conn.listDomainsID():
-        #    dom = self._conn.lookupByID(dom_id)
-        #    total += len(dom.vcpus()[1])
         for dom_id in self._conn.list_domains():
             total += 1
         return total
@@ -842,17 +739,7 @@ class ProxyConnection(driver.ComputeDriver):
         :returns: the total usage of memory(MB).
 
         """
-
-        #if sys.platform.upper() != 'LINUX2':
-        #    return 0
-
-        #m = open('/proc/meminfo').read().split()
-        #idx1 = m.index('MemFree:')
-        #idx2 = m.index('Buffers:')
-        #idx3 = m.index('Cached:')
-        #avail = (int(m[idx1 + 1]) + int(m[idx2 + 1]) + int(m[idx3 + 1]))/1024
-        #return  self.get_memory_mb_total() - avail
-        return self.baremetal_nodes.get_hw_info('memory_mb_used')  # 476
+        return self.baremetal_nodes.get_hw_info('memory_mb_used')
 
     def get_local_gb_used(self):
         """Get the free hdd size(GB) of physical computer.
@@ -863,11 +750,7 @@ class ProxyConnection(driver.ComputeDriver):
            NOVA-INST-DIR/instances mounts.
 
         """
-
-        #hddinfo = os.statvfs(FLAGS.instances_path)
-        #avail = hddinfo.f_frsize * hddinfo.f_bavail / 1024 / 1024 / 1024
-        #return self.get_local_gb_total() - avail
-        return self.baremetal_nodes.get_hw_info('local_gb_used')  # 1
+        return self.baremetal_nodes.get_hw_info('local_gb_used')
 
     def get_hypervisor_type(self):
         """Get hypervisor type.
@@ -875,8 +758,6 @@ class ProxyConnection(driver.ComputeDriver):
         :returns: hypervisor type (ex. qemu)
 
         """
-
-        #return self._conn.getType()
         return self.baremetal_nodes.get_hw_info('hypervisor_type')
 
     def get_hypervisor_version(self):
@@ -885,20 +766,7 @@ class ProxyConnection(driver.ComputeDriver):
         :returns: hypervisor version (ex. 12003)
 
         """
-
-        # NOTE(justinsb): getVersion moved between baremetal versions
-        # Trying to do be compatible with older versions is a lost cause
-        # But ... we can at least give the user a nice message
-        #method = getattr(self._conn, 'getVersion', None)
-        #if method is None:
-        #    raise exception.Error(_("baremetal version is too old"
-        #                            " (does not support getVersion)"))
-            # NOTE(justinsb): If we wanted to get the version, we could:
-            # method = getattr(baremetal, 'getVersion', None)
-            # NOTE(justinsb): This would then rely on a proper version check
-
-        #return method()
-        return self.baremetal_nodes.get_hw_info('hypervisor_version')  # 1
+        return self.baremetal_nodes.get_hw_info('hypervisor_version')
 
     def get_cpu_info(self):
         """Get cpuinfo information.
@@ -913,22 +781,14 @@ class ProxyConnection(driver.ComputeDriver):
 
     def block_stats(self, instance_name, disk):
         raise NotImplementedError()
-        """
-        Note that this function takes an instance name, not an Instance, so
-        that it can be called by monitor.
-        """
 
     def interface_stats(self, instance_name, interface):
         raise NotImplementedError()
-        """
-        Note that this function takes an instance name, not an Instance, so
-        that it can be called by monitor.
-        """
 
     def get_console_pool_info(self, console_type):
         #TODO(mdragon): console proxy should be implemented for baremetal,
-        #               in case someone wants to use it with kvm or
-        #               such. For now return fake data.
+        #               in case someone wants to use it.
+        #               For now return fake data.
         return  {'address': '127.0.0.1',
                  'username': 'fakeuser',
                  'password': 'fakepassword'}
@@ -967,7 +827,6 @@ class ProxyConnection(driver.ComputeDriver):
                'hypervisor_type': self.get_hypervisor_type(),
                'hypervisor_version': self.get_hypervisor_version(),
                'cpu_info': self.get_cpu_info(),
-               #RLK
                'cpu_arch': FLAGS.cpu_arch,
                'xpu_arch': FLAGS.xpu_arch,
                'xpus': FLAGS.xpus,
@@ -1033,8 +892,8 @@ class HostState(object):
         return self._stats
 
     def update_status(self):
-        """Since under Xenserver, a compute node runs on a given host,
-        we can get host status information using xenapi.
+        """
+        We can get host status information.
         """
         LOG.debug(_("Updating host stats"))
         connection = get_connection(self.read_only)
