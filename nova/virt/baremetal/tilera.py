@@ -308,6 +308,7 @@ class BareMetalNodes(object):
     def get_image(self, bp):
         """
         Gets the bare-metal file system image into the instance path
+        in case of dummy image
         """
         path_fs = "/tftpboot/tilera_fs"
         path_root = bp + "/root"

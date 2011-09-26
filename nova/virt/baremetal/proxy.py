@@ -452,8 +452,8 @@ class ProxyConnection(driver.ComputeDriver):
         user = manager.AuthManager().get_user(inst['user_id'])
         project = manager.AuthManager().get_project(inst['project_id'])
 
-        bp = basepath(suffix='')
-        self.baremetal_nodes.get_image(bp)
+        # bp = basepath(suffix='')
+        # self.baremetal_nodes.get_image(bp)
 
         if not disk_images:
             disk_images = {'image_id': inst['image_ref'],
@@ -487,9 +487,9 @@ class ProxyConnection(driver.ComputeDriver):
             root_fname += "_sm"
 
         self._cache_image(fn=self._fetch_image,
-                          target=basepath('disk'),
+                          target=basepath('root'),
                           fname=root_fname,
-                          cow=FLAGS.use_cow_images,
+                          cow=False,  # FLAGS.use_cow_images,
                           image_id=disk_images['image_id'],
                           user=user,
                           project=project,
