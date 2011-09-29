@@ -177,24 +177,89 @@ class InstanceTypeFilteringTest(test.TestCase):
 
     def test_no_filters(self):
         filters = None
-        expected = ['m1.large', 'm1.medium', 'm1.small', 'm1.tiny',
-                    'm1.xlarge']
+        expected = [
+             'cg1.2xlarge',
+             'cg1.4xlarge',
+             'cg1.large',
+             'cg1.medium',
+             'cg1.small',
+             'cg1.xlarge',
+             'm1.large',
+             'm1.medium',
+             'm1.small',
+             'm1.tiny',
+             'm1.xlarge',
+             'sh1.16xlarge',
+             'sh1.2xlarge',
+             'sh1.32xlarge',
+             'sh1.4xlarge',
+             'sh1.8xlarge',
+             'sh1.large',
+             'sh1.medium',
+             'sh1.small',
+             'sh1.xlarge',
+             'tp64.8x8']
         self.assertFilterResults(filters, expected)
 
     def test_min_memory_mb_filter(self):
         """Exclude tiny instance which is 512 MB"""
         filters = dict(min_memory_mb=513)
-        expected = ['m1.large', 'm1.medium', 'm1.small', 'm1.xlarge']
+        expected = [
+             'cg1.2xlarge',
+             'cg1.4xlarge',
+             'cg1.large',
+             'cg1.medium',
+             'cg1.small',
+             'cg1.xlarge',
+             'm1.large',
+             'm1.medium',
+             'm1.small',
+             'm1.xlarge',
+             'sh1.16xlarge',
+             'sh1.2xlarge',
+             'sh1.32xlarge',
+             'sh1.4xlarge',
+             'sh1.8xlarge',
+             'sh1.large',
+             'sh1.medium',
+             'sh1.small',
+             'sh1.xlarge',
+             'tp64.8x8']
         self.assertFilterResults(filters, expected)
 
     def test_min_local_gb_filter(self):
         """Exclude everything but large and xlarge which have >= 80 GB"""
         filters = dict(min_local_gb=80)
-        expected = ['m1.large', 'm1.xlarge']
+        expected = [
+             'cg1.2xlarge',
+             'cg1.4xlarge',
+             'cg1.large',
+             'cg1.xlarge',
+             'm1.large',
+             'm1.xlarge',
+             'sh1.16xlarge',
+             'sh1.2xlarge',
+             'sh1.32xlarge',
+             'sh1.4xlarge',
+             'sh1.8xlarge',
+             'sh1.large',
+             'sh1.xlarge',
+             'tp64.8x8']
         self.assertFilterResults(filters, expected)
 
     def test_min_memory_mb_AND_local_gb_filter(self):
         """Exclude everything but large and xlarge which have >= 80 GB"""
         filters = dict(min_memory_mb=16384, min_local_gb=80)
-        expected = ['m1.xlarge']
+        expected = [
+             'cg1.2xlarge',
+             'cg1.4xlarge',
+             'cg1.xlarge',
+             'm1.xlarge',
+             'sh1.16xlarge',
+             'sh1.2xlarge',
+             'sh1.32xlarge',
+             'sh1.4xlarge',
+             'sh1.8xlarge',
+             'sh1.xlarge',
+             'tp64.8x8']
         self.assertFilterResults(filters, expected)
