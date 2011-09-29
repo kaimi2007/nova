@@ -618,7 +618,6 @@ def floating_ip_fixed_ip_associate(context, floating_address,
                                    fixed_address, host):
     session = get_session()
     with session.begin():
-        # TODO(devcamcar): How to ensure floating_id belongs to user?
         floating_ip_ref = floating_ip_get_by_address(context,
                                                      floating_address,
                                                      session=session)
@@ -634,7 +633,6 @@ def floating_ip_fixed_ip_associate(context, floating_address,
 def floating_ip_deallocate(context, address):
     session = get_session()
     with session.begin():
-        # TODO(devcamcar): How to ensure floating id belongs to user?
         floating_ip_ref = floating_ip_get_by_address(context,
                                                      address,
                                                      session=session)
@@ -648,7 +646,6 @@ def floating_ip_deallocate(context, address):
 def floating_ip_destroy(context, address):
     session = get_session()
     with session.begin():
-        # TODO(devcamcar): Ensure address belongs to user.
         floating_ip_ref = floating_ip_get_by_address(context,
                                                      address,
                                                      session=session)
@@ -659,8 +656,6 @@ def floating_ip_destroy(context, address):
 def floating_ip_disassociate(context, address):
     session = get_session()
     with session.begin():
-        # TODO(devcamcar): Ensure address belongs to user.
-        #                  Does get_floating_ip_by_address handle this?
         floating_ip_ref = floating_ip_get_by_address(context,
                                                      address,
                                                      session=session)
@@ -729,18 +724,41 @@ def floating_ip_get_all_by_project(context, project_id):
 
 @require_context
 def floating_ip_get_by_address(context, address, session=None):
-    # TODO(devcamcar): Ensure the address belongs to user.
     if not session:
         session = get_session()
 
     result = session.query(models.FloatingIp).\
-                     options(joinedload_all('fixed_ip.network')).\
-                     filter_by(address=address).\
-                     filter_by(deleted=can_read_deleted(context)).\
-                     first()
+                options(joinedload_all('fixed_ip.network')).\
+                filter_by(address=address).\
+                filter_by(deleted=can_read_deleted(context)).\
+                first()
+
     if not result:
         raise exception.FloatingIpNotFoundForAddress(address=address)
+
+    # If the floating IP has a project ID set, check to make sure
+    # the non-admin user has access.
+    if result.project_id and is_user_context(context):
+        authorize_project_context(context, result.project_id)
+
     return result
+
+
+@require_context
+def floating_ip_get_by_fixed_address(context, fixed_address, session=None):
+    if not session:
+        session = get_session()
+
+    fixed_ip = fixed_ip_get_by_address(context, fixed_address, session)
+    fixed_ip_id = fixed_ip['id']
+
+    return session.query(models.FloatingIp).\
+                   options(joinedload_all('fixed_ip.network')).\
+                   filter_by(fixed_ip_id=fixed_ip_id).\
+                   filter_by(deleted=can_read_deleted(context)).\
+                   all()
+
+    # NOTE(tr3buchet) please don't invent an exception here, empty list is fine
 
 
 @require_context
@@ -1343,6 +1361,18 @@ def instance_get_all_by_filters(context, filters):
         query_prefix = query_prefix.\
                             filter(models.Instance.updated_at > changes_since)
 
+    if 'deleted' in filters:
+        # Instances can be soft or hard deleted and the query needs to
+        # include or exclude both
+        if filters.pop('deleted'):
+            deleted = or_(models.Instance.deleted == True,
+                          models.Instance.vm_state == vm_states.SOFT_DELETE)
+            query_prefix = query_prefix.filter(deleted)
+        else:
+            query_prefix = query_prefix.\
+                    filter_by(deleted=False).\
+                    filter(models.Instance.vm_state != vm_states.SOFT_DELETE)
+
     if not context.is_admin:
         # If we're not admin context, add appropriate filter..
         if context.project_id:
@@ -1353,7 +1383,7 @@ def instance_get_all_by_filters(context, filters):
     # Filters for exact matches that we can do along with the SQL query...
     # For other filters that don't match this, we will do regexp matching
     exact_match_filter_names = ['project_id', 'user_id', 'image_ref',
-            'vm_state', 'instance_type_id', 'deleted', 'uuid']
+            'vm_state', 'instance_type_id', 'uuid']
 
     query_filters = [key for key in filters.iterkeys()
             if key in exact_match_filter_names]
@@ -3406,27 +3436,27 @@ def _dict_with_extra_specs(inst_type_query):
 
 
 @require_context
-def instance_type_get_all(context, inactive=False):
+def instance_type_get_all(context, inactive=False, filters=None):
     """
-    Returns a dict describing all instance_types with name as key.
+    Returns all instance types.
     """
+    filters = filters or {}
     session = get_session()
-    if inactive:
-        inst_types = session.query(models.InstanceTypes).\
-                        options(joinedload('extra_specs')).\
-                        order_by("name").\
-                        all()
-    else:
-        inst_types = session.query(models.InstanceTypes).\
-                        options(joinedload('extra_specs')).\
-                        filter_by(deleted=False).\
-                        order_by("name").\
-                        all()
-    inst_dict = {}
-    if inst_types:
-        for i in inst_types:
-            inst_dict[i['name']] = _dict_with_extra_specs(i)
-    return inst_dict
+    partial = session.query(models.InstanceTypes)\
+                     .options(joinedload('extra_specs'))
+    if not inactive:
+        partial = partial.filter_by(deleted=False)
+
+    if 'min_memory_mb' in filters:
+        partial = partial.filter(
+                models.InstanceTypes.memory_mb >= filters['min_memory_mb'])
+    if 'min_local_gb' in filters:
+        partial = partial.filter(
+                models.InstanceTypes.local_gb >= filters['min_local_gb'])
+
+    inst_types = partial.order_by("name").all()
+
+    return [_dict_with_extra_specs(i) for i in inst_types]
 
 
 @require_context

@@ -47,6 +47,7 @@ LOG = logging.getLogger('nova.compute.api')
 
 FLAGS = flags.FLAGS
 flags.DECLARE('vncproxy_topic', 'nova.vnc')
+flags.DECLARE('reclaim_instance_interval', 'nova.compute.manager')
 flags.DEFINE_integer('find_host_timeout', 30,
                      'Timeout after NN seconds when looking for a host.')
 
@@ -74,6 +75,11 @@ def generate_default_hostname(instance):
     return display_name.translate(table, deletions)
 
 
+def generate_default_display_name(instance):
+    """Generate a default display name"""
+    return 'Server %s' % instance['id']
+
+
 def _is_able_to_shutdown(instance, instance_id):
     vm_state = instance["vm_state"]
     task_state = instance["task_state"]
@@ -87,6 +93,19 @@ def _is_able_to_shutdown(instance, instance_id):
     if vm_state not in valid_shutdown_states:
         LOG.warn(_("Instance %(instance_id)s is not in an 'active' state. It "
                    "is currently %(vm_state)s. Shutdown aborted.") % locals())
+        return False
+
+    return True
+
+
+def _is_queued_delete(instance, instance_id):
+    vm_state = instance["vm_state"]
+    task_state = instance["task_state"]
+
+    if vm_state != vm_states.SOFT_DELETE:
+        LOG.warn(_("Instance %(instance_id)s is not in a 'soft delete' "
+                   "state. It is currently %(vm_state)s. Action aborted.") %
+                 locals())
         return False
 
     return True
@@ -163,17 +182,27 @@ class API(base.Base):
 
         self.network_api.validate_networks(context, requested_networks)
 
-    def _check_create_parameters(self, context, instance_type,
-               image_href, kernel_id=None, ramdisk_id=None,
-               min_count=None, max_count=None,
-               display_name='', display_description='',
-               key_name=None, key_data=None, security_group='default',
-               availability_zone=None, user_data=None, metadata=None,
-               injected_files=None, admin_password=None, zone_blob=None,
-               reservation_id=None, access_ip_v4=None, access_ip_v6=None,
-               requested_networks=None, config_drive=None,):
+    def _create_instance(self, context, instance_type,
+               image_href, kernel_id, ramdisk_id,
+               min_count, max_count,
+               display_name, display_description,
+               key_name, key_data, security_group,
+               availability_zone, user_data, metadata,
+               injected_files, admin_password, zone_blob,
+               reservation_id, access_ip_v4, access_ip_v6,
+               requested_networks, config_drive,
+               block_device_mapping,
+               wait_for_instances):
         """Verify all the input parameters regardless of the provisioning
-        strategy being performed."""
+        strategy being performed and schedule the instance(s) for
+        creation."""
+
+        if not metadata:
+            metadata = {}
+        if not display_description:
+            display_description = ''
+        if not security_group:
+            security_group = 'default'
 
         if not instance_type:
             instance_type = instance_types.get_default_instance_type()
@@ -183,6 +212,8 @@ class API(base.Base):
             max_count = min_count
         if not metadata:
             metadata = {}
+
+        block_device_mapping = block_device_mapping or []
 
         num_instances = quota.allowed_instances(context, max_count,
                                                 instance_type)
@@ -205,6 +236,11 @@ class API(base.Base):
         (image_service, image_id) = nova.image.get_image_service(context,
                                                                  image_href)
         image = image_service.show(context, image_id)
+
+        if instance_type['memory_mb'] < int(image.get('min_ram') or 0):
+            raise exception.InstanceTypeMemoryTooSmall()
+        if instance_type['local_gb'] < int(image.get('min_disk') or 0):
+            raise exception.InstanceTypeDiskTooSmall()
 
         config_drive_id = None
         if config_drive and config_drive is not True:
@@ -284,7 +320,28 @@ class API(base.Base):
             'vm_mode': vm_mode,
             'root_device_name': root_device_name}
 
-        return (num_instances, base_options, image)
+        LOG.debug(_("Going to run %s instances...") % num_instances)
+
+        if wait_for_instances:
+            rpc_method = rpc.call
+        else:
+            rpc_method = rpc.cast
+
+        # TODO(comstud): We should use rpc.multicall when we can
+        # retrieve the full instance dictionary from the scheduler.
+        # Otherwise, we could exceed the AMQP max message size limit.
+        # This would require the schedulers' schedule_run_instances
+        # methods to return an iterator vs a list.
+        instances = self._schedule_run_instance(
+                rpc_method,
+                context, base_options,
+                instance_type, zone_blob,
+                availability_zone, injected_files,
+                admin_password, image,
+                num_instances, requested_networks,
+                block_device_mapping, security_group)
+
+        return (instances, reservation_id)
 
     @staticmethod
     def _volume_size(instance_type, virtual_name):
@@ -380,10 +437,8 @@ class API(base.Base):
         including any related table updates (such as security group,
         etc).
 
-        This will called by create() in the majority of situations,
-        but create_all_at_once() style Schedulers may initiate the call.
-        If you are changing this method, be sure to update both
-        call paths.
+        This is called by the scheduler after a location for the
+        instance has been determined.
         """
         elevated = context.elevated()
         if security_group is None:
@@ -420,7 +475,7 @@ class API(base.Base):
         updates = {}
         if (not hasattr(instance, 'display_name') or
                 instance.display_name is None):
-            updates['display_name'] = "Server %s" % instance_id
+            updates['display_name'] = generate_default_display_name(instance)
             instance['display_name'] = updates['display_name']
         updates['hostname'] = self.hostname_factory(instance)
         updates['vm_state'] = vm_states.BUILDING
@@ -429,21 +484,23 @@ class API(base.Base):
         instance = self.update(context, instance_id, **updates)
         return instance
 
-    def _ask_scheduler_to_create_instance(self, context, base_options,
-                                          instance_type, zone_blob,
-                                          availability_zone, injected_files,
-                                          admin_password, image,
-                                          instance_id=None, num_instances=1,
-                                          requested_networks=None):
-        """Send the run_instance request to the schedulers for processing."""
+    def _schedule_run_instance(self,
+            rpc_method,
+            context, base_options,
+            instance_type, zone_blob,
+            availability_zone, injected_files,
+            admin_password, image,
+            num_instances,
+            requested_networks,
+            block_device_mapping,
+            security_group):
+        """Send a run_instance request to the schedulers for processing."""
+
         pid = context.project_id
         uid = context.user_id
-        if instance_id:
-            LOG.debug(_("Casting to scheduler for %(pid)s/%(uid)s's"
-                    " instance %(instance_id)s (single-shot)") % locals())
-        else:
-            LOG.debug(_("Casting to scheduler for %(pid)s/%(uid)s's"
-                    " (all-at-once)") % locals())
+
+        LOG.debug(_("Sending create to scheduler for %(pid)s/%(uid)s's") %
+                locals())
 
         request_spec = {
             'image': image,
@@ -452,82 +509,41 @@ class API(base.Base):
             'filter': None,
             'blob': zone_blob,
             'num_instances': num_instances,
+            'block_device_mapping': block_device_mapping,
+            'security_group': security_group,
         }
 
-        rpc.cast(context,
-                 FLAGS.scheduler_topic,
-                 {"method": "run_instance",
-                  "args": {"topic": FLAGS.compute_topic,
-                           "instance_id": instance_id,
-                           "request_spec": request_spec,
-                           "availability_zone": availability_zone,
-                           "admin_password": admin_password,
-                           "injected_files": injected_files,
-                           "requested_networks": requested_networks}})
-
-    def create_all_at_once(self, context, instance_type,
-               image_href, kernel_id=None, ramdisk_id=None,
-               min_count=None, max_count=None,
-               display_name='', display_description='',
-               key_name=None, key_data=None, security_group='default',
-               availability_zone=None, user_data=None, metadata=None,
-               injected_files=None, admin_password=None, zone_blob=None,
-               reservation_id=None, block_device_mapping=None,
-               access_ip_v4=None, access_ip_v6=None,
-               requested_networks=None, config_drive=None):
-        """Provision the instances by passing the whole request to
-        the Scheduler for execution. Returns a Reservation ID
-        related to the creation of all of these instances."""
-
-        if not metadata:
-            metadata = {}
-
-        num_instances, base_options, image = self._check_create_parameters(
-                               context, instance_type,
-                               image_href, kernel_id, ramdisk_id,
-                               min_count, max_count,
-                               display_name, display_description,
-                               key_name, key_data, security_group,
-                               availability_zone, user_data, metadata,
-                               injected_files, admin_password, zone_blob,
-                               reservation_id, access_ip_v4, access_ip_v6,
-                               requested_networks, config_drive)
-
-        self._ask_scheduler_to_create_instance(context, base_options,
-                                      instance_type, zone_blob,
-                                      availability_zone, injected_files,
-                                      admin_password, image,
-                                      num_instances=num_instances,
-                                      requested_networks=requested_networks)
-
-        return base_options['reservation_id']
+        return rpc_method(context,
+                FLAGS.scheduler_topic,
+                {"method": "run_instance",
+                 "args": {"topic": FLAGS.compute_topic,
+                          "request_spec": request_spec,
+                          "admin_password": admin_password,
+                          "injected_files": injected_files,
+                          "requested_networks": requested_networks}})
 
     def create(self, context, instance_type,
                image_href, kernel_id=None, ramdisk_id=None,
                min_count=None, max_count=None,
-               display_name='', display_description='',
-               key_name=None, key_data=None, security_group='default',
+               display_name=None, display_description=None,
+               key_name=None, key_data=None, security_group=None,
                availability_zone=None, user_data=None, metadata=None,
                injected_files=None, admin_password=None, zone_blob=None,
                reservation_id=None, block_device_mapping=None,
                access_ip_v4=None, access_ip_v6=None,
-               requested_networks=None, config_drive=None,):
+               requested_networks=None, config_drive=None,
+               wait_for_instances=True):
         """
-        Provision the instances by sending off a series of single
-        instance requests to the Schedulers. This is fine for trival
-        Scheduler drivers, but may remove the effectiveness of the
-        more complicated drivers.
+        Provision instances, sending instance information to the
+        scheduler.  The scheduler will determine where the instance(s)
+        go and will handle creating the DB entries.
 
-        NOTE: If you change this method, be sure to change
-        create_all_at_once() at the same time!
-
-        Returns a list of instance dicts.
+        Returns a tuple of (instances, reservation_id) where instances
+        could be 'None' or a list of instance dicts depending on if
+        we waited for information from the scheduler or not.
         """
 
-        if not metadata:
-            metadata = {}
-
-        num_instances, base_options, image = self._check_create_parameters(
+        (instances, reservation_id) = self._create_instance(
                                context, instance_type,
                                image_href, kernel_id, ramdisk_id,
                                min_count, max_count,
@@ -536,27 +552,25 @@ class API(base.Base):
                                availability_zone, user_data, metadata,
                                injected_files, admin_password, zone_blob,
                                reservation_id, access_ip_v4, access_ip_v6,
-                               requested_networks, config_drive)
+                               requested_networks, config_drive,
+                               block_device_mapping,
+                               wait_for_instances)
 
-        block_device_mapping = block_device_mapping or []
-        instances = []
-        LOG.debug(_("Going to run %s instances..."), num_instances)
-        for num in range(num_instances):
-            instance = self.create_db_entry_for_new_instance(context,
-                                    instance_type, image,
-                                    base_options, security_group,
-                                    block_device_mapping, num=num)
-            instances.append(instance)
-            instance_id = instance['id']
+        if instances is None:
+            # wait_for_instances must have been False
+            return (instances, reservation_id)
 
-            self._ask_scheduler_to_create_instance(context, base_options,
-                                        instance_type, zone_blob,
-                                        availability_zone, injected_files,
-                                        admin_password, image,
-                                        instance_id=instance_id,
-                                        requested_networks=requested_networks)
+        inst_ret_list = []
+        for instance in instances:
+            if instance.get('_is_precooked', False):
+                inst_ret_list.append(instance)
+            else:
+                # Scheduler only gives us the 'id'.  We need to pull
+                # in the created instances from the DB
+                instance = self.db.instance_get(context, instance['id'])
+                inst_ret_list.append(dict(instance.iteritems()))
 
-        return [dict(x.iteritems()) for x in instances]
+        return (inst_ret_list, reservation_id)
 
     def has_finished_migration(self, context, instance_uuid):
         """Returns true if an instance has a finished migration."""
@@ -752,26 +766,90 @@ class API(base.Base):
                         {'instance_id': instance_id, 'action_str': action_str})
             raise
 
-    @scheduler_api.reroute_compute("delete")
-    def delete(self, context, instance_id):
+    @scheduler_api.reroute_compute("soft_delete")
+    def soft_delete(self, context, instance_id):
         """Terminate an instance."""
-        LOG.debug(_("Going to try to terminate %s"), instance_id)
-        instance = self._get_instance(context, instance_id, 'terminating')
+        LOG.debug(_("Going to try to soft delete %s"), instance_id)
+        instance = self._get_instance(context, instance_id, 'soft delete')
 
         if not _is_able_to_shutdown(instance, instance_id):
             return
 
+        # NOTE(jerdfelt): The compute daemon handles reclaiming instances
+        # that are in soft delete. If there is no host assigned, there is
+        # no daemon to reclaim, so delete it immediately.
+        host = instance['host']
+        if host:
+            self.update(context,
+                        instance_id,
+                        vm_state=vm_states.SOFT_DELETE,
+                        task_state=task_states.POWERING_OFF,
+                        deleted_at=utils.utcnow())
+
+            self._cast_compute_message('power_off_instance', context,
+                                       instance_id, host)
+        else:
+            LOG.warning(_("No host for instance %s, deleting immediately"),
+                        instance_id)
+            terminate_volumes(self.db, context, instance_id)
+            self.db.instance_destroy(context, instance_id)
+
+    def _delete(self, context, instance):
+        host = instance['host']
+        if host:
+            self.update(context,
+                        instance['id'],
+                        task_state=task_states.DELETING,
+                        progress=0)
+
+            self._cast_compute_message('terminate_instance', context,
+                                       instance['id'], host)
+        else:
+            terminate_volumes(self.db, context, instance['id'])
+            self.db.instance_destroy(context, instance['id'])
+
+    @scheduler_api.reroute_compute("delete")
+    def delete(self, context, instance_id):
+        """Terminate an instance."""
+        LOG.debug(_("Going to try to terminate %s"), instance_id)
+        instance = self._get_instance(context, instance_id, 'delete')
+
+        if not _is_able_to_shutdown(instance, instance_id):
+            return
+
+        self._delete(context, instance)
+
+    @scheduler_api.reroute_compute("restore")
+    def restore(self, context, instance_id):
+        """Restore a previously deleted (but not reclaimed) instance."""
+        instance = self._get_instance(context, instance_id, 'restore')
+
+        if not _is_queued_delete(instance, instance_id):
+            return
+
         self.update(context,
                     instance_id,
-                    task_state=task_states.DELETING)
+                    vm_state=vm_states.ACTIVE,
+                    task_state=None,
+                    deleted_at=None)
 
         host = instance['host']
         if host:
-            self._cast_compute_message('terminate_instance', context,
+            self.update(context,
+                        instance_id,
+                        task_state=task_states.POWERING_ON)
+            self._cast_compute_message('power_on_instance', context,
                     instance_id, host)
-        else:
-            terminate_volumes(self.db, context, instance_id)
-            self.db.instance_destroy(context, instance_id)
+
+    @scheduler_api.reroute_compute("force_delete")
+    def force_delete(self, context, instance_id):
+        """Force delete a previously deleted (but not reclaimed) instance."""
+        instance = self._get_instance(context, instance_id, 'force delete')
+
+        if not _is_queued_delete(instance, instance_id):
+            return
+
+        self._delete(context, instance)
 
     @scheduler_api.reroute_compute("stop")
     def stop(self, context, instance_id):
@@ -786,7 +864,8 @@ class API(base.Base):
                     instance_id,
                     vm_state=vm_states.ACTIVE,
                     task_state=task_states.STOPPING,
-                    terminated_at=utils.utcnow())
+                    terminated_at=utils.utcnow(),
+                    progress=0)
 
         host = instance['host']
         if host:
@@ -910,10 +989,8 @@ class API(base.Base):
         if not recurse_zones:
             return instances
 
-        # Recurse zones.  Need admin context for this.  Send along
-        # the un-modified search options we received..
-        admin_context = context.elevated()
-        children = scheduler_api.call_zone_method(admin_context,
+        # Recurse zones. Send along the un-modified search options we received.
+        children = scheduler_api.call_zone_method(context,
                 "list",
                 errors_to_ignore=[novaclient.exceptions.NotFound],
                 novaclient_collection_name="servers",
@@ -1040,6 +1117,14 @@ class API(base.Base):
 
         """
         instance = self.db.instance_get(context, instance_id)
+        task_state = instance["task_state"]
+
+        if task_state == task_states.IMAGE_BACKUP:
+            raise exception.InstanceBackingUp(instance_id=instance_id)
+
+        if task_state == task_states.IMAGE_SNAPSHOT:
+            raise exception.InstanceSnapshotting(instance_id=instance_id)
+
         properties = {'instance_uuid': instance['uuid'],
                       'user_id': str(context.user_id),
                       'image_state': 'creating',
@@ -1088,7 +1173,8 @@ class API(base.Base):
                     display_name=name,
                     image_ref=image_href,
                     vm_state=vm_states.ACTIVE,
-                    task_state=task_states.REBUILDING)
+                    task_state=task_states.REBUILDING,
+                    progress=0)
 
         rebuild_params = {
             "new_pass": admin_password,

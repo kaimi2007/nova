@@ -86,6 +86,8 @@ class ExtensionControllerTest(test.TestCase):
         self.flags(osapi_extensions_path=ext_path)
         self.ext_list = [
             "Createserverext",
+            "DeferredDelete",
+            "DiskConfig",
             "FlavorExtraSpecs",
             "FlavorExtraData",
             "Floating_ips",
@@ -101,6 +103,7 @@ class ExtensionControllerTest(test.TestCase):
             "VirtualInterfaces",
             "Volumes",
             "VolumeTypes",
+            "Zones",
             ]
         self.ext_list.sort()
 

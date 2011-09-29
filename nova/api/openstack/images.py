@@ -13,7 +13,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import urlparse
 import os.path
 
 from lxml import etree
@@ -41,6 +40,8 @@ SUPPORTED_FILTERS = {
     'changes-since': 'changes-since',
     'server': 'property-instance_ref',
     'type': 'property-image_type',
+    'minRam': 'min_ram',
+    'minDisk': 'min_disk',
 }
 
 
@@ -96,7 +97,11 @@ class Controller(object):
         :param id: Image identifier (integer)
         """
         context = req.environ['nova.context']
-        self._image_service.delete(context, id)
+        try:
+            self._image_service.delete(context, id)
+        except exception.ImageNotFound:
+            explanation = _("Image not found.")
+            raise webob.exc.HTTPNotFound(explanation=explanation)
         return webob.exc.HTTPNoContent()
 
     def get_builder(self, request):
@@ -125,10 +130,15 @@ class ControllerV10(Controller):
 
         context = req.environ["nova.context"]
         props = {'instance_id': instance_id}
-        image = self._compute_service.snapshot(context,
-                                          instance_id,
-                                          image_name,
-                                          extra_properties=props)
+
+        try:
+            image = self._compute_service.snapshot(context,
+                                              instance_id,
+                                              image_name,
+                                              extra_properties=props)
+        except exception.InstanceBusy:
+            msg = _("Server is currently creating an image. Please wait.")
+            raise webob.exc.HTTPConflict(explanation=msg)
 
         return dict(image=self.get_builder(req).build(image, detail=True))
 
@@ -147,8 +157,7 @@ class ControllerV10(Controller):
         filters = self._get_filters(req)
         images = self._image_service.index(context, filters=filters)
         images = common.limited(images, req)
-        builder = self.get_builder(req).build
-        return dict(images=[builder(image, detail=False) for image in images])
+        return self.get_builder(req).build_list(images)
 
     def detail(self, req):
         """Return a detailed index listing of images available to the request.
@@ -181,11 +190,14 @@ class ControllerV11(Controller):
         """
         context = req.environ['nova.context']
         filters = self._get_filters(req)
+        params = req.GET.copy()
         page_params = common.get_pagination_params(req)
+        for key, val in page_params.iteritems():
+            params[key] = val
+
         images = self._image_service.index(context, filters=filters,
                                            **page_params)
-        builder = self.get_builder(req).build
-        return dict(images=[builder(image, detail=False) for image in images])
+        return self.get_builder(req).build_list(images, **params)
 
     def detail(self, req):
         """Return a detailed index listing of images available to the request.
@@ -195,11 +207,14 @@ class ControllerV11(Controller):
         """
         context = req.environ['nova.context']
         filters = self._get_filters(req)
+        params = req.GET.copy()
         page_params = common.get_pagination_params(req)
+        for key, val in page_params.iteritems():
+            params[key] = val
         images = self._image_service.detail(context, filters=filters,
                                             **page_params)
-        builder = self.get_builder(req).build
-        return dict(images=[builder(image, detail=True) for image in images])
+
+        return self.get_builder(req).build_list(images, detail=True, **params)
 
     def create(self, *args, **kwargs):
         raise webob.exc.HTTPMethodNotAllowed()
@@ -239,6 +254,10 @@ class ImageXMLSerializer(wsgi.XMLDictSerializer):
             image_elem.set('status', str(image_dict['status']))
             if 'progress' in image_dict:
                 image_elem.set('progress', str(image_dict['progress']))
+            if 'minRam' in image_dict:
+                image_elem.set('minRam', str(image_dict['minRam']))
+            if 'minDisk' in image_dict:
+                image_elem.set('minDisk', str(image_dict['minDisk']))
             if 'server' in image_dict:
                 server_elem = self._create_server_node(image_dict['server'])
                 image_elem.append(server_elem)
@@ -247,18 +266,23 @@ class ImageXMLSerializer(wsgi.XMLDictSerializer):
                             image_dict.get('metadata', {}))
             image_elem.append(meta_elem)
 
-        for link in image_dict.get('links', []):
-            elem = etree.SubElement(image_elem,
-                                    '{%s}link' % xmlutil.XMLNS_ATOM)
+        self._populate_links(image_elem, image_dict.get('links', []))
+
+    def _populate_links(self, parent, links):
+        for link in links:
+            elem = etree.SubElement(parent, '{%s}link' % xmlutil.XMLNS_ATOM)
             elem.set('rel', link['rel'])
+            if 'type' in link:
+                elem.set('type', link['type'])
             elem.set('href', link['href'])
-        return image_elem
 
     def index(self, images_dict):
         images = etree.Element('images', nsmap=self.NSMAP)
         for image_dict in images_dict['images']:
             image = etree.SubElement(images, 'image')
             self._populate_image(image, image_dict, False)
+
+        self._populate_links(images, images_dict.get('images_links', []))
         return self._to_xml(images)
 
     def detail(self, images_dict):

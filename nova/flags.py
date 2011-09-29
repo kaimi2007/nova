@@ -271,8 +271,10 @@ DEFINE_string('connection_type', 'libvirt', 'libvirt, xenapi, fake, or gpu')
 DEFINE_string('aws_access_key_id', 'admin', 'AWS Access ID')
 DEFINE_string('aws_secret_access_key', 'admin', 'AWS Access Key')
 # NOTE(sirp): my_ip interpolation doesn't work within nested structures
+DEFINE_string('glance_host', _get_my_ip(), 'default glance host')
+DEFINE_integer('glance_port', 9292, 'default glance port')
 DEFINE_list('glance_api_servers',
-            ['%s:9292' % _get_my_ip()],
+            ['%s:%d' % (FLAGS.glance_host, FLAGS.glance_port)],
             'list of glance api servers available to nova (host:port)')
 DEFINE_integer('s3_port', 3333, 's3 port')
 DEFINE_string('s3_host', '$my_ip', 's3 host (for infrastructure)')
@@ -351,12 +353,6 @@ DEFINE_string('logdir', None, 'output to a per-service log file in named '
                               'directory')
 DEFINE_integer('logfile_mode', 0644, 'Default file mode of the logs.')
 DEFINE_string('sqlite_db', 'nova.sqlite', 'file name for sqlite')
-DEFINE_integer('sql_pool_timeout', 30,
-               'seconds to wait for connection from pool before erroring')
-DEFINE_integer('sql_min_pool_size', 10,
-               'minimum number of SQL connections to pool')
-DEFINE_integer('sql_max_pool_size', 10,
-               'maximum number of SQL connections to pool')
 DEFINE_string('sql_connection',
               'sqlite:///$state_path/$sqlite_db',
               'connection string for sql database')
@@ -433,3 +429,10 @@ DEFINE_list('monkey_patch_modules',
         'nova.compute.api:nova.notifier.api.notify_decorator'],
         'Module list representing monkey '
         'patched module and decorator')
+
+DEFINE_bool('allow_resize_to_same_host', False,
+            'Allow destination machine to match source for resize. Useful'
+            ' when testing in environments with only one host machine.')
+
+DEFINE_string('stub_network', False,
+              'Stub network related code')

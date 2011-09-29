@@ -52,6 +52,7 @@ from nova.image import s3
 
 
 FLAGS = flags.FLAGS
+flags.DECLARE('dhcp_domain', 'nova.network.manager')
 flags.DECLARE('service_down_time', 'nova.scheduler.driver')
 
 LOG = logging.getLogger("nova.api.cloud")
@@ -89,6 +90,7 @@ _STATE_DESCRIPTION_MAP = {
     vm_states.BUILDING: 'pending',
     vm_states.REBUILDING: 'pending',
     vm_states.DELETED: 'terminated',
+    vm_states.SOFT_DELETE: 'terminated',
     vm_states.STOPPED: 'stopped',
     vm_states.MIGRATING: 'migrate',
     vm_states.RESIZING: 'resize',
@@ -326,7 +328,7 @@ class CloudController(object):
         instance_ref = db.instance_get(ctxt, instance_ref[0]['id'])
 
         mpi = self._get_mpi_data(ctxt, instance_ref['project_id'])
-        hostname = instance_ref['hostname']
+        hostname = "%s.%s" % (instance_ref['hostname'], FLAGS.dhcp_domain)
         host = instance_ref['host']
         availability_zone = self._get_availability_zone_by_host(ctxt, host)
         floating_ip = db.instance_get_floating_address(ctxt,
@@ -1393,7 +1395,7 @@ class CloudController(object):
         if image_state != 'available':
             raise exception.ApiError(_('Image must be available'))
 
-        instances = self.compute_api.create(context,
+        (instances, resv_id) = self.compute_api.create(context,
             instance_type=instance_types.get_instance_type_by_name(
                 instance_type),
             image_href=self._get_image(context, kwargs['image_id'])['id'],
@@ -1409,9 +1411,11 @@ class CloudController(object):
             metadata=metadata,
             availability_zone=kwargs.get('placement', {}).get(
                                   'AvailabilityZone'),
-            block_device_mapping=kwargs.get('block_device_mapping', {}))
-        return self._format_run_instances(context,
-                reservation_id=instances[0]['reservation_id'])
+            block_device_mapping=kwargs.get('block_device_mapping', {}),
+            # NOTE(comstud): Unfortunately, EC2 requires that the
+            # instance DB entries have been created..
+            wait_for_instances=True)
+        return self._format_run_instances(context, resv_id)
 
     def _do_instance(self, action, context, ec2_id):
         instance_id = ec2utils.ec2_id_to_id(ec2_id)

@@ -20,6 +20,7 @@ import base64
 import datetime
 import json
 import unittest
+import urlparse
 from lxml import etree
 from xml.dom import minidom
 
@@ -32,9 +33,7 @@ from nova import flags
 from nova import test
 from nova import utils
 import nova.api.openstack
-from nova.api.openstack import create_instance_helper
 from nova.api.openstack import servers
-from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 import nova.compute.api
 from nova.compute import instance_types
@@ -42,7 +41,6 @@ from nova.compute import task_states
 from nova.compute import vm_states
 import nova.db.api
 import nova.scheduler.api
-from nova.db.sqlalchemy.models import Instance
 from nova.db.sqlalchemy.models import InstanceMetadata
 import nova.image.fake
 import nova.rpc
@@ -71,18 +69,6 @@ def return_server_by_id(context, id):
 def return_server_by_uuid(context, uuid):
     id = 1
     return stub_instance(id, uuid=uuid)
-
-
-def return_virtual_interface_by_instance(interfaces):
-    def _return_virtual_interface_by_instance(context, instance_id):
-        return interfaces
-    return _return_virtual_interface_by_instance
-
-
-def return_virtual_interface_instance_nonexistant(interfaces):
-    def _return_virtual_interface_by_instance(context, instance_id):
-        raise exception.InstanceNotFound(instance_id=instance_id)
-    return _return_virtual_interface_by_instance
 
 
 def return_server_with_attributes(**kwargs):
@@ -162,7 +148,7 @@ def stub_instance(id, user_id='fake', project_id='fake', private_address=None,
                   vm_state=None, task_state=None,
                   reservation_id="", uuid=FAKE_UUID, image_ref="10",
                   flavor_id="1", interfaces=None, name=None, key_name='',
-                  access_ipv4=None, access_ipv6=None):
+                  access_ipv4=None, access_ipv6=None, progress=0):
     metadata = []
     metadata.append(InstanceMetadata(key='seq', value=id))
 
@@ -222,7 +208,8 @@ def stub_instance(id, user_id='fake', project_id='fake', private_address=None,
         "access_ip_v4": access_ipv4,
         "access_ip_v6": access_ipv6,
         "uuid": uuid,
-        "virtual_interfaces": interfaces}
+        "virtual_interfaces": interfaces,
+        "progress": progress}
 
     instance["fixed_ips"] = {
         "address": private_address,
@@ -258,6 +245,7 @@ class ServersTest(test.TestCase):
         fakes.stub_out_rate_limiting(self.stubs)
         fakes.stub_out_key_pair_funcs(self.stubs)
         fakes.stub_out_image_service(self.stubs)
+        fakes.stub_out_nw_api(self.stubs)
         self.stubs.Set(utils, 'gen_uuid', fake_gen_uuid)
         self.stubs.Set(nova.db.api, 'instance_get_all_by_filters',
                 return_servers)
@@ -322,29 +310,26 @@ class ServersTest(test.TestCase):
 
     def test_get_server_by_id_v1_1(self):
         image_bookmark = "http://localhost/fake/images/10"
-        flavor_ref = "http://localhost/v1.1/fake/flavors/1"
-        flavor_id = "1"
         flavor_bookmark = "http://localhost/fake/flavors/1"
-
         public_ip = '192.168.0.3'
         private_ip = '172.19.0.1'
-        interfaces = [
-            {
-                'network': {'label': 'public'},
-                'fixed_ips': [
-                    {'address': public_ip},
-                ],
-            },
-            {
-                'network': {'label': 'private'},
-                'fixed_ips': [
-                    {'address': private_ip},
-                ],
-            },
-        ]
-        new_return_server = return_server_with_attributes(
-            interfaces=interfaces)
-        self.stubs.Set(nova.db.api, 'instance_get', new_return_server)
+
+        nw_info = [(None, {'label': 'public',
+                           'ips': [{'ip': public_ip}],
+                           'ip6s': []}),
+                   (None, {'label': 'private',
+                           'ips': [{'ip': private_ip}],
+                           'ip6s': []})]
+
+        def get_nw_info(*args, **kwargs):
+            return nw_info
+
+        def get_floats(self, context, fixed_ip):
+            return []
+
+        fakes.stub_out_nw_api_get_instance_nw_info(self.stubs, get_nw_info)
+        fakes.stub_out_nw_api_get_floating_ips_by_fixed_address(self.stubs,
+                                                                get_floats)
 
         req = webob.Request.blank('/v1.1/fake/servers/1')
         res = req.get_response(fakes.wsgi_app())
@@ -421,23 +406,23 @@ class ServersTest(test.TestCase):
         flavor_bookmark = "http://localhost/fake/flavors/1"
         public_ip = '192.168.0.3'
         private_ip = '172.19.0.1'
-        interfaces = [
-            {
-                'network': {'label': 'public'},
-                'fixed_ips': [
-                    {'address': public_ip},
-                ],
-            },
-            {
-                'network': {'label': 'private'},
-                'fixed_ips': [
-                    {'address': private_ip},
-                ],
-            },
-        ]
-        new_return_server = return_server_with_attributes(
-            interfaces=interfaces)
-        self.stubs.Set(nova.db.api, 'instance_get', new_return_server)
+
+        nw_info = [(None, {'label': 'public',
+                           'ips': [{'ip': public_ip}],
+                           'ip6s': []}),
+                   (None, {'label': 'private',
+                           'ips': [{'ip': private_ip}],
+                           'ip6s': []})]
+
+        def get_nw_info(*args, **kwargs):
+            return nw_info
+
+        def get_floats(self, context, fixed_ip):
+            return []
+
+        fakes.stub_out_nw_api_get_instance_nw_info(self.stubs, get_nw_info)
+        fakes.stub_out_nw_api_get_floating_ips_by_fixed_address(self.stubs,
+                                                                get_floats)
 
         req = webob.Request.blank('/v1.1/fake/servers/1')
         req.headers['Accept'] = 'application/xml'
@@ -527,28 +512,28 @@ class ServersTest(test.TestCase):
 
     def test_get_server_with_active_status_by_id_v1_1(self):
         image_bookmark = "http://localhost/fake/images/10"
-        flavor_ref = "http://localhost/v1.1/fake/flavors/1"
-        flavor_id = "1"
         flavor_bookmark = "http://localhost/fake/flavors/1"
         private_ip = "192.168.0.3"
         public_ip = "1.2.3.4"
 
-        interfaces = [
-            {
-                'network': {'label': 'public'},
-                'fixed_ips': [
-                    {'address': public_ip},
-                ],
-            },
-            {
-                'network': {'label': 'private'},
-                'fixed_ips': [
-                    {'address': private_ip},
-                ],
-            },
-        ]
+        nw_info = [(None, {'label': 'public',
+                           'ips': [{'ip': public_ip}],
+                           'ip6s': []}),
+                   (None, {'label': 'private',
+                           'ips': [{'ip': private_ip}],
+                           'ip6s': []})]
+
+        def get_nw_info(*args, **kwargs):
+            return nw_info
+
+        def get_floats(self, context, fixed_ip):
+            return []
+
+        fakes.stub_out_nw_api_get_instance_nw_info(self.stubs, get_nw_info)
+        fakes.stub_out_nw_api_get_floating_ips_by_fixed_address(self.stubs,
+                                                                get_floats)
         new_return_server = return_server_with_attributes(
-            interfaces=interfaces, vm_state=vm_states.ACTIVE)
+            vm_state=vm_states.ACTIVE, progress=100)
         self.stubs.Set(nova.db.api, 'instance_get', new_return_server)
 
         req = webob.Request.blank('/v1.1/fake/servers/1')
@@ -623,29 +608,30 @@ class ServersTest(test.TestCase):
     def test_get_server_with_id_image_ref_by_id_v1_1(self):
         image_ref = "10"
         image_bookmark = "http://localhost/fake/images/10"
-        flavor_ref = "http://localhost/v1.1/fake/flavors/1"
         flavor_id = "1"
         flavor_bookmark = "http://localhost/fake/flavors/1"
         private_ip = "192.168.0.3"
         public_ip = "1.2.3.4"
 
-        interfaces = [
-            {
-                'network': {'label': 'public'},
-                'fixed_ips': [
-                    {'address': public_ip},
-                ],
-            },
-            {
-                'network': {'label': 'private'},
-                'fixed_ips': [
-                    {'address': private_ip},
-                ],
-            },
-        ]
+        nw_info = [(None, {'label': 'public',
+                           'ips': [{'ip': public_ip}],
+                           'ip6s': []}),
+                   (None, {'label': 'private',
+                           'ips': [{'ip': private_ip}],
+                           'ip6s': []})]
+
+        def get_nw_info(*args, **kwargs):
+            return nw_info
+
+        def get_floats(self, context, fixed_ip):
+            return []
+
+        fakes.stub_out_nw_api_get_instance_nw_info(self.stubs, get_nw_info)
+        fakes.stub_out_nw_api_get_floating_ips_by_fixed_address(self.stubs,
+                                                                get_floats)
         new_return_server = return_server_with_attributes(
-            interfaces=interfaces, vm_state=vm_states.ACTIVE,
-            image_ref=image_ref, flavor_id=flavor_id)
+            vm_state=vm_states.ACTIVE,
+            image_ref=image_ref, flavor_id=flavor_id, progress=100)
         self.stubs.Set(nova.db.api, 'instance_get', new_return_server)
 
         req = webob.Request.blank('/v1.1/fake/servers/1')
@@ -735,7 +721,7 @@ class ServersTest(test.TestCase):
         self.assertEquals(ip.getAttribute('addr'), '1.2.3.4')
         (private,) = server.getElementsByTagName('private')
         (ip,) = private.getElementsByTagName('ip')
-        self.assertEquals(ip.getAttribute('addr'),  '192.168.0.3')
+        self.assertEquals(ip.getAttribute('addr'), '192.168.0.3')
 
     def test_get_server_by_id_with_addresses(self):
         private = "192.168.0.3"
@@ -854,26 +840,24 @@ class ServersTest(test.TestCase):
 
     def test_get_server_by_id_with_addresses_v1_1(self):
         self.flags(use_ipv6=True)
-        interfaces = [
-            {
-                'network': {'label': 'network_1'},
-                'fixed_ips': [
-                    {'address': '192.168.0.3'},
-                    {'address': '192.168.0.4'},
-                ],
-            },
-            {
-                'network': {'label': 'network_2'},
-                'fixed_ips': [
-                    {'address': '172.19.0.1'},
-                    {'address': '172.19.0.2'},
-                ],
-                'fixed_ipv6': '2001:4860::12',
-            },
-        ]
-        new_return_server = return_server_with_attributes(
-            interfaces=interfaces)
-        self.stubs.Set(nova.db.api, 'instance_get', new_return_server)
+        nw_info = [(None, {'label': 'network_1',
+                           'ips': [{'ip': '192.168.0.3'},
+                                   {'ip': '192.168.0.4'}],
+                           'ip6s': []}),
+                   (None, {'label': 'network_2',
+                           'ips': [{'ip': '172.19.0.1'},
+                                   {'ip': '172.19.0.2'}],
+                           'ip6s': [{'ip': '2001:4860::12'}]})]
+
+        def get_nw_info(*args, **kwargs):
+            return nw_info
+
+        def get_floats(self, context, fixed_ip):
+            return []
+
+        fakes.stub_out_nw_api_get_instance_nw_info(self.stubs, get_nw_info)
+        fakes.stub_out_nw_api_get_floating_ips_by_fixed_address(self.stubs,
+                                                                get_floats)
 
         req = webob.Request.blank('/v1.1/fake/servers/1')
         res = req.get_response(fakes.wsgi_app())
@@ -894,30 +878,33 @@ class ServersTest(test.TestCase):
             ],
         }
 
-        self.assertEqual(addresses, expected)
+        self.assertTrue('network_1' in addresses)
+        self.assertTrue('network_2' in addresses)
+
+        for network in ('network_1', 'network_2'):
+            for ip in expected[network]:
+                self.assertTrue(ip in addresses[network])
 
     def test_get_server_by_id_with_addresses_v1_1_ipv6_disabled(self):
         self.flags(use_ipv6=False)
-        interfaces = [
-            {
-                'network': {'label': 'network_1'},
-                'fixed_ips': [
-                    {'address': '192.168.0.3'},
-                    {'address': '192.168.0.4'},
-                ],
-            },
-            {
-                'network': {'label': 'network_2'},
-                'fixed_ips': [
-                    {'address': '172.19.0.1'},
-                    {'address': '172.19.0.2'},
-                ],
-                'fixed_ipv6': '2001:4860::12',
-            },
-        ]
-        new_return_server = return_server_with_attributes(
-            interfaces=interfaces)
-        self.stubs.Set(nova.db.api, 'instance_get', new_return_server)
+        nw_info = [(None, {'label': 'network_1',
+                           'ips': [{'ip': '192.168.0.3'},
+                                   {'ip': '192.168.0.4'}],
+                           'ip6s': []}),
+                   (None, {'label': 'network_2',
+                           'ips': [{'ip': '172.19.0.1'},
+                                   {'ip': '172.19.0.2'}],
+                           'ip6s': [{'ip': '2001:4860::12'}]})]
+
+        def get_nw_info(*args, **kwargs):
+            return nw_info
+
+        def get_floats(self, context, fixed_ip):
+            return []
+
+        fakes.stub_out_nw_api_get_instance_nw_info(self.stubs, get_nw_info)
+        fakes.stub_out_nw_api_get_floating_ips_by_fixed_address(self.stubs,
+                                                                get_floats)
 
         req = webob.Request.blank('/v1.1/fake/servers/1')
         res = req.get_response(fakes.wsgi_app())
@@ -937,37 +924,36 @@ class ServersTest(test.TestCase):
             ],
         }
 
-        self.assertEqual(addresses, expected)
+        self.assertTrue('network_1' in addresses)
+        self.assertTrue('network_2' in addresses)
+
+        for network in ('network_1', 'network_2'):
+            for ip in expected[network]:
+                self.assertTrue(ip['version'] != 6)
+                self.assertTrue(ip in addresses[network])
 
     def test_get_server_addresses_v1_1(self):
         self.flags(use_ipv6=True)
-        interfaces = [
-            {
-                'network': {'label': 'network_1'},
-                'fixed_ips': [
-                    {'address': '192.168.0.3'},
-                    {'address': '192.168.0.4'},
-                ],
-            },
-            {
-                'network': {'label': 'network_2'},
-                'fixed_ips': [
-                    {
-                        'address': '172.19.0.1',
-                        'floating_ips': [
-                            {'address': '1.2.3.4'},
-                        ],
-                    },
-                    {'address': '172.19.0.2'},
-                ],
-                'fixed_ipv6': '2001:4860::12',
-            },
-        ]
+        nw_info = [(None, {'label': 'network_1',
+                           'ips': [{'ip': '192.168.0.3'},
+                                   {'ip': '192.168.0.4'}],
+                           'ip6s': []}),
+                   (None, {'label': 'network_2',
+                           'ips': [{'ip': '172.19.0.1'},
+                                   {'ip': '172.19.0.2'}],
+                           'ip6s': [{'ip': '2001:4860::12'}]})]
 
-        _return_vifs = return_virtual_interface_by_instance(interfaces)
-        self.stubs.Set(nova.db.api,
-                       'virtual_interface_get_by_instance',
-                       _return_vifs)
+        def get_nw_info(*args, **kwargs):
+            return nw_info
+
+        def get_floats(self, context, fixed_ip):
+            if fixed_ip == '172.19.0.1':
+                return ['1.2.3.4']
+            return []
+
+        fakes.stub_out_nw_api_get_instance_nw_info(self.stubs, get_nw_info)
+        fakes.stub_out_nw_api_get_floating_ips_by_fixed_address(self.stubs,
+                                                                get_floats)
 
         req = webob.Request.blank('/v1.1/fake/servers/1/ips')
         res = req.get_response(fakes.wsgi_app())
@@ -988,36 +974,36 @@ class ServersTest(test.TestCase):
             },
         }
 
-        self.assertEqual(res_dict, expected)
+        self.assertTrue('addresses' in res_dict)
+        self.assertTrue('network_1' in res_dict['addresses'])
+        self.assertTrue('network_2' in res_dict['addresses'])
+
+        for network in ('network_1', 'network_2'):
+            for ip in expected['addresses'][network]:
+                self.assertTrue(ip in res_dict['addresses'][network])
 
     def test_get_server_addresses_single_network_v1_1(self):
         self.flags(use_ipv6=True)
-        interfaces = [
-            {
-                'network': {'label': 'network_1'},
-                'fixed_ips': [
-                    {'address': '192.168.0.3'},
-                    {'address': '192.168.0.4'},
-                ],
-            },
-            {
-                'network': {'label': 'network_2'},
-                'fixed_ips': [
-                    {
-                        'address': '172.19.0.1',
-                        'floating_ips': [
-                            {'address': '1.2.3.4'},
-                        ],
-                    },
-                    {'address': '172.19.0.2'},
-                ],
-                'fixed_ipv6': '2001:4860::12',
-            },
-        ]
-        _return_vifs = return_virtual_interface_by_instance(interfaces)
-        self.stubs.Set(nova.db.api,
-                       'virtual_interface_get_by_instance',
-                       _return_vifs)
+        nw_info = [(None, {'label': 'network_1',
+                           'ips': [{'ip': '192.168.0.3'},
+                                   {'ip': '192.168.0.4'}],
+                           'ip6s': []}),
+                   (None, {'label': 'network_2',
+                           'ips': [{'ip': '172.19.0.1'},
+                                   {'ip': '172.19.0.2'}],
+                           'ip6s': [{'ip': '2001:4860::12'}]})]
+
+        def get_nw_info(*args, **kwargs):
+            return nw_info
+
+        def get_floats(self, context, fixed_ip):
+            if fixed_ip == '172.19.0.1':
+                return ['1.2.3.4']
+            return []
+
+        fakes.stub_out_nw_api_get_instance_nw_info(self.stubs, get_nw_info)
+        fakes.stub_out_nw_api_get_floating_ips_by_fixed_address(self.stubs,
+                                                                get_floats)
 
         req = webob.Request.blank('/v1.1/fake/servers/1/ips/network_2')
         res = req.get_response(fakes.wsgi_app())
@@ -1025,30 +1011,32 @@ class ServersTest(test.TestCase):
         res_dict = json.loads(res.body)
         expected = {
             'network_2': [
+                {'version': 6, 'addr': '2001:4860::12'},
                 {'version': 4, 'addr': '172.19.0.1'},
                 {'version': 4, 'addr': '1.2.3.4'},
                 {'version': 4, 'addr': '172.19.0.2'},
-                {'version': 6, 'addr': '2001:4860::12'},
             ],
         }
-        self.assertEqual(res_dict, expected)
+
+        self.assertTrue('network_2' in res_dict)
+        self.assertTrue(len(res_dict['network_2']) == 4)
+        for ip in expected['network_2']:
+            self.assertTrue(ip in res_dict['network_2'])
 
     def test_get_server_addresses_nonexistant_network_v1_1(self):
-        _return_vifs = return_virtual_interface_by_instance([])
-        self.stubs.Set(nova.db.api,
-                       'virtual_interface_get_by_instance',
-                       _return_vifs)
-
         req = webob.Request.blank('/v1.1/fake/servers/1/ips/network_0')
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 404)
 
     def test_get_server_addresses_nonexistant_server_v1_1(self):
-        _return_vifs = return_virtual_interface_instance_nonexistant([])
-        self.stubs.Set(nova.db.api,
-                       'virtual_interface_get_by_instance',
-                       _return_vifs)
+        def fake(*args, **kwargs):
+            return []
 
+        def fake_instance_get(*args, **kwargs):
+            raise nova.exception.InstanceNotFound()
+
+        self.stubs.Set(nova.db.api, 'instance_get', fake_instance_get)
+        self.stubs.Set(nova.network.API, 'get_instance_nw_info', fake)
         req = webob.Request.blank('/v1.1/fake/servers/600/ips')
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 404)
@@ -1151,6 +1139,67 @@ class ServersTest(test.TestCase):
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 400)
         self.assertTrue('limit' in res.body)
+
+    def test_get_servers_with_limit_v1_1(self):
+        req = webob.Request.blank('/v1.1/fake/servers?limit=3')
+        res = req.get_response(fakes.wsgi_app())
+        servers = json.loads(res.body)['servers']
+        servers_links = json.loads(res.body)['servers_links']
+        self.assertEqual([s['id'] for s in servers], [0, 1, 2])
+        self.assertEqual(servers_links[0]['rel'], 'next')
+
+        href_parts = urlparse.urlparse(servers_links[0]['href'])
+        self.assertEqual('/v1.1/fake/servers', href_parts.path)
+        params = urlparse.parse_qs(href_parts.query)
+        self.assertDictMatch({'limit': ['3'], 'marker': ['2']}, params)
+
+        req = webob.Request.blank('/v1.1/fake/servers?limit=aaa')
+        res = req.get_response(fakes.wsgi_app())
+        self.assertEqual(res.status_int, 400)
+        self.assertTrue('limit' in res.body)
+
+    def test_get_server_details_with_limit_v1_1(self):
+        req = webob.Request.blank('/v1.1/fake/servers/detail?limit=3')
+        res = req.get_response(fakes.wsgi_app())
+        servers = json.loads(res.body)['servers']
+        servers_links = json.loads(res.body)['servers_links']
+        self.assertEqual([s['id'] for s in servers], [0, 1, 2])
+        self.assertEqual(servers_links[0]['rel'], 'next')
+
+        href_parts = urlparse.urlparse(servers_links[0]['href'])
+        self.assertEqual('/v1.1/fake/servers', href_parts.path)
+        params = urlparse.parse_qs(href_parts.query)
+        self.assertDictMatch({'limit': ['3'], 'marker': ['2']}, params)
+
+        req = webob.Request.blank('/v1.1/fake/servers/detail?limit=aaa')
+        res = req.get_response(fakes.wsgi_app())
+        self.assertEqual(res.status_int, 400)
+        self.assertTrue('limit' in res.body)
+
+    def test_get_server_details_with_limit_and_other_params_v1_1(self):
+        req = webob.Request.blank('/v1.1/fake/servers/detail?limit=3&blah=2:t')
+        res = req.get_response(fakes.wsgi_app())
+        servers = json.loads(res.body)['servers']
+        servers_links = json.loads(res.body)['servers_links']
+        self.assertEqual([s['id'] for s in servers], [0, 1, 2])
+        self.assertEqual(servers_links[0]['rel'], 'next')
+
+        href_parts = urlparse.urlparse(servers_links[0]['href'])
+        self.assertEqual('/v1.1/fake/servers', href_parts.path)
+        params = urlparse.parse_qs(href_parts.query)
+        self.assertDictMatch({'limit': ['3'], 'blah': ['2:t'],
+                              'marker': ['2']}, params)
+
+        req = webob.Request.blank('/v1.1/fake/servers/detail?limit=aaa')
+        res = req.get_response(fakes.wsgi_app())
+        self.assertEqual(res.status_int, 400)
+        self.assertTrue('limit' in res.body)
+
+    def test_get_servers_with_too_big_limit_v1_1(self):
+        req = webob.Request.blank('/v1.1/fake/servers?limit=30')
+        res = req.get_response(fakes.wsgi_app())
+        res_dict = json.loads(res.body)
+        self.assertTrue('servers_links' not in res_dict)
 
     def test_get_servers_with_offset(self):
         req = webob.Request.blank('/v1.0/servers?offset=2')
@@ -1512,10 +1561,15 @@ class ServersTest(test.TestCase):
 
     def _setup_for_create_instance(self):
         """Shared implementation for tests below that create instance"""
+
+        self.instance_cache_num = 0
+        self.instance_cache = {}
+
         def instance_create(context, inst):
             inst_type = instance_types.get_instance_type_by_flavor_id(3)
             image_ref = 'http://localhost/images/2'
-            return {'id': 1,
+            self.instance_cache_num += 1
+            instance = {'id': self.instance_cache_num,
                     'display_name': 'server_test',
                     'uuid': FAKE_UUID,
                     'instance_type': dict(inst_type),
@@ -1524,10 +1578,32 @@ class ServersTest(test.TestCase):
                     'image_ref': image_ref,
                     'user_id': 'fake',
                     'project_id': 'fake',
+                    'reservation_id': inst['reservation_id'],
                     "created_at": datetime.datetime(2010, 10, 10, 12, 0, 0),
                     "updated_at": datetime.datetime(2010, 11, 11, 11, 0, 0),
                     "config_drive": self.config_drive,
+                    "progress": 0
                    }
+            self.instance_cache[instance['id']] = instance
+            return instance
+
+        def instance_get(context, instance_id):
+            """Stub for compute/api create() pulling in instance after
+            scheduling
+            """
+            return self.instance_cache[instance_id]
+
+        def rpc_call_wrapper(context, topic, msg):
+            """Stub out the scheduler creating the instance entry"""
+            if topic == FLAGS.scheduler_topic and \
+                    msg['method'] == 'run_instance':
+                request_spec = msg['args']['request_spec']
+                num_instances = request_spec.get('num_instances', 1)
+                instances = []
+                for x in xrange(num_instances):
+                    instances.append(instance_create(context,
+                        request_spec['instance_properties']))
+                return instances
 
         def server_update(context, id, params):
             return instance_create(context, id)
@@ -1550,18 +1626,20 @@ class ServersTest(test.TestCase):
         self.stubs.Set(nova.db.api, 'project_get_networks',
                        project_get_networks)
         self.stubs.Set(nova.db.api, 'instance_create', instance_create)
+        self.stubs.Set(nova.db.api, 'instance_get', instance_get)
         self.stubs.Set(nova.rpc, 'cast', fake_method)
-        self.stubs.Set(nova.rpc, 'call', fake_method)
+        self.stubs.Set(nova.rpc, 'call', rpc_call_wrapper)
         self.stubs.Set(nova.db.api, 'instance_update', server_update)
         self.stubs.Set(nova.db.api, 'queue_get_for', queue_get_for)
         self.stubs.Set(nova.network.manager.VlanManager, 'allocate_fixed_ip',
             fake_method)
         self.stubs.Set(
-            nova.api.openstack.create_instance_helper.CreateInstanceHelper,
-            "_get_kernel_ramdisk_from_image", kernel_ramdisk_mapping)
+                servers.Controller,
+                "_get_kernel_ramdisk_from_image",
+                kernel_ramdisk_mapping)
         self.stubs.Set(nova.compute.api.API, "_find_host", find_host)
 
-    def _test_create_instance_helper(self):
+    def _test_create_instance(self):
         self._setup_for_create_instance()
 
         body = dict(server=dict(
@@ -1585,7 +1663,7 @@ class ServersTest(test.TestCase):
         self.assertEqual(FAKE_UUID, server['uuid'])
 
     def test_create_instance(self):
-        self._test_create_instance_helper()
+        self._test_create_instance()
 
     def test_create_instance_has_uuid(self):
         """Tests at the db-layer instead of API layer since that's where the
@@ -1597,51 +1675,134 @@ class ServersTest(test.TestCase):
         expected = FAKE_UUID
         self.assertEqual(instance['uuid'], expected)
 
-    def test_create_instance_via_zones(self):
-        """Server generated ReservationID"""
+    def test_create_multiple_instances(self):
+        """Test creating multiple instances but not asking for
+        reservation_id
+        """
         self._setup_for_create_instance()
-        self.flags(allow_admin_api=True)
 
-        body = dict(server=dict(
-            name='server_test', imageId=3, flavorId=2,
-            metadata={'hello': 'world', 'open': 'stack'},
-            personality={}))
-        req = webob.Request.blank('/v1.0/zones/boot')
+        image_href = 'http://localhost/v1.1/123/images/2'
+        flavor_ref = 'http://localhost/123/flavors/3'
+        body = {
+            'server': {
+                'min_count': 2,
+                'name': 'server_test',
+                'imageRef': image_href,
+                'flavorRef': flavor_ref,
+                'metadata': {'hello': 'world',
+                             'open': 'stack'},
+                'personality': []
+            }
+        }
+
+        req = webob.Request.blank('/v1.1/123/servers')
         req.method = 'POST'
         req.body = json.dumps(body)
         req.headers["content-type"] = "application/json"
 
         res = req.get_response(fakes.wsgi_app())
+        self.assertEqual(res.status_int, 202)
+        body = json.loads(res.body)
+        self.assertIn('server', body)
 
-        reservation_id = json.loads(res.body)['reservation_id']
-        self.assertEqual(res.status_int, 200)
+    def test_create_multiple_instances_resv_id_return(self):
+        """Test creating multiple instances with asking for
+        reservation_id
+        """
+        self._setup_for_create_instance()
+
+        image_href = 'http://localhost/v1.1/123/images/2'
+        flavor_ref = 'http://localhost/123/flavors/3'
+        body = {
+            'server': {
+                'min_count': 2,
+                'name': 'server_test',
+                'imageRef': image_href,
+                'flavorRef': flavor_ref,
+                'metadata': {'hello': 'world',
+                             'open': 'stack'},
+                'personality': [],
+                'return_reservation_id': True
+            }
+        }
+
+        req = webob.Request.blank('/v1.1/123/servers')
+        req.method = 'POST'
+        req.body = json.dumps(body)
+        req.headers["content-type"] = "application/json"
+
+        res = req.get_response(fakes.wsgi_app())
+        self.assertEqual(res.status_int, 202)
+        body = json.loads(res.body)
+        reservation_id = body.get('reservation_id')
         self.assertNotEqual(reservation_id, "")
         self.assertNotEqual(reservation_id, None)
         self.assertTrue(len(reservation_id) > 1)
 
-    def test_create_instance_via_zones_with_resid(self):
-        """User supplied ReservationID"""
+    def test_create_instance_with_user_supplied_reservation_id(self):
+        """Non-admin supplied reservation_id should be ignored."""
         self._setup_for_create_instance()
-        self.flags(allow_admin_api=True)
 
-        body = dict(server=dict(
-            name='server_test', imageId=3, flavorId=2,
-            metadata={'hello': 'world', 'open': 'stack'},
-            personality={}, reservation_id='myresid'))
-        req = webob.Request.blank('/v1.0/zones/boot')
+        image_href = 'http://localhost/v1.1/123/images/2'
+        flavor_ref = 'http://localhost/123/flavors/3'
+        body = {
+            'server': {
+                'name': 'server_test',
+                'imageRef': image_href,
+                'flavorRef': flavor_ref,
+                'metadata': {'hello': 'world',
+                             'open': 'stack'},
+                'personality': [],
+                'reservation_id': 'myresid',
+                'return_reservation_id': True
+            }
+        }
+
+        req = webob.Request.blank('/v1.1/123/servers')
         req.method = 'POST'
         req.body = json.dumps(body)
         req.headers["content-type"] = "application/json"
 
         res = req.get_response(fakes.wsgi_app())
+        self.assertEqual(res.status_int, 202)
+        res_body = json.loads(res.body)
+        self.assertIn('reservation_id', res_body)
+        self.assertNotEqual(res_body['reservation_id'], 'myresid')
 
+    def test_create_instance_with_admin_supplied_reservation_id(self):
+        """Admin supplied reservation_id should be honored."""
+        self._setup_for_create_instance()
+
+        image_href = 'http://localhost/v1.1/123/images/2'
+        flavor_ref = 'http://localhost/123/flavors/3'
+        body = {
+            'server': {
+                'name': 'server_test',
+                'imageRef': image_href,
+                'flavorRef': flavor_ref,
+                'metadata': {'hello': 'world',
+                             'open': 'stack'},
+                'personality': [],
+                'reservation_id': 'myresid',
+                'return_reservation_id': True
+            }
+        }
+
+        req = webob.Request.blank('/v1.1/123/servers')
+        req.method = 'POST'
+        req.body = json.dumps(body)
+        req.headers["content-type"] = "application/json"
+
+        context = nova.context.RequestContext('testuser', 'testproject',
+                is_admin=True)
+        res = req.get_response(fakes.wsgi_app(fake_auth_context=context))
+        self.assertEqual(res.status_int, 202)
         reservation_id = json.loads(res.body)['reservation_id']
-        self.assertEqual(res.status_int, 200)
         self.assertEqual(reservation_id, "myresid")
 
     def test_create_instance_no_key_pair(self):
         fakes.stub_out_key_pair_funcs(self.stubs, have_key_pair=False)
-        self._test_create_instance_helper()
+        self._test_create_instance()
 
     def test_create_instance_no_name(self):
         self._setup_for_create_instance()
@@ -1664,6 +1825,23 @@ class ServersTest(test.TestCase):
         req.headers["content-type"] = "application/json"
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 400)
+
+    def test_create_image_conflict_snapshot_v1_1(self):
+        """Attempt to create image when image is already being created."""
+        def snapshot(*args, **kwargs):
+            raise exception.InstanceSnapshotting
+        self.stubs.Set(nova.compute.API, 'snapshot', snapshot)
+
+        req = webob.Request.blank('/v1.1/fakes/servers/1/action')
+        req.method = 'POST'
+        req.body = json.dumps({
+            "createImage": {
+                "name": "test_snapshot",
+            },
+        })
+        req.headers["content-type"] = "application/json"
+        res = req.get_response(fakes.wsgi_app())
+        self.assertEqual(res.status_int, 409)
 
     def test_create_instance_nonstring_name(self):
         self._setup_for_create_instance()
@@ -1952,7 +2130,6 @@ class ServersTest(test.TestCase):
         req.headers["content-type"] = "application/json"
 
         res = req.get_response(fakes.wsgi_app())
-        print res
         self.assertEqual(res.status_int, 202)
         server = json.loads(res.body)['server']
         self.assertEqual(1, server['id'])
@@ -2480,6 +2657,7 @@ class ServersTest(test.TestCase):
         }
         req = webob.Request.blank('/v1.1/fake/servers/detail')
         res = req.get_response(fakes.wsgi_app())
+        print res.body
         res_dict = json.loads(res.body)
 
         for i, s in enumerate(res_dict['servers']):
@@ -2680,6 +2858,10 @@ class ServersTest(test.TestCase):
 
 class TestServerStatus(test.TestCase):
 
+    def setUp(self):
+        super(TestServerStatus, self).setUp()
+        fakes.stub_out_nw_api(self.stubs)
+
     def _get_with_state(self, vm_state, task_state=None):
         new_server = return_server_with_state(vm_state, task_state)
         self.stubs.Set(nova.db.api, 'instance_get', new_server)
@@ -2727,7 +2909,7 @@ class TestServerStatus(test.TestCase):
 class TestServerCreateRequestXMLDeserializerV10(unittest.TestCase):
 
     def setUp(self):
-        self.deserializer = create_instance_helper.ServerXMLDeserializer()
+        self.deserializer = servers.ServerXMLDeserializer()
 
     def test_minimal_request(self):
         serial_request = """
@@ -3013,7 +3195,7 @@ class TestServerCreateRequestXMLDeserializerV11(test.TestCase):
 
     def setUp(self):
         super(TestServerCreateRequestXMLDeserializerV11, self).setUp()
-        self.deserializer = create_instance_helper.ServerXMLDeserializerV11()
+        self.deserializer = servers.ServerXMLDeserializerV11()
 
     def test_minimal_request(self):
         serial_request = """
@@ -3471,6 +3653,7 @@ class TestServerInstanceCreation(test.TestCase):
         super(TestServerInstanceCreation, self).setUp()
         fakes.stub_out_image_service(self.stubs)
         fakes.stub_out_key_pair_funcs(self.stubs)
+        fakes.stub_out_nw_api(self.stubs)
 
     def _setup_mock_compute_api_for_personality(self):
 
@@ -3487,10 +3670,12 @@ class TestServerInstanceCreation(test.TestCase):
                 else:
                     self.injected_files = None
 
-                return [{'id': '1234', 'display_name': 'fakeinstance',
+                resv_id = None
+
+                return ([{'id': '1234', 'display_name': 'fakeinstance',
                          'user_id': 'fake',
                          'project_id': 'fake',
-                         'uuid': FAKE_UUID}]
+                         'uuid': FAKE_UUID}], resv_id)
 
             def set_admin_password(self, *args, **kwargs):
                 pass
@@ -3503,8 +3688,9 @@ class TestServerInstanceCreation(test.TestCase):
         compute_api = MockComputeAPI()
         self.stubs.Set(nova.compute, 'API', make_stub_method(compute_api))
         self.stubs.Set(
-            nova.api.openstack.create_instance_helper.CreateInstanceHelper,
-            '_get_kernel_ramdisk_from_image', make_stub_method((1, 1)))
+                servers.Controller,
+                '_get_kernel_ramdisk_from_image',
+                make_stub_method((1, 1)))
         return compute_api
 
     def _create_personality_request_dict(self, personality_files):
@@ -3765,8 +3951,8 @@ class TestGetKernelRamdiskFromImage(test.TestCase):
     @staticmethod
     def _get_k_r(image_meta):
         """Rebinding function to a shorter name for convenience"""
-        kernel_id, ramdisk_id = create_instance_helper.CreateInstanceHelper. \
-                                _do_get_kernel_ramdisk_from_image(image_meta)
+        kernel_id, ramdisk_id = servers.Controller.\
+                _do_get_kernel_ramdisk_from_image(image_meta)
         return kernel_id, ramdisk_id
 
 
@@ -3819,7 +4005,8 @@ class ServersViewBuilderV11Test(test.TestCase):
             "accessIPv6": "fead::1234",
             #"address": ,
             #"floating_ips": [{"address":ip} for ip in public_addresses]}
-            "uuid": "deadbeef-feed-edee-beef-d0ea7beefedd"}
+            "uuid": "deadbeef-feed-edee-beef-d0ea7beefedd",
+            "progress": 0}
 
         return instance
 
@@ -3858,7 +4045,7 @@ class ServersViewBuilderV11Test(test.TestCase):
             }
         }
 
-        output = self.view_builder.build(self.instance, False)
+        output = self.view_builder.build(self.instance, {}, False)
         self.assertDictMatch(output, expected_server)
 
     def test_build_server_with_project_id(self):
@@ -3881,7 +4068,7 @@ class ServersViewBuilderV11Test(test.TestCase):
         }
 
         view_builder = self._get_view_builder(project_id='fake')
-        output = view_builder.build(self.instance, False)
+        output = view_builder.build(self.instance, {}, False)
         self.assertDictMatch(output, expected_server)
 
     def test_build_server_detail(self):
@@ -3936,12 +4123,13 @@ class ServersViewBuilderV11Test(test.TestCase):
             }
         }
 
-        output = self.view_builder.build(self.instance, True)
+        output = self.view_builder.build(self.instance, {}, True)
         self.assertDictMatch(output, expected_server)
 
     def test_build_server_detail_active_status(self):
         #set the power state of the instance to running
         self.instance['vm_state'] = vm_states.ACTIVE
+        self.instance['progress'] = 100
         image_bookmark = "http://localhost/images/5"
         flavor_bookmark = "http://localhost/flavors/1"
         expected_server = {
@@ -3993,7 +4181,7 @@ class ServersViewBuilderV11Test(test.TestCase):
             }
         }
 
-        output = self.view_builder.build(self.instance, True)
+        output = self.view_builder.build(self.instance, {}, True)
         self.assertDictMatch(output, expected_server)
 
     def test_build_server_detail_with_accessipv4(self):
@@ -4051,7 +4239,7 @@ class ServersViewBuilderV11Test(test.TestCase):
             }
         }
 
-        output = self.view_builder.build(self.instance, True)
+        output = self.view_builder.build(self.instance, {}, True)
         self.assertDictMatch(output, expected_server)
 
     def test_build_server_detail_with_accessipv6(self):
@@ -4109,7 +4297,7 @@ class ServersViewBuilderV11Test(test.TestCase):
             }
         }
 
-        output = self.view_builder.build(self.instance, True)
+        output = self.view_builder.build(self.instance, {}, True)
         self.assertDictMatch(output, expected_server)
 
     def test_build_server_detail_with_metadata(self):
@@ -4173,7 +4361,7 @@ class ServersViewBuilderV11Test(test.TestCase):
             }
         }
 
-        output = self.view_builder.build(self.instance, True)
+        output = self.view_builder.build(self.instance, {}, True)
         self.assertDictMatch(output, expected_server)
 
 
@@ -4181,6 +4369,7 @@ class ServerXMLSerializationTest(test.TestCase):
 
     TIMESTAMP = "2010-10-11T10:30:22Z"
     SERVER_HREF = 'http://localhost/v1.1/servers/123'
+    SERVER_NEXT = 'http://localhost/v1.1/servers?limit=%s&marker=%s'
     SERVER_BOOKMARK = 'http://localhost/servers/123'
     IMAGE_BOOKMARK = 'http://localhost/images/5'
     FLAVOR_BOOKMARK = 'http://localhost/flavors/1'
@@ -4598,6 +4787,74 @@ class ServerXMLSerializationTest(test.TestCase):
             for i, link in enumerate(server_dict['links']):
                 for key, value in link.items():
                     self.assertEqual(link_nodes[i].get(key), value)
+
+    def test_index_with_servers_links(self):
+        serializer = servers.ServerXMLSerializer()
+
+        expected_server_href = 'http://localhost/v1.1/servers/1'
+        expected_server_next = self.SERVER_NEXT % (2, 2)
+        expected_server_bookmark = 'http://localhost/servers/1'
+        expected_server_href_2 = 'http://localhost/v1.1/servers/2'
+        expected_server_bookmark_2 = 'http://localhost/servers/2'
+        fixture = {"servers": [
+            {
+                "id": 1,
+                "name": "test_server",
+                'links': [
+                    {
+                        'href': expected_server_href,
+                        'rel': 'self',
+                    },
+                    {
+                        'href': expected_server_bookmark,
+                        'rel': 'bookmark',
+                    },
+                ],
+            },
+            {
+                "id": 2,
+                "name": "test_server_2",
+                'links': [
+                    {
+                        'href': expected_server_href_2,
+                        'rel': 'self',
+                    },
+                    {
+                        'href': expected_server_bookmark_2,
+                        'rel': 'bookmark',
+                    },
+                ],
+            },
+        ],
+        "servers_links": [
+            {
+                'rel': 'next',
+                'href': expected_server_next,
+            },
+        ]}
+
+        output = serializer.serialize(fixture, 'index')
+        print output
+        root = etree.XML(output)
+        xmlutil.validate_schema(root, 'servers_index')
+        server_elems = root.findall('{0}server'.format(NS))
+        self.assertEqual(len(server_elems), 2)
+        for i, server_elem in enumerate(server_elems):
+            server_dict = fixture['servers'][i]
+            for key in ['name', 'id']:
+                self.assertEqual(server_elem.get(key), str(server_dict[key]))
+
+            link_nodes = server_elem.findall('{0}link'.format(ATOMNS))
+            self.assertEqual(len(link_nodes), 2)
+            for i, link in enumerate(server_dict['links']):
+                for key, value in link.items():
+                    self.assertEqual(link_nodes[i].get(key), value)
+
+        # Check servers_links
+        servers_links = root.findall('{0}link'.format(ATOMNS))
+        for i, link in enumerate(fixture['servers_links']):
+            for key, value in link.items():
+                self.assertEqual(servers_links[i].get(key), value)
 
     def test_detail(self):
         serializer = servers.ServerXMLSerializer()

@@ -20,12 +20,15 @@
 Tests For Compute
 """
 
+from copy import copy
+
 from nova import compute
 from nova import context
 from nova import db
 from nova import exception
 from nova import flags
 from nova import log as logging
+from nova.scheduler import driver as scheduler_driver
 from nova import rpc
 from nova import test
 from nova import utils
@@ -33,6 +36,7 @@ from nova import utils
 from nova.compute import instance_types
 from nova.compute import manager as compute_manager
 from nova.compute import power_state
+from nova.compute import task_states
 from nova.compute import vm_states
 from nova.db.sqlalchemy import models
 from nova.image import fake as fake_image
@@ -52,6 +56,38 @@ class FakeTime(object):
 
     def sleep(self, t):
         self.counter += t
+
+
+orig_rpc_call = rpc.call
+orig_rpc_cast = rpc.cast
+
+
+def rpc_call_wrapper(context, topic, msg, do_cast=True):
+    """Stub out the scheduler creating the instance entry"""
+    if topic == FLAGS.scheduler_topic and \
+            msg['method'] == 'run_instance':
+        request_spec = msg['args']['request_spec']
+        scheduler = scheduler_driver.Scheduler
+        num_instances = request_spec.get('num_instances', 1)
+        instances = []
+        for x in xrange(num_instances):
+            instance = scheduler().create_instance_db_entry(
+                    context, request_spec)
+            encoded = scheduler_driver.encode_instance(instance)
+            instances.append(encoded)
+        return instances
+    else:
+        if do_cast:
+            orig_rpc_cast(context, topic, msg)
+        else:
+            return orig_rpc_call(context, topic, msg)
+
+
+def rpc_cast_wrapper(context, topic, msg):
+    """Stub out the scheduler creating the instance entry in
+    the reservation_id case.
+    """
+    rpc_call_wrapper(context, topic, msg, do_cast=True)
 
 
 def nop_report_driver_status(self):
@@ -75,9 +111,12 @@ class ComputeTestCase(test.TestCase):
         test_notifier.NOTIFICATIONS = []
 
         def fake_show(meh, context, id):
-            return {'id': 1, 'properties': {'kernel_id': 1, 'ramdisk_id': 1}}
+            return {'id': 1, 'min_disk': None, 'min_ram': None,
+                    'properties': {'kernel_id': 1, 'ramdisk_id': 1}}
 
         self.stubs.Set(fake_image._FakeImageService, 'show', fake_show)
+        self.stubs.Set(rpc, 'call', rpc_call_wrapper)
+        self.stubs.Set(rpc, 'cast', rpc_cast_wrapper)
 
     def _create_instance(self, params=None):
         """Create a test instance"""
@@ -140,7 +179,7 @@ class ComputeTestCase(test.TestCase):
         """Verify that an instance cannot be created without a display_name."""
         cases = [dict(), dict(display_name=None)]
         for instance in cases:
-            ref = self.compute_api.create(self.context,
+            (ref, resv_id) = self.compute_api.create(self.context,
                 instance_types.get_default_instance_type(), None, **instance)
             try:
                 self.assertNotEqual(ref[0]['display_name'], None)
@@ -150,7 +189,7 @@ class ComputeTestCase(test.TestCase):
     def test_create_instance_associates_security_groups(self):
         """Make sure create associates security groups"""
         group = self._create_group()
-        ref = self.compute_api.create(
+        (ref, resv_id) = self.compute_api.create(
                 self.context,
                 instance_type=instance_types.get_default_instance_type(),
                 image_href=None,
@@ -210,7 +249,7 @@ class ComputeTestCase(test.TestCase):
                  ('<}\x1fh\x10e\x08l\x02l\x05o\x12!{>', 'hello'),
                  ('hello_server', 'hello-server')]
         for display_name, hostname in cases:
-            ref = self.compute_api.create(self.context,
+            (ref, resv_id) = self.compute_api.create(self.context,
                 instance_types.get_default_instance_type(), None,
                 display_name=display_name)
             try:
@@ -222,7 +261,7 @@ class ComputeTestCase(test.TestCase):
         """Make sure destroying disassociates security groups"""
         group = self._create_group()
 
-        ref = self.compute_api.create(
+        (ref, resv_id) = self.compute_api.create(
                 self.context,
                 instance_type=instance_types.get_default_instance_type(),
                 image_href=None,
@@ -238,7 +277,7 @@ class ComputeTestCase(test.TestCase):
         """Make sure destroying security groups disassociates instances"""
         group = self._create_group()
 
-        ref = self.compute_api.create(
+        (ref, resv_id) = self.compute_api.create(
                 self.context,
                 instance_type=instance_types.get_default_instance_type(),
                 image_href=None,
@@ -363,6 +402,36 @@ class ComputeTestCase(test.TestCase):
         self.compute.run_instance(self.context, instance_id)
         self.compute.snapshot_instance(self.context, instance_id, name)
         self.compute.terminate_instance(self.context, instance_id)
+
+    def test_snapshot_conflict_backup(self):
+        """Can't backup an instance which is already being backed up."""
+        instance_id = self._create_instance()
+        instance_values = {'task_state': task_states.IMAGE_BACKUP}
+        db.instance_update(self.context, instance_id, instance_values)
+
+        self.assertRaises(exception.InstanceBackingUp,
+                          self.compute_api.backup,
+                          self.context,
+                          instance_id,
+                          None,
+                          None,
+                          None)
+
+        db.instance_destroy(self.context, instance_id)
+
+    def test_snapshot_conflict_snapshot(self):
+        """Can't snapshot an instance which is already being snapshotted."""
+        instance_id = self._create_instance()
+        instance_values = {'task_state': task_states.IMAGE_SNAPSHOT}
+        db.instance_update(self.context, instance_id, instance_values)
+
+        self.assertRaises(exception.InstanceSnapshotting,
+                          self.compute_api.snapshot,
+                          self.context,
+                          instance_id,
+                          None)
+
+        db.instance_destroy(self.context, instance_id)
 
     def test_console_output(self):
         """Make sure we can get console output from instance"""
@@ -585,7 +654,7 @@ class ComputeTestCase(test.TestCase):
             pass
 
         self.stubs.Set(self.compute.driver, 'finish_migration', fake)
-        self.stubs.Set(self.compute.driver, 'revert_migration', fake)
+        self.stubs.Set(self.compute.driver, 'finish_revert_migration', fake)
         self.stubs.Set(self.compute.network_api, 'get_instance_nw_info', fake)
 
         self.compute.run_instance(self.context, instance_id)
@@ -1395,3 +1464,168 @@ class ComputeTestCase(test.TestCase):
         self.assertEqual(self.compute_api._volume_size(inst_type,
                                                        'swap'),
                          swap_size)
+
+    def test_reservation_id_one_instance(self):
+        """Verify building an instance has a reservation_id that
+        matches return value from create"""
+        (refs, resv_id) = self.compute_api.create(self.context,
+                instance_types.get_default_instance_type(), None)
+        try:
+            self.assertEqual(len(refs), 1)
+            self.assertEqual(refs[0]['reservation_id'], resv_id)
+        finally:
+            db.instance_destroy(self.context, refs[0]['id'])
+
+    def test_reservation_ids_two_instances(self):
+        """Verify building 2 instances at once results in a
+        reservation_id being returned equal to reservation id set
+        in both instances
+        """
+        (refs, resv_id) = self.compute_api.create(self.context,
+                instance_types.get_default_instance_type(), None,
+                min_count=2, max_count=2)
+        try:
+            self.assertEqual(len(refs), 2)
+            self.assertNotEqual(resv_id, None)
+        finally:
+            for instance in refs:
+                self.assertEqual(instance['reservation_id'], resv_id)
+                db.instance_destroy(self.context, instance['id'])
+
+    def test_reservation_ids_two_instances_no_wait(self):
+        """Verify building 2 instances at once without waiting for
+        instance IDs results in a reservation_id being returned equal
+        to reservation id set in both instances
+        """
+        (refs, resv_id) = self.compute_api.create(self.context,
+                instance_types.get_default_instance_type(), None,
+                min_count=2, max_count=2, wait_for_instances=False)
+        try:
+            self.assertEqual(refs, None)
+            self.assertNotEqual(resv_id, None)
+        finally:
+            instances = self.compute_api.get_all(self.context,
+                    search_opts={'reservation_id': resv_id})
+            self.assertEqual(len(instances), 2)
+            for instance in instances:
+                self.assertEqual(instance['reservation_id'], resv_id)
+                db.instance_destroy(self.context, instance['id'])
+
+    def test_create_with_specified_reservation_id(self):
+        """Verify building instances with a specified
+        reservation_id results in the correct reservation_id
+        being set
+        """
+
+        # We need admin context to be able to specify our own
+        # reservation_ids.
+        context = self.context.elevated()
+        # 1 instance
+        (refs, resv_id) = self.compute_api.create(context,
+                instance_types.get_default_instance_type(), None,
+                min_count=1, max_count=1, reservation_id='meow')
+        try:
+            self.assertEqual(len(refs), 1)
+            self.assertEqual(resv_id, 'meow')
+        finally:
+            self.assertEqual(refs[0]['reservation_id'], resv_id)
+            db.instance_destroy(self.context, refs[0]['id'])
+
+        # 2 instances
+        (refs, resv_id) = self.compute_api.create(context,
+                instance_types.get_default_instance_type(), None,
+                min_count=2, max_count=2, reservation_id='woof')
+        try:
+            self.assertEqual(len(refs), 2)
+            self.assertEqual(resv_id, 'woof')
+        finally:
+            for instance in refs:
+                self.assertEqual(instance['reservation_id'], resv_id)
+                db.instance_destroy(self.context, instance['id'])
+
+
+class ComputeTestMinRamMinDisk(test.TestCase):
+    def setUp(self):
+        super(ComputeTestMinRamMinDisk, self).setUp()
+        self.compute = utils.import_object(FLAGS.compute_manager)
+        self.compute_api = compute.API()
+        self.context = context.RequestContext('fake', 'fake')
+        self.stubs.Set(rpc, 'call', rpc_call_wrapper)
+        self.stubs.Set(rpc, 'cast', rpc_cast_wrapper)
+        self.fake_image = {
+            'id': 1, 'properties': {'kernel_id': 1, 'ramdisk_id': 1}}
+
+    def test_create_with_too_little_ram(self):
+        """Test an instance type with too little memory"""
+
+        inst_type = instance_types.get_default_instance_type()
+        inst_type['memory_mb'] = 1
+
+        def fake_show(*args):
+            img = copy(self.fake_image)
+            img['min_ram'] = 2
+            return img
+        self.stubs.Set(fake_image._FakeImageService, 'show', fake_show)
+
+        self.assertRaises(exception.InstanceTypeMemoryTooSmall,
+            self.compute_api.create, self.context, inst_type, None)
+
+        # Now increase the inst_type memory and make sure all is fine.
+        inst_type['memory_mb'] = 2
+        (refs, resv_id) = self.compute_api.create(self.context,
+                inst_type, None)
+        db.instance_destroy(self.context, refs[0]['id'])
+
+    def test_create_with_too_little_disk(self):
+        """Test an instance type with too little disk space"""
+
+        inst_type = instance_types.get_default_instance_type()
+        inst_type['local_gb'] = 1
+
+        def fake_show(*args):
+            img = copy(self.fake_image)
+            img['min_disk'] = 2
+            return img
+        self.stubs.Set(fake_image._FakeImageService, 'show', fake_show)
+
+        self.assertRaises(exception.InstanceTypeDiskTooSmall,
+            self.compute_api.create, self.context, inst_type, None)
+
+        # Now increase the inst_type disk space and make sure all is fine.
+        inst_type['local_gb'] = 2
+        (refs, resv_id) = self.compute_api.create(self.context,
+                inst_type, None)
+        db.instance_destroy(self.context, refs[0]['id'])
+
+    def test_create_just_enough_ram_and_disk(self):
+        """Test an instance type with just enough ram and disk space"""
+
+        inst_type = instance_types.get_default_instance_type()
+        inst_type['local_gb'] = 2
+        inst_type['memory_mb'] = 2
+
+        def fake_show(*args):
+            img = copy(self.fake_image)
+            img['min_ram'] = 2
+            img['min_disk'] = 2
+            return img
+        self.stubs.Set(fake_image._FakeImageService, 'show', fake_show)
+
+        (refs, resv_id) = self.compute_api.create(self.context,
+                inst_type, None)
+        db.instance_destroy(self.context, refs[0]['id'])
+
+    def test_create_with_no_ram_and_disk_reqs(self):
+        """Test an instance type with no min_ram or min_disk"""
+
+        inst_type = instance_types.get_default_instance_type()
+        inst_type['local_gb'] = 1
+        inst_type['memory_mb'] = 1
+
+        def fake_show(*args):
+            return copy(self.fake_image)
+        self.stubs.Set(fake_image._FakeImageService, 'show', fake_show)
+
+        (refs, resv_id) = self.compute_api.create(self.context,
+                inst_type, None)
+        db.instance_destroy(self.context, refs[0]['id'])

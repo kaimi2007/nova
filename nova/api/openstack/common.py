@@ -78,6 +78,9 @@ _STATE_MAP = {
     vm_states.DELETED: {
         'default': 'DELETED',
     },
+    vm_states.SOFT_DELETE: {
+        'default': 'DELETED',
+    },
 }
 
 
@@ -257,6 +260,16 @@ def check_img_metadata_quota_limit(context, metadata):
         expl = _("Image metadata limit exceeded")
         raise webob.exc.HTTPRequestEntityTooLarge(explanation=expl,
                                                 headers={'Retry-After': 0})
+
+
+def dict_to_query_str(params):
+    # TODO: we should just use urllib.urlencode instead of this
+    # But currently we don't work with urlencoded url's
+    param_str = ""
+    for key, val in params.iteritems():
+        param_str = param_str + '='.join([str(key), str(val)]) + '&'
+
+    return param_str.rstrip('&')
 
 
 class MetadataXMLDeserializer(wsgi.XMLDeserializer):

@@ -9,7 +9,7 @@ from nova import context
 from nova import utils
 from nova import exception
 from nova import flags
-from nova.api.openstack import create_instance_helper
+from nova.api.openstack import servers
 from nova.compute import vm_states
 from nova.compute import instance_types
 import nova.db.api
@@ -91,6 +91,7 @@ def stub_instance(id, metadata=None, image_ref="10", flavor_id="1",
         "access_ip_v6": "",
         "uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
         "virtual_interfaces": [],
+        "progress": 0,
     }
 
     instance["fixed_ips"] = {
@@ -473,6 +474,7 @@ class ServerActionsTestV11(test.TestCase):
         self.stubs.Set(nova.db.api, 'instance_update', instance_update)
 
         fakes.stub_out_glance(self.stubs)
+        fakes.stub_out_nw_api(self.stubs)
         fakes.stub_out_compute_api_snapshot(self.stubs)
         service_class = 'nova.image.glance.GlanceImageService'
         self.service = utils.import_object(service_class)
@@ -969,7 +971,7 @@ class ServerActionsTestV11(test.TestCase):
 class TestServerActionXMLDeserializerV11(test.TestCase):
 
     def setUp(self):
-        self.deserializer = create_instance_helper.ServerXMLDeserializerV11()
+        self.deserializer = servers.ServerXMLDeserializerV11()
 
     def tearDown(self):
         pass

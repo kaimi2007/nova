@@ -1,4 +1,4 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
+# vim: tabstop=5 shiftwidth=4 softtabstop=4
 
 # Copyright 2010-2011 OpenStack LLC.
 # All Rights Reserved.
@@ -18,15 +18,14 @@
 import base64
 import datetime
 import json
-import unittest
 from xml.dom import minidom
 
-import stubout
 import webob
 
 from nova import db
 from nova import exception
 from nova import flags
+from nova import rpc
 from nova import test
 import nova.api.openstack
 from nova.tests.api.openstack import fakes
@@ -54,6 +53,7 @@ INSTANCE = {
              "created_at": datetime.datetime(2010, 10, 10, 12, 0, 0),
              "updated_at": datetime.datetime(2010, 11, 11, 11, 0, 0),
              "security_groups": [{"id": 1, "name": "test"}],
+             "progress": 0,
              "image_ref": 'http://foo.com/123',
              "instance_type": {"flavorid": '124'},
         }
@@ -90,6 +90,11 @@ class CreateserverextTest(test.TestCase):
     def tearDown(self):
         super(CreateserverextTest, self).tearDown()
 
+    def _make_stub_method(self, canned_return):
+        def stub_method(*args, **kwargs):
+            return canned_return
+        return stub_method
+
     def _setup_mock_compute_api(self):
 
         class MockComputeAPI(nova.compute.API):
@@ -114,27 +119,30 @@ class CreateserverextTest(test.TestCase):
                 if 'user_data' in kwargs:
                     self.user_data = kwargs['user_data']
 
-                return [{'id': '1234', 'display_name': 'fakeinstance',
+                resv_id = None
+
+                return ([{'id': '1234', 'display_name': 'fakeinstance',
                          'uuid': FAKE_UUID,
                          'user_id': 'fake',
                          'project_id': 'fake',
                          'created_at': "",
-                         'updated_at': ""}]
+                         'updated_at': "",
+                         'progress': 0}], resv_id)
 
             def set_admin_password(self, *args, **kwargs):
                 pass
 
-        def make_stub_method(canned_return):
-            def stub_method(*args, **kwargs):
-                return canned_return
-            return stub_method
-
         compute_api = MockComputeAPI()
-        self.stubs.Set(nova.compute, 'API', make_stub_method(compute_api))
+        self.stubs.Set(nova.compute, 'API',
+                       self._make_stub_method(compute_api))
         self.stubs.Set(
-            nova.api.openstack.create_instance_helper.CreateInstanceHelper,
-            '_get_kernel_ramdisk_from_image', make_stub_method((1, 1)))
+            nova.api.openstack.servers.Controller,
+            '_get_kernel_ramdisk_from_image',
+            self._make_stub_method((1, 1)))
         return compute_api
+
+    def _setup_mock_network_api(self):
+        fakes.stub_out_nw_api(self.stubs)
 
     def _create_security_group_request_dict(self, security_groups):
         server = {}
@@ -177,6 +185,7 @@ class CreateserverextTest(test.TestCase):
 
     def _run_create_instance_with_mock_compute_api(self, request):
         compute_api = self._setup_mock_compute_api()
+        self._setup_mock_network_api()
         response = request.get_response(fakes.wsgi_app())
         return compute_api, response
 
@@ -389,13 +398,16 @@ class CreateserverextTest(test.TestCase):
                        return_security_group_get_by_name)
         self.stubs.Set(nova.db.api, 'instance_add_security_group',
                        return_instance_add_security_group)
+        self._setup_mock_network_api()
         body_dict = self._create_security_group_request_dict(security_groups)
         request = self._get_create_request_json(body_dict)
-        response = request.get_response(fakes.wsgi_app())
+        compute_api, response = \
+            self._run_create_instance_with_mock_compute_api(request)
         self.assertEquals(response.status_int, 202)
 
     def test_get_server_by_id_verify_security_groups_json(self):
         self.stubs.Set(nova.db.api, 'instance_get', return_server_by_id)
+        self._setup_mock_network_api()
         req = webob.Request.blank('/v1.1/123/os-create-server-ext/1')
         req.headers['Content-Type'] = 'application/json'
         response = req.get_response(fakes.wsgi_app())
@@ -407,6 +419,7 @@ class CreateserverextTest(test.TestCase):
 
     def test_get_server_by_id_verify_security_groups_xml(self):
         self.stubs.Set(nova.db.api, 'instance_get', return_server_by_id)
+        self._setup_mock_network_api()
         req = webob.Request.blank('/v1.1/123/os-create-server-ext/1')
         req.headers['Accept'] = 'application/xml'
         response = req.get_response(fakes.wsgi_app())

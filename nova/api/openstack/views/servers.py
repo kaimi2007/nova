@@ -16,17 +16,17 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import datetime
 import hashlib
 import os
 
 from nova import exception
-from nova.api.openstack import common
-from nova.api.openstack.views import addresses as addresses_view
-from nova.api.openstack.views import flavors as flavors_view
-from nova.api.openstack.views import images as images_view
+from nova import log as logging
 from nova import utils
+from nova.api.openstack import common
 from nova.compute import vm_states
+
+
+LOG = logging.getLogger('nova.api.openstack.views.servers')
 
 
 class ViewBuilder(object):
@@ -40,13 +40,13 @@ class ViewBuilder(object):
     def __init__(self, addresses_builder):
         self.addresses_builder = addresses_builder
 
-    def build(self, inst, is_detail):
+    def build(self, inst, networks, is_detail=False):
         """Return a dict that represenst a server."""
         if inst.get('_is_precooked', False):
             server = dict(server=inst)
         else:
             if is_detail:
-                server = self._build_detail(inst)
+                server = self._build_detail(inst, networks)
             else:
                 server = self._build_simple(inst)
 
@@ -54,11 +54,22 @@ class ViewBuilder(object):
 
         return server
 
+    def build_list(self, server_objs, is_detail=False, **kwargs):
+        limit = kwargs.get('limit', None)
+        servers = []
+        servers_links = []
+
+        for server_obj, networks in server_objs:
+            servers.append(self.build(server_obj, networks,
+                                      is_detail)['server'])
+
+        return dict(servers=servers)
+
     def _build_simple(self, inst):
         """Return a simple model of a server."""
         return dict(server=dict(id=inst['id'], name=inst['display_name']))
 
-    def _build_detail(self, inst):
+    def _build_detail(self, inst, networks):
         """Returns a detailed model of a server."""
         vm_state = inst.get('vm_state', vm_states.BUILDING)
         task_state = inst.get('task_state')
@@ -82,13 +93,13 @@ class ViewBuilder(object):
 
         self._build_image(inst_dict, inst)
         self._build_flavor(inst_dict, inst)
-        self._build_addresses(inst_dict, inst)
+        self._build_addresses(inst_dict, networks)
 
         return dict(server=inst_dict)
 
-    def _build_addresses(self, response, inst):
+    def _build_addresses(self, response, networks):
         """Return the addresses sub-resource of a server."""
-        raise NotImplementedError()
+        response['addresses'] = self.addresses_builder.build(networks)
 
     def _build_image(self, response, inst):
         """Return the image sub-resource of a server."""
@@ -119,9 +130,6 @@ class ViewBuilderV10(ViewBuilder):
         if inst.get('instance_type', None):
             response['flavorId'] = inst['instance_type']['flavorid']
 
-    def _build_addresses(self, response, inst):
-        response['addresses'] = self.addresses_builder.build(inst)
-
 
 class ViewBuilderV11(ViewBuilder):
     """Model an Openstack API V1.0 server response."""
@@ -133,15 +141,15 @@ class ViewBuilderV11(ViewBuilder):
         self.base_url = base_url
         self.project_id = project_id
 
-    def _build_detail(self, inst):
-        response = super(ViewBuilderV11, self)._build_detail(inst)
+    def _build_detail(self, inst, network):
+        response = super(ViewBuilderV11, self)._build_detail(inst, network)
         response['server']['created'] = utils.isotime(inst['created_at'])
         response['server']['updated'] = utils.isotime(inst['updated_at'])
-        if 'status' in response['server']:
-            if response['server']['status'] == "ACTIVE":
-                response['server']['progress'] = 100
-            elif response['server']['status'] == "BUILD":
-                response['server']['progress'] = 0
+
+        status = response['server'].get('status')
+        if status in ('ACTIVE', 'BUILD', 'REBUILD', 'RESIZE',
+                      'VERIFY_RESIZE'):
+            response['server']['progress'] = inst['progress'] or 0
 
         response['server']['accessIPv4'] = inst.get('access_ip_v4') or ""
         response['server']['accessIPv6'] = inst.get('access_ip_v6') or ""
@@ -180,10 +188,6 @@ class ViewBuilderV11(ViewBuilder):
                 ]
             }
 
-    def _build_addresses(self, response, inst):
-        interfaces = inst.get('virtual_interfaces', [])
-        response['addresses'] = self.addresses_builder.build(interfaces)
-
     def _build_extra(self, response, inst):
         self._build_links(response, inst)
         response['uuid'] = inst['uuid']
@@ -204,6 +208,32 @@ class ViewBuilderV11(ViewBuilder):
         ]
 
         response["links"] = links
+
+    def build_list(self, server_objs, is_detail=False, **kwargs):
+        limit = kwargs.get('limit', None)
+        servers = []
+        servers_links = []
+
+        for server_obj, networks in server_objs:
+            servers.append(self.build(server_obj, networks,
+                                      is_detail)['server'])
+
+        if (len(servers) and limit) and (limit == len(servers)):
+            next_link = self.generate_next_link(servers[-1]['id'],
+                                                kwargs, is_detail)
+            servers_links = [dict(rel='next', href=next_link)]
+
+        reval = dict(servers=servers)
+        if len(servers_links) > 0:
+            reval['servers_links'] = servers_links
+        return reval
+
+    def generate_next_link(self, server_id, params, is_detail=False):
+        """ Return an href string with proper limit and marker params"""
+        params['marker'] = server_id
+        return "%s?%s" % (
+            os.path.join(self.base_url, self.project_id, "servers"),
+            common.dict_to_query_str(params))
 
     def generate_href(self, server_id):
         """Create an url that refers to a specific server id."""

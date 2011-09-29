@@ -311,9 +311,9 @@ def floating_ip_get_by_address(context, address):
     return IMPL.floating_ip_get_by_address(context, address)
 
 
-def floating_ip_get_by_ip(context, ip):
-    """Get a floating ip by floating address."""
-    return IMPL.floating_ip_get_by_ip(context, ip)
+def floating_ip_get_by_fixed_address(context, fixed_address):
+    """Get a floating ips by fixed address"""
+    return IMPL.floating_ip_get_by_fixed_address(context, fixed_address)
 
 
 def floating_ip_update(context, address, values):
@@ -1375,9 +1375,10 @@ def instance_type_create(context, values):
     return IMPL.instance_type_create(context, values)
 
 
-def instance_type_get_all(context, inactive=False):
+def instance_type_get_all(context, inactive=False, filters=None):
     """Get all instance types."""
-    return IMPL.instance_type_get_all(context, inactive)
+    return IMPL.instance_type_get_all(
+        context, inactive=inactive, filters=filters)
 
 
 def instance_type_get(context, id):

@@ -121,13 +121,6 @@ def wrap_exception(notifier=None, publisher_id=None, event_type=None,
                     notifier.notify(publisher_id, temp_type, temp_level,
                                     payload)
 
-                if (not isinstance(e, Error) and
-                    not isinstance(e, NovaException)):
-                    #exc_type, exc_value, exc_traceback = sys.exc_info()
-                    LOG.exception(_('Uncaught exception'))
-                    #logging.error(traceback.extract_stack(exc_traceback))
-                    raise Error(str(e))
-
                 # re-raise original exception since it may have been clobbered
                 raise exc_info[0], exc_info[1], exc_info[2]
 
@@ -145,17 +138,17 @@ class NovaException(Exception):
     """
     message = _("An unknown exception occurred.")
 
-    def __init__(self, **kwargs):
+    def __init__(self, message=None, **kwargs):
         self.kwargs = kwargs
-        try:
-            self._error_string = self.message % kwargs
+        if not message:
+            try:
+                message = self.message % kwargs
 
-        except Exception:
-            # at least get the core message out if something happened
-            self._error_string = self.message
+            except Exception as e:
+                # at least get the core message out if something happened
+                message = self.message
 
-    def __str__(self):
-        return self._error_string
+        super(NovaException, self).__init__(message)
 
 
 class ImagePaginationFailed(NovaException):
@@ -175,11 +168,23 @@ class NotAuthorized(NovaException):
     message = _("Not authorized.")
 
     def __init__(self, *args, **kwargs):
-        super(NotAuthorized, self).__init__(**kwargs)
+        super(NotAuthorized, self).__init__(*args, **kwargs)
 
 
 class AdminRequired(NotAuthorized):
     message = _("User does not have admin privileges")
+
+
+class InstanceBusy(NovaException):
+    message = _("Instance %(instance_id)s is busy. (%(task_state)s)")
+
+
+class InstanceSnapshotting(InstanceBusy):
+    message = _("Instance %(instance_id)s is currently snapshotting.")
+
+
+class InstanceBackingUp(InstanceBusy):
+    message = _("Instance %(instance_id)s is currently being backed up.")
 
 
 class Invalid(NovaException):
@@ -324,7 +329,7 @@ class NotFound(NovaException):
     message = _("Resource could not be found.")
 
     def __init__(self, *args, **kwargs):
-        super(NotFound, self).__init__(**kwargs)
+        super(NotFound, self).__init__(*args, **kwargs)
 
 
 class FlagNotSet(NotFound):
@@ -817,3 +822,15 @@ class ZoneRequestError(Error):
         if message is None:
             message = _("1 or more Zones could not complete the request")
         super(ZoneRequestError, self).__init__(message=message)
+
+
+class InstanceTypeMemoryTooSmall(NovaException):
+    message = _("Instance type's memory is too small for requested image.")
+
+
+class InstanceTypeDiskTooSmall(NovaException):
+    message = _("Instance type's disk is too small for requested image.")
+
+
+class InsufficientFreeMemory(NovaException):
+    message = _("Insufficient free memory on compute node to start %(uuid)s.")

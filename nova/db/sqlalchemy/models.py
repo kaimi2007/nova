@@ -241,6 +241,9 @@ class Instance(BASE, NovaBase):
     access_ip_v4 = Column(String(255))
     access_ip_v6 = Column(String(255))
 
+    managed_disk = Column(Boolean())
+    progress = Column(Integer)
+
 
 class VirtualStorageArray(BASE, NovaBase):
     """
@@ -837,6 +840,7 @@ class Zone(BASE, NovaBase):
     """Represents a child zone of this zone."""
     __tablename__ = 'zones'
     id = Column(Integer, primary_key=True)
+    name = Column(String(255))
     api_url = Column(String(255))
     username = Column(String(255))
     password = Column(String(255))

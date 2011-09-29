@@ -1,4 +1,4 @@
-# Copyright 2011 Josh Durgin
+# Copyright 2013 Josh Durgin
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -18,10 +18,8 @@ import json
 import webob
 
 import nova
-from nova import context
 from nova import flags
 from nova import test
-from nova.api.openstack.contrib.volumes import BootFromVolumeController
 from nova.compute import instance_types
 from nova.tests.api.openstack import fakes
 from nova.tests.api.openstack.test_servers import fake_gen_uuid
@@ -31,8 +29,12 @@ FLAGS = flags.FLAGS
 
 
 def fake_compute_api_create(cls, context, instance_type, image_href, **kwargs):
+    global _block_device_mapping_seen
+    _block_device_mapping_seen = kwargs.get('block_device_mapping')
+
     inst_type = instance_types.get_instance_type_by_flavor_id(2)
-    return [{'id': 1,
+    resv_id = None
+    return ([{'id': 1,
              'display_name': 'test_server',
              'uuid': fake_gen_uuid(),
              'instance_type': dict(inst_type),
@@ -43,7 +45,18 @@ def fake_compute_api_create(cls, context, instance_type, image_href, **kwargs):
              'project_id': 'fake',
              'created_at': datetime.datetime(2010, 10, 10, 12, 0, 0),
              'updated_at': datetime.datetime(2010, 11, 11, 11, 0, 0),
-             }]
+             'progress': 0
+             }], resv_id)
+
+
+def fake_get_instance_nw_info(cls, context, instance):
+    return [(None, {'label': 'public',
+                    'ips': [{'ip': '10.0.0.1'}],
+                    'ip6s': []})]
+
+
+def fake_get_floating_ips_by_fixed_address(self, context, fixed_ip):
+    return ['172.16.0.1']
 
 
 class BootFromVolumeTest(test.TestCase):
@@ -51,6 +64,7 @@ class BootFromVolumeTest(test.TestCase):
     def setUp(self):
         super(BootFromVolumeTest, self).setUp()
         self.stubs.Set(nova.compute.API, 'create', fake_compute_api_create)
+        fakes.stub_out_nw_api(self.stubs)
 
     def test_create_root_volume(self):
         body = dict(server=dict(
@@ -63,6 +77,8 @@ class BootFromVolumeTest(test.TestCase):
                         delete_on_termination=False,
                         )]
                 ))
+        global _block_device_mapping_seen
+        _block_device_mapping_seen = None
         req = webob.Request.blank('/v1.1/fake/os-volumes_boot')
         req.method = 'POST'
         req.body = json.dumps(body)
@@ -75,3 +91,7 @@ class BootFromVolumeTest(test.TestCase):
         self.assertEqual(u'test_server', server['name'])
         self.assertEqual(3, int(server['image']['id']))
         self.assertEqual(FLAGS.password_length, len(server['adminPass']))
+        self.assertEqual(len(_block_device_mapping_seen), 1)
+        self.assertEqual(_block_device_mapping_seen[0]['volume_id'], 1)
+        self.assertEqual(_block_device_mapping_seen[0]['device_name'],
+                '/dev/vda')

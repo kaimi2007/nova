@@ -211,7 +211,11 @@ def _import_vhds(sr_path, staging_path, uuid_stack):
     snap_info = prepare_if_exists(staging_path, 'snap.vhd',
             image_info[0])
     if snap_info:
-        paths_to_move.append(snap_info[0])
+        # NOTE(sirp): this is an insert rather than an append since the
+        # 'snapshot' vhd needs to be copied into the SR before the base copy.
+        # If it doesn't, then there is a possibliity that snapwatchd will
+        # delete the base_copy since it is an unreferenced parent.
+        paths_to_move.insert(0, snap_info[0])
         # We return this snap as the VDI instead of image.vhd
         vdi_return_list.append(dict(vdi_type="os", vdi_uuid=snap_info[1]))
     else:
@@ -242,7 +246,7 @@ def _prepare_staging_area_for_upload(sr_path, staging_path, vdi_uuids):
 
 
 def _upload_tarball(staging_path, image_id, glance_host, glance_port, os_type,
-                    auth_token):
+                    auth_token, options):
     """
     Create a tarball of the image and then stream that into Glance
     using chunked-transfer-encoded HTTP.
@@ -255,7 +259,7 @@ def _upload_tarball(staging_path, image_id, glance_host, glance_port, os_type,
     conn.putrequest('HEAD', '/v1/images/%s' % image_id)
     if auth_token:
         conn.putheader('x-auth-token', auth_token)
-        conn.endheaders()
+    conn.endheaders()
 
     resp = conn.getresponse()
     if resp.status != httplib.OK:
@@ -283,11 +287,14 @@ def _upload_tarball(staging_path, image_id, glance_host, glance_port, os_type,
     ovf_headers = {
         'content-type': 'application/octet-stream',
         'transfer-encoding': 'chunked',
-        'x-image-meta-is-public': 'True',
+        'x-image-meta-is-public': 'False',
         'x-image-meta-status': 'queued',
         'x-image-meta-disk-format': 'vhd',
         'x-image-meta-container-format': 'ovf',
         'x-image-meta-property-os-type': os_type}
+
+    if options and options.get('managed_disk'):
+        headers['x-image-meta-property-managed-disk'] = options['managed_disk']
 
     # If we have an auth_token, set an x-auth-token header
     if auth_token:
@@ -420,12 +427,13 @@ def upload_vhd(session, args):
     sr_path = params["sr_path"]
     os_type = params["os_type"]
     auth_token = params["auth_token"]
+    options = params["options"]
 
     staging_path = _make_staging_area(sr_path)
     try:
         _prepare_staging_area_for_upload(sr_path, staging_path, vdi_uuids)
         _upload_tarball(staging_path, image_id, glance_host, glance_port,
-                        os_type, auth_token)
+                        os_type, auth_token, options)
     finally:
         _cleanup_staging_area(staging_path)
 
