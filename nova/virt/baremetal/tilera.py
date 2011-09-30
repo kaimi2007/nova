@@ -96,8 +96,7 @@ class BareMetalNodes(object):
                     'local_gb_used': int(l[self.LOCAL_GB_USED]),
                     'hypervisor_type': l[self.HYPERVISOR_TYPE],
                     'hypervisor_version': int(l[self.HYPERVISOR_VER]),
-                    'cpu_info': l[self.CPU_INFO]
-                  }
+                    'cpu_info': l[self.CPU_INFO]}
             self.nodes.append(l_d)
         fp.close()
 
@@ -232,18 +231,22 @@ class BareMetalNodes(object):
         """
         Checks whether the given node is activated or not
         """
-        """grep_cmd = "ls | grep bin >> tile_output"
-        utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
-                '--resume', '--net', node_ip, '--', grep_cmd)
-        file = open("./tile_output")
+        """tile_output = "/tftpboot/tile_output_" + str(node_id)
+        grep_cmd = "ping -c1 " + node_ip + " | grep Unreachable > " \
+                   + tile_output
+        subprocess.Popen(grep_cmd, shell=True)
+        file = open(tile_output)
         out_msg = file.readline()
-        utils.execute('rm', './tile_output')
+        utils.execute('sudo', 'rm', tile_output)
         file.close()
-        if out_msg.find("bin") < 0:
+        if out_msg.find("Unreachable") >= 0:
             cmd = "TILERA_BOARD_#" + str(node_id) + " " \
                 + node_ip + " is not ready, out_msg=" + out_msg
-            print cmd
-            return power_state.NOSTATE
+            LOG.debug(_(cmd))
+            self.power_mgr(node_id, 3)
+            cmd = "Rebooting board is being done... Please wait 90 secs more."
+            self.sleep_mgr(90)
+            LOG.debug(_(cmd))
         else:"""
         cmd = "TILERA_BOARD_#" + str(node_id) + " " + node_ip \
                 + " is ready"
@@ -305,8 +308,9 @@ class BareMetalNodes(object):
     def get_image(self, bp):
         """
         Gets the bare-metal file system image into the instance path
+        in case of dummy image
         """
-        path_fs = "/tftpboot/tilera_fs_5G"
+        path_fs = "/tftpboot/tilera_fs"
         path_root = bp + "/root"
         utils.execute('cp', path_fs, path_root)
 

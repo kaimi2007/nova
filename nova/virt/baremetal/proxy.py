@@ -20,14 +20,10 @@
 """
 A connection to a hypervisor through baremetal.
 
-Supports KVM, LXC, QEMU, UML, and XEN.
-
 **Related Flags**
 
-:baremetal_type:  Libvirt domain type.  Can be kvm, qemu, uml, xen
-                (default: kvm).
+:baremetal_type:  Baremetal domain type.
 :baremetal_uri:  Override for the default baremetal URI (baremetal_type).
-:baremetal_xml_template:  Libvirt XML Template.
 :rescue_image_id:  Rescue ami image (default: ami-rescue).
 :rescue_kernel_id:  Rescue aki image (default: aki-rescue).
 :rescue_ramdisk_id:  Rescue ari image (default: ari-rescue).
@@ -36,6 +32,7 @@ Supports KVM, LXC, QEMU, UML, and XEN.
 
 """
 
+import hashlib
 import multiprocessing
 import os
 import random
@@ -45,11 +42,11 @@ import sys
 import tempfile
 import time
 import uuid
-from xml.dom import minidom
-from xml.etree import ElementTree
 
 from eventlet import greenthread
 from eventlet import tpool
+
+import IPy
 
 from nova import context as nova_context
 from nova import db
@@ -76,11 +73,8 @@ LOG = logging.getLogger('nova.virt.baremetal.proxy')
 
 FLAGS = flags.FLAGS
 flags.DEFINE_string('baremetal_injected_network_template',
-                    utils.abspath('virt/baremetal_interfaces.template'),
+                    utils.abspath('virt/interfaces.template'),
                     'Template file for injected network')
-flags.DEFINE_string('baremetal_xml_template',
-                    utils.abspath('virt/baremetal.xml.template'),
-                    'baremetal XML Template')
 flags.DEFINE_string('baremetal_type',
                     'baremetal',
                     'baremetal domain type')
@@ -114,10 +108,9 @@ class ProxyConnection(driver.ComputeDriver):
     def __init__(self, read_only):
         super(ProxyConnection, self).__init__()
         self.baremetal_nodes = nodes.get_baremetal_nodes()
-        self.baremetal_xml = open(FLAGS.baremetal_xml_template).read()
         self._wrapped_conn = None
         self.read_only = read_only
-
+  
         self._host_state = None
 
     @property
@@ -136,31 +129,13 @@ class ProxyConnection(driver.ComputeDriver):
     _conn = property(_get_connection)
 
     def get_pty_for_instance(self, instance_name):
-        virt_dom = self._conn.lookupByName(instance_name)
-        xml = virt_dom.XMLDesc(0)
-        dom = minidom.parseString(xml)
-        for serial in dom.getElementsByTagName('serial'):
-            if serial.getAttribute('type') == 'pty':
-                source = serial.getElementsByTagName('source')[0]
-                return source.getAttribute('path')
+        raise NotImplementedError()
 
     def list_instances(self):
-        #return [self._conn.lookupByID(x).name()
-        #        for x in self._conn.listDomainsID()]
         return self._conn.list_domains()
 
     def _map_to_instance_info(self, domain_name):
         """Gets info from a virsh domain object into an InstanceInfo"""
-
-        # domain.info() returns a list of:
-        #    state:       one of the state values (virDomainState)
-        #    maxMemory:   the maximum memory used by the domain
-        #    memory:      the current amount of memory used by the domain
-        #    nbVirtCPU:   the number of virtual CPU
-        #    puTime:      the time used by the domain in nanoseconds
-
-        #(state, _max_mem, _mem, _num_cpu, _cpu_time) = domain.info()
-        #name = domain.name()
         (state, _max_mem, _mem, _num_cpu, _cpu_time) \
             = self._conn.get_domain_info(domain_name)
         name = domain_name
@@ -168,33 +143,22 @@ class ProxyConnection(driver.ComputeDriver):
 
     def list_instances_detail(self):
         infos = []
-        #for domain_id in self._conn.listDomainsID():
-        #    domain = self._conn.lookupByID(domain_id)
-        #    info = self._map_to_instance_info(domain)
-        #    infos.append(info)
         for domain_name in self._conn.list_domains():
             info = self._map_to_instance_info(domain_name)
-            #info = self._map_to_instance_info(domain['name'])
             infos.append(info)
         return infos
 
-    def destroy(self, instance, network_info, cleanup=True):
+    def destroy(self, instance, cleanup=True):
         timer = utils.LoopingCall(f=None)
 
         while True:
             try:
                 self._conn.destroy_domain(instance['name'])
-                db.instance_set_state(context.get_admin_context(),
-                                  instance['id'], power_state.SHUTOFF)
                 break
-                time.sleep(1)
             except Exception as ex:
                 msg = _("Error encountered when destroying instance '%(id)s': "
                         "%(ex)s") % {"id": instance["id"], "ex": ex}
                 LOG.debug(msg)
-                db.instance_set_state(context.get_admin_context(),
-                                      instance['id'],
-                                      power_state.SHUTOFF)
                 break
 
         if cleanup:
@@ -221,17 +185,11 @@ class ProxyConnection(driver.ComputeDriver):
         raise exception.APIError("detach_volume not supported for baremetal.")
 
     @exception.wrap_exception
-    def snapshot(self, context, instance, image_href):
+    def snapshot(self, instance, image_id):
         raise exception.APIError("snapshot not supported for baremetal.")
-        """Create snapshot from a running VM instance.
-
-        This command only works with qemu 0.14+, the qemu_img flag is
-        provided so that a locally compiled binary of qemu-img can be used
-        to support this command.
-        """
 
     @exception.wrap_exception
-    def reboot(self, instance, network_info):
+    def reboot(self, instance):
         timer = utils.LoopingCall(f=None)
 
         def _wait_for_reboot():
@@ -242,7 +200,7 @@ class ProxyConnection(driver.ComputeDriver):
                 if state == power_state.RUNNING:
                     LOG.debug(_('instance %s: rebooted'), instance['name'])
                     timer.stop()
-            except Exception:
+            except:
                 LOG.exception(_('_wait_for_reboot failed'))
                 db.instance_set_state(context.get_admin_context(),
                               instance['id'],
@@ -277,14 +235,14 @@ class ProxyConnection(driver.ComputeDriver):
         data recovery.
 
         """
-        self.destroy(instance, network_info, cleanup=False)
+        self.destroy(instance, False)
 
         xml_dict = self.to_xml_dict(instance, rescue=True)
         rescue_images = {'image_id': FLAGS.baremetal_rescue_image_id,
                          'kernel_id': FLAGS.baremetal_rescue_kernel_id,
                          'ramdisk_id': FLAGS.baremetal_rescue_ramdisk_id}
-        #self._create_image(context, instance, xml, '.rescue', rescue_images)
-        #self._create_new_domain(xml)
+        self._create_image(instance, '.rescue', rescue_images,
+                           network_info=network_info)
 
         timer = utils.LoopingCall(f=None)
 
@@ -296,7 +254,7 @@ class ProxyConnection(driver.ComputeDriver):
                 if state == power_state.RUNNING:
                     LOG.debug(_('instance %s: rescued'), instance['name'])
                     timer.stop()
-            except Exception:
+            except:
                 LOG.exception(_('_wait_for_rescue failed'))
                 db.instance_set_state(context.get_admin_context(),
                               instance['id'],
@@ -306,33 +264,26 @@ class ProxyConnection(driver.ComputeDriver):
         return timer.start(interval=0.5, now=True)
 
     @exception.wrap_exception
-    def unrescue(self, instance, network_info):
+    def unrescue(self, instance):
         """Reboot the VM which is being rescued back into primary images.
 
         Because reboot destroys and re-creates instances, unresue should
         simply call reboot.
 
         """
-        self.reboot(instance, network_info)
+        self.reboot(instance)
 
     @exception.wrap_exception
     def poll_rescued_instances(self, timeout):
         pass
 
-    # NOTE(ilyaalekseyev): Implementation like in multinics
-    # for xenapi(tr3buchet)
-    @exception.wrap_exception
     def spawn(self, context, instance, network_info,
-              block_device_mapping=None):
-        LOG.debug(_("<============= spawn of baremetal =============>"))
+              block_device_info=None):
+        LOG.debug(_("<============= spawn of baremetal =============>")) 
         xml_dict = self.to_xml_dict(instance, network_info)
-        db.instance_set_state(context.get_admin_context(),
-                              instance['id'],
-                              power_state.BUILDING,  # NOSTATE,
-                              'launching')
         self._create_image(context, instance, xml_dict,
                            network_info=network_info,
-                           block_device_mapping=block_device_mapping)
+                           block_device_info=block_device_info)
         LOG.debug(_("instance %s: is running"), instance['name'])
 
         def basepath(fname='', suffix=''):
@@ -347,40 +298,50 @@ class ProxyConnection(driver.ComputeDriver):
                 LOG.debug(_(xml_dict))
                 state = self._conn.create_domain(xml_dict, bpath)
                 LOG.debug(_('~~~~~~ current state = %s ~~~~~~'), state)
-                db.instance_set_state(context.get_admin_context(),
-                                      instance['id'], state, 'running')
                 if state == power_state.RUNNING:
                     LOG.debug(_('instance %s: booted'), instance['name'])
                     timer.stop()
-            except Exception:
+            except:
                 LOG.exception(_('instance %s: failed to boot'),
                               instance['name'])
-                db.instance_set_state(context.get_admin_context(),
-                                      instance['id'],
-                                      power_state.SHUTDOWN)
+                timer.stop()
+        timer.f = _wait_for_boot
+        return timer.start(interval=0.5, now=True)
+
+    @exception.wrap_exception
+    def myspawn(self, context, instance, network_info,
+              block_device_info=None):
+        LOG.debug(_("<============= spawn of baremetal =============>")) 
+        xml_dict = self.to_xml_dict(instance, network_info)
+        self._create_image(context, instance, xml_dict,
+                           network_info=network_info,
+                           block_device_info=block_device_info)
+        LOG.debug(_("instance %s: is running"), instance['name'])
+
+        def basepath(fname='', suffix=''):
+            return os.path.join(FLAGS.instances_path,
+                                instance['name'],
+                                fname + suffix)
+        bpath = basepath(suffix='')
+        timer = utils.LoopingCall(f=None)
+
+        def _wait_for_boot():
+            try:
+                LOG.debug(_(xml_dict))
+                state = self._conn.create_domain(xml_dict, bpath)
+                LOG.debug(_('~~~~~~ current state = %s ~~~~~~'), state)
+                if state == power_state.RUNNING:
+                    LOG.debug(_('instance %s: booted'), instance['name'])
+                    timer.stop()
+            except:
+                LOG.exception(_('instance %s: failed to boot'),
+                              instance['name'])
                 timer.stop()
         timer.f = _wait_for_boot
         return timer.start(interval=0.5, now=True)
 
     def _flush_xen_console(self, virsh_output):
-        LOG.info(_('virsh said: %r'), virsh_output)
-        virsh_output = virsh_output[0].strip()
-
-        if virsh_output.startswith('/dev/'):
-            LOG.info(_("cool, it's a device"))
-            out, err = utils.execute('sudo', 'dd',
-                                     "if=%s" % virsh_output,
-                                     'iflag=nonblock',
-                                     check_exit_code=False)
-            return out
-        else:
-            return ''
-
-    def _append_to_file(self, data, fpath):
-        LOG.info(_('data: %(data)r, fpath: %(fpath)r') % locals())
-        fp = open(fpath, 'a+')
-        fp.write(data)
-        return fpath
+        raise NotImplementedError()
 
     def _dump_file(self, fpath):
         fp = open(fpath, 'r+')
@@ -449,19 +410,11 @@ class ProxyConnection(driver.ComputeDriver):
     def _fetch_image(self, context, target, image_id, user_id, project_id,
                      size=None):
         """Grab image and optionally attempt to resize it"""
-        images.fetch(context, image_id, target, user_id, project_id)
+        images.fetch_to_raw(context, image_id, target, user_id, project_id)
 
-    def _create_local(self, target, local_gb):
-        """Create a blank image of specified size"""
-        utils.execute('truncate', target, '-s', "%dG" % local_gb)
-        # TODO(vish): should we format disk by default?
-
-    def _create_image(self, context, inst, baremetal_xml, suffix='',
+    def _create_image(self, context, inst, xml, suffix='',
                       disk_images=None, network_info=None,
-                      block_device_mapping=None):
-        if not network_info:
-            network_info = netutils.get_network_info(inst)
-
+                      block_device_info=None):
         if not suffix:
             suffix = ''
 
@@ -476,9 +429,6 @@ class ProxyConnection(driver.ComputeDriver):
         utils.execute('chmod', '0777', basepath(suffix=''))
 
         LOG.info(_('instance %s: Creating image'), inst['name'])
-        f = open(basepath('baremetal.xml'), 'w')
-        #f.write(baremetal_xml)
-        f.close()
 
         if FLAGS.baremetal_type == 'lxc':
             container_dir = '%s/rootfs' % basepath(suffix='')
@@ -488,9 +438,8 @@ class ProxyConnection(driver.ComputeDriver):
         os.close(os.open(basepath('console.log', ''),
                          os.O_CREAT | os.O_WRONLY, 0660))
 
-        #Test: copying original baremetal images
-        bp = basepath(suffix='')
-        self.baremetal_nodes.get_image(bp)
+        # bp = basepath(suffix='')
+        # self.baremetal_nodes.get_image(bp)
 
         if not disk_images:
             disk_images = {'image_id': inst['image_ref'],
@@ -516,7 +465,7 @@ class ProxyConnection(driver.ComputeDriver):
                                   user_id=inst['user_id'],
                                   project_id=inst['project_id'])
 
-        root_fname = '%08x' % int(disk_images['image_id'])
+        root_fname = hashlib.sha1(disk_images['image_id']).hexdigest()
         size = FLAGS.minimum_root_size
 
         inst_type_id = inst['instance_type_id']
@@ -527,20 +476,13 @@ class ProxyConnection(driver.ComputeDriver):
 
         self._cache_image(fn=self._fetch_image,
                           context=context,
-                          target=basepath('disk'),
+                          target=basepath('root'),
                           fname=root_fname,
-                          cow=FLAGS.use_cow_images,
+                          cow=False,  # FLAGS.use_cow_images,
                           image_id=disk_images['image_id'],
                           user_id=inst['user_id'],
                           project_id=inst['project_id'],
                           size=size)
-
-        """if inst_type['local_gb']:
-            self._cache_image(fn=self._create_local,
-                              target=basepath('disk.local'),
-                              fname="local_%s" % inst_type['local_gb'],
-                              cow=FLAGS.use_cow_images,
-                              local_gb=inst_type['local_gb'])"""
 
         # For now, we assume that if we're not using a kernel, we're using a
         # partitioned disk image where the target partition is the first
@@ -571,6 +513,7 @@ class ProxyConnection(driver.ComputeDriver):
 
             have_injected_networks = True
             address = mapping['ips'][0]['ip']
+            netmask = mapping['ips'][0]['netmask']
             address_v6 = None
             gateway_v6 = None
             netmask_v6 = None
@@ -580,12 +523,12 @@ class ProxyConnection(driver.ComputeDriver):
                 gateway_v6 = mapping['gateway6']
             net_info = {'name': 'eth%d' % ifc_num,
                    'address': address,
-                   'netmask': network_ref['netmask'],
-                   'gateway': network_ref['gateway'],
-                   'broadcast': network_ref['broadcast'],
-                   'dns': network_ref['dns'],
+                   'netmask': netmask,
+                   'gateway': mapping['gateway'],
+                   'broadcast': mapping['broadcast'],
+                   'dns': ' '.join(mapping['dns']),
                    'address_v6': address_v6,
-                   'gateway_v6': gateway_v6,
+                   'gateway6': gateway_v6,
                    'netmask_v6': netmask_v6}
             nets.append(net_info)
 
@@ -594,41 +537,39 @@ class ProxyConnection(driver.ComputeDriver):
                                searchList=[{'interfaces': nets,
                                             'use_ipv6': FLAGS.use_ipv6}]))
 
-        if key or net:
+        metadata = inst.get('metadata')
+        if any((key, net, metadata)):
             inst_name = inst['name']
-            img_id = inst.image_ref
-            if key:
-                LOG.info(_('instance %(inst_name)s: injecting key into'
-                        ' image %(img_id)s') % locals())
-            if net:
-                LOG.info(_('instance %(inst_name)s: injecting net into'
-                        ' image %(img_id)s') % locals())
-            try:
-                disk.inject_data(basepath('root'), key, net,
-                                 partition=target_partition,
-                                 nbd=FLAGS.use_cow_images)
 
-                if FLAGS.baremetal_type == 'lxc':
-                    disk.setup_container(basepath('disk'),
-                                        container_dir=container_dir,
-                                        nbd=FLAGS.use_cow_images)
+            injection_path = basepath('root')
+            img_id = inst.image_ref
+            tune2fs = True
+
+            for injection in ('metadata', 'key', 'net'):
+                if locals()[injection]:
+                    LOG.info(_('instance %(inst_name)s: injecting '
+                               '%(injection)s into image %(img_id)s'
+                               % locals()))
+            try:
+                disk.inject_data(injection_path, key, net, metadata,
+                                 partition=target_partition,
+                                 nbd=FLAGS.use_cow_images,
+                                 tune2fs=tune2fs)
+
             except Exception as e:
                 # This could be a windows image, or a vmdk format disk
                 LOG.warn(_('instance %(inst_name)s: ignoring error injecting'
                         ' data into image %(img_id)s (%(e)s)') % locals())
 
-        if FLAGS.baremetal_type == 'uml':
-            utils.execute('sudo', 'chown', 'root', basepath('disk'))
-
-    def _prepare_xml_info(self, instance, rescue=False, network_info=None):
-        # TODO(adiantum) remove network_info creation code
-        # when multinics will be completed
-        if not network_info:
-            network_info = netutils.get_network_info(instance)
+    def _prepare_xml_info(self, instance, network_info, rescue,
+                          block_device_info=None):
+        # block_device_mapping = driver.block_device_info_get_mapping(
+        #    block_device_info)
+        map = 0
+        for (network, mapping) in network_info:
+            map += 1
 
         nics = []
-        #for (network, mapping) in network_info:
-        #    nics.append(self.vif_driver.plug(instance, network, mapping))
         # FIXME(vish): stick this in db
         inst_type_id = instance['instance_type_id']
         inst_type = instance_types.get_instance_type(inst_type_id)
@@ -647,17 +588,17 @@ class ProxyConnection(driver.ComputeDriver):
                     'rescue': rescue,
                     'local': inst_type['local_gb'],
                     'driver_type': driver_type,
-                    'vif_type': FLAGS.libvirt_vif_type,
                     'nics': nics,
                     'ip_address': mapping['ips'][0]['ip'],
-                    'mac_address': instance['mac_address'],
+                    'mac_address': mapping['mac'],
                     'image_id': instance['image_ref'],
                     'kernel_id': instance['kernel_id'],
                     'ramdisk_id': instance['ramdisk_id']}
 
-        if FLAGS.vnc_enabled and FLAGS.libvirt_type not in ('lxc', 'uml'):
-            xml_info['vncserver_host'] = FLAGS.vncserver_host
-            xml_info['vnc_keymap'] = FLAGS.vnc_keymap
+        if FLAGS.vnc_enabled:
+            if FLAGS.baremetal_type != 'lxc':
+                xml_info['vncserver_host'] = FLAGS.vncserver_host
+                xml_info['vnc_keymap'] = FLAGS.vnc_keymap
         if not rescue:
             if instance['kernel_id']:
                 xml_info['kernel'] = xml_info['basepath'] + "/kernel"
@@ -669,12 +610,9 @@ class ProxyConnection(driver.ComputeDriver):
         return xml_info
 
     def to_xml_dict(self, instance, rescue=False, network_info=None):
-        # TODO(termie): cache?
         LOG.debug(_('instance %s: starting toXML method'), instance['name'])
         xml_info = self._prepare_xml_info(instance, rescue, network_info)
-        xml = str(Template(self.baremetal_xml, searchList=[xml_info]))
         LOG.debug(_('instance %s: finished toXML method'), instance['name'])
-        #return xml
         return xml_info
 
     def get_info(self, instance_name):
@@ -685,8 +623,6 @@ class ProxyConnection(driver.ComputeDriver):
         baremetal error is.
 
         """
-        #virt_dom = self._lookup_by_name(instance_name)
-        #(state, max_mem, mem, num_cpu, cpu_time) = virt_dom.info()
         (state, max_mem, mem, num_cpu, cpu_time) \
                 = self._conn.get_domain_info(instance_name)
         return {'state': state,
@@ -695,7 +631,7 @@ class ProxyConnection(driver.ComputeDriver):
                 'num_cpu': num_cpu,
                 'cpu_time': cpu_time}
 
-    def _create_new_domain(self, xml, persistent=True, launch_flags=0):
+    def _create_new_domain(self, persistent=True, launch_flags=0):
         raise NotImplementedError()
 
     def get_diagnostics(self, instance_name):
@@ -704,19 +640,9 @@ class ProxyConnection(driver.ComputeDriver):
 
     def get_disks(self, instance_name):
         raise NotImplementedError()
-        """
-        Note that this function takes an instance name.
-
-        Returns a list of all block devices for this domain.
-        """
 
     def get_interfaces(self, instance_name):
         raise NotImplementedError()
-        """
-        Note that this function takes an instance name.
-
-        Returns a list of all network interfaces for this instance.
-        """
 
     def get_vcpu_total(self):
         """Get vcpu number of physical computer.
@@ -727,8 +653,7 @@ class ProxyConnection(driver.ComputeDriver):
 
         # On certain platforms, this will raise a NotImplementedError.
         try:
-            #return multiprocessing.cpu_count()
-            return self.baremetal_nodes.get_hw_info('vcpus')  # 10
+            return self.baremetal_nodes.get_hw_info('vcpus')
         except NotImplementedError:
             LOG.warn(_("Cannot get the number of cpu, because this "
                        "function is not implemented for this platform. "
@@ -741,15 +666,7 @@ class ProxyConnection(driver.ComputeDriver):
         :returns: the total amount of memory(MB).
 
         """
-
-        #if sys.platform.upper() != 'LINUX2':
-        #    return 0
-
-        #meminfo = open('/proc/meminfo').read().split()
-        #idx = meminfo.index('MemTotal:')
-        ## transforming kb to mb.
-        #return int(meminfo[idx + 1]) / 1024
-        return self.baremetal_nodes.get_hw_info('memory_mb')  # 16218
+        return self.baremetal_nodes.get_hw_info('memory_mb')
 
     def get_local_gb_total(self):
         """Get the total hdd size(GB) of physical computer.
@@ -760,10 +677,7 @@ class ProxyConnection(driver.ComputeDriver):
             NOVA-INST-DIR/instances mounts.
 
         """
-
-        #hddinfo = os.statvfs(FLAGS.instances_path)
-        #return hddinfo.f_frsize * hddinfo.f_blocks / 1024 / 1024 / 1024
-        return self.baremetal_nodes.get_hw_info('local_gb')  # 917
+        return self.baremetal_nodes.get_hw_info('local_gb')
 
     def get_vcpu_used(self):
         """ Get vcpu usage number of physical computer.
@@ -773,9 +687,6 @@ class ProxyConnection(driver.ComputeDriver):
         """
 
         total = 0
-        #for dom_id in self._conn.listDomainsID():
-        #    dom = self._conn.lookupByID(dom_id)
-        #    total += len(dom.vcpus()[1])
         for dom_id in self._conn.list_domains():
             total += 1
         return total
@@ -786,17 +697,7 @@ class ProxyConnection(driver.ComputeDriver):
         :returns: the total usage of memory(MB).
 
         """
-
-        #if sys.platform.upper() != 'LINUX2':
-        #    return 0
-
-        #m = open('/proc/meminfo').read().split()
-        #idx1 = m.index('MemFree:')
-        #idx2 = m.index('Buffers:')
-        #idx3 = m.index('Cached:')
-        #avail = (int(m[idx1 + 1]) + int(m[idx2 + 1]) + int(m[idx3 + 1]))/1024
-        #return  self.get_memory_mb_total() - avail
-        return self.baremetal_nodes.get_hw_info('memory_mb_used')  # 476
+        return self.baremetal_nodes.get_hw_info('memory_mb_used')
 
     def get_local_gb_used(self):
         """Get the free hdd size(GB) of physical computer.
@@ -807,11 +708,7 @@ class ProxyConnection(driver.ComputeDriver):
            NOVA-INST-DIR/instances mounts.
 
         """
-
-        #hddinfo = os.statvfs(FLAGS.instances_path)
-        #avail = hddinfo.f_frsize * hddinfo.f_bavail / 1024 / 1024 / 1024
-        #return self.get_local_gb_total() - avail
-        return self.baremetal_nodes.get_hw_info('local_gb_used')  # 1
+        return self.baremetal_nodes.get_hw_info('local_gb_used')
 
     def get_hypervisor_type(self):
         """Get hypervisor type.
@@ -819,8 +716,6 @@ class ProxyConnection(driver.ComputeDriver):
         :returns: hypervisor type (ex. qemu)
 
         """
-
-        #return self._conn.getType()
         return self.baremetal_nodes.get_hw_info('hypervisor_type')
 
     def get_hypervisor_version(self):
@@ -829,20 +724,7 @@ class ProxyConnection(driver.ComputeDriver):
         :returns: hypervisor version (ex. 12003)
 
         """
-
-        # NOTE(justinsb): getVersion moved between baremetal versions
-        # Trying to do be compatible with older versions is a lost cause
-        # But ... we can at least give the user a nice message
-        #method = getattr(self._conn, 'getVersion', None)
-        #if method is None:
-        #    raise exception.Error(_("baremetal version is too old"
-        #                            " (does not support getVersion)"))
-            # NOTE(justinsb): If we wanted to get the version, we could:
-            # method = getattr(baremetal, 'getVersion', None)
-            # NOTE(justinsb): This would then rely on a proper version check
-
-        #return method()
-        return self.baremetal_nodes.get_hw_info('hypervisor_version')  # 1
+        return self.baremetal_nodes.get_hw_info('hypervisor_version')
 
     def get_cpu_info(self):
         """Get cpuinfo information.
@@ -857,20 +739,14 @@ class ProxyConnection(driver.ComputeDriver):
 
     def block_stats(self, instance_name, disk):
         raise NotImplementedError()
-        """
-        Note that this function takes an instance name.
-        """
 
     def interface_stats(self, instance_name, interface):
         raise NotImplementedError()
-        """
-        Note that this function takes an instance name.
-        """
 
     def get_console_pool_info(self, console_type):
         #TODO(mdragon): console proxy should be implemented for baremetal,
-        #               in case someone wants to use it with kvm or
-        #               such. For now return fake data.
+        #               in case someone wants to use it.
+        #               For now return fake data.
         return  {'address': '127.0.0.1',
                  'username': 'fakeuser',
                  'password': 'fakepassword'}
@@ -909,7 +785,6 @@ class ProxyConnection(driver.ComputeDriver):
                'hypervisor_type': self.get_hypervisor_type(),
                'hypervisor_version': self.get_hypervisor_version(),
                'cpu_info': self.get_cpu_info(),
-               #RLK
                'cpu_arch': FLAGS.cpu_arch,
                'xpu_arch': FLAGS.xpu_arch,
                'xpus': FLAGS.xpus,
@@ -939,7 +814,7 @@ class ProxyConnection(driver.ComputeDriver):
                        post_method, recover_method):
         raise NotImplementedError()
 
-    def unfilter_instance(self, instance_ref, network_info):
+    def unfilter_instance(self, instance_ref):
         """See comments of same method in firewall_driver."""
         pass
 
@@ -975,28 +850,10 @@ class HostState(object):
         return self._stats
 
     def update_status(self):
-        """Since under Xenserver, a compute node runs on a given host,
-        we can get host status information using xenapi.
         """
-#        data = {'vcpus': self.get_vcpu_total(),
-#               'memory_mb': self.get_memory_mb_total(),
-#               'local_gb': self.get_local_gb_total(),
-#               'vcpus_used': self.get_vcpu_used(),
-#               'memory_mb_used': self.get_memory_mb_used(),
-#               'local_gb_used': self.get_local_gb_used(),
-#               'hypervisor_type': self.get_hypervisor_type(),
-#               'hypervisor_version': self.get_hypervisor_version(),
-#               'cpu_info': self.get_cpu_info(),
-#               #RLK
-#               'cpu_arch': FLAGS.cpu_arch,
-#               'xpu_arch': FLAGS.xpu_arch,
-#               'xpus': FLAGS.xpus,
-#               'xpu_info': FLAGS.xpu_info,
-#               'net_arch': FLAGS.net_arch,
-#               'net_info': FLAGS.net_info,
-#               'net_mbps': FLAGS.net_mbps}
+        We can get host status information.
+        """
         LOG.debug(_("Updating host stats"))
-        #LOG.debug(_("Updating statistics!!"))
         connection = get_connection(self.read_only)
         data = {}
         data["vcpus"] = connection.get_vcpu_total()
@@ -1005,7 +862,6 @@ class HostState(object):
         data["cpu_arch"] = FLAGS.cpu_arch
         data["xpus"] = FLAGS.xpus
         data["xpu_arch"] = FLAGS.xpu_arch
-        #  data["xpus_used"] = 0
         data["xpu_info"] = FLAGS.xpu_info
         data["net_arch"] = FLAGS.net_arch
         data["net_info"] = FLAGS.net_info
