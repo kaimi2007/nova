@@ -87,6 +87,8 @@ class ProjectTestCase(test.TestCase):
             # as exceptions the same way nova-core is handled
             if contributor == '<hudson@kronos.east.isi.edu>':
                 continue
+            if contributor == '<do-not-email@isi.edu>':
+                continue
             if contributor == 'Server':
                 continue
             if not contributor in authors_file:
