@@ -436,3 +436,4 @@ DEFINE_bool('allow_resize_to_same_host', False,
 
 DEFINE_string('stub_network', False,
               'Stub network related code')
+DEFINE_string('user', 'root', 'default user within Openstack images.')
