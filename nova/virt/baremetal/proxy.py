@@ -308,38 +308,6 @@ class ProxyConnection(driver.ComputeDriver):
         timer.f = _wait_for_boot
         return timer.start(interval=0.5, now=True)
 
-    @exception.wrap_exception
-    def myspawn(self, context, instance, network_info,
-              block_device_info=None):
-        LOG.debug(_("<============= spawn of baremetal =============>")) 
-        xml_dict = self.to_xml_dict(instance, network_info)
-        self._create_image(context, instance, xml_dict,
-                           network_info=network_info,
-                           block_device_info=block_device_info)
-        LOG.debug(_("instance %s: is running"), instance['name'])
-
-        def basepath(fname='', suffix=''):
-            return os.path.join(FLAGS.instances_path,
-                                instance['name'],
-                                fname + suffix)
-        bpath = basepath(suffix='')
-        timer = utils.LoopingCall(f=None)
-
-        def _wait_for_boot():
-            try:
-                LOG.debug(_(xml_dict))
-                state = self._conn.create_domain(xml_dict, bpath)
-                LOG.debug(_('~~~~~~ current state = %s ~~~~~~'), state)
-                if state == power_state.RUNNING:
-                    LOG.debug(_('instance %s: booted'), instance['name'])
-                    timer.stop()
-            except:
-                LOG.exception(_('instance %s: failed to boot'),
-                              instance['name'])
-                timer.stop()
-        timer.f = _wait_for_boot
-        return timer.start(interval=0.5, now=True)
-
     def _flush_xen_console(self, virsh_output):
         raise NotImplementedError()
 
@@ -349,12 +317,11 @@ class ProxyConnection(driver.ComputeDriver):
         LOG.info(_('Contents of file %(fpath)s: %(contents)r') % locals())
         return contents
 
-    @exception.wrap_exception
     def get_console_output(self, instance):
         console_log = os.path.join(FLAGS.instances_path, instance['name'],
                                    'console.log')
 
-        utils.execute('sudo', 'chown', os.getuid(), console_log)
+        utils.execute('sudo', 'chown', os.getuid(), console_log, run_as_root=False)
 
         fd = self._conn.find_domain(instance['name'])
 
@@ -452,6 +419,7 @@ class ProxyConnection(driver.ComputeDriver):
                               context=context,
                               target=basepath('kernel'),
                               fname=fname,
+                              cow=False,
                               image_id=disk_images['kernel_id'],
                               user_id=inst['user_id'],
                               project_id=inst['project_id'])
@@ -461,6 +429,7 @@ class ProxyConnection(driver.ComputeDriver):
                                   context=context,
                                   target=basepath('ramdisk'),
                                   fname=fname,
+                                  cow=False,
                                   image_id=disk_images['ramdisk_id'],
                                   user_id=inst['user_id'],
                                   project_id=inst['project_id'])
