@@ -1,3 +1,4 @@
+import base64
 import multiprocessing
 import os
 import random
@@ -214,13 +215,20 @@ class BareMetalNodes(object):
         Sets network configuration
             based on the given ip_address and mac_address from nova
             so that user can access the bare-metal node using ssh
-        and Sets security setting (iptables:port) if needed
         """
         utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
             '--resume', '--net', node_ip, '--run', '-', \
             'ifconfig', 'xgbe0', 'hw', 'ether', mac_address, '-', \
             '--wait', '--run', '-', 'ifconfig', 'xgbe0', ip_address, \
             '-', '--wait', '--quit')
+
+    def iptables_set(self, node_ip, user_data):
+        """
+        Sets security setting (iptables:port) if needed
+        """
+        if user_data != '':
+            open_ip = base64.b64decode(user_data)
+            utils.execute('/tftpboot/iptables_rule', node_ip, open_ip)
         """utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
             '--resume', '--net', node_ip, '--run', '-', \
             'iptables', '-A', 'INPUT', '-p', 'tcp', '!', '-s', \
@@ -278,7 +286,7 @@ class BareMetalNodes(object):
             '/usr/sbin/sshd', '-', '--wait', '--quit')
 
     def activate_node(self, node_id, node_ip, name, mac_address, \
-                      ip_address):
+                      ip_address, user_data):
         """
         Activates the given node using ID, IP, and MAC address
         """
@@ -289,8 +297,9 @@ class BareMetalNodes(object):
         self.sleep_mgr(90)
 
         self.check_activated(node_id, node_ip)
-        self.ssh_set(node_ip)
         self.network_set(node_ip, mac_address, ip_address)
+        self.ssh_set(node_ip)
+        self.iptables_set(node_ip, user_data)
 
         return power_state.RUNNING
 

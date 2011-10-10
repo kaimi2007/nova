@@ -560,6 +560,7 @@ class ProxyConnection(driver.ComputeDriver):
                     'nics': nics,
                     'ip_address': mapping['ips'][0]['ip'],
                     'mac_address': mapping['mac'],
+                    'user_data': instance['user_data'],
                     'image_id': instance['image_ref'],
                     'kernel_id': instance['kernel_id'],
                     'ramdisk_id': instance['ramdisk_id']}
