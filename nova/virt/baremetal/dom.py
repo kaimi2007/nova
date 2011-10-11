@@ -241,7 +241,7 @@ class BareMetalDom(object):
         LOG.debug(_(self.domains))
         LOG.debug(_("-------"))
         LOG.debug(_(self.fp))
-        self.fp.seek(0)
+        #  self.fp.seek(0)
         pickle.dump(self.domains, self.fp)
         LOG.debug(_("after successful pickle.dump"))
 

@@ -178,7 +178,7 @@ class ProxyBareMetalTestCase(test.TestCase):
         fake_utils.stub_out_utils_execute(self.stubs)
 
     def test_get_info(self):
-        baremetal_xml_template = open(FLAGS.baremetal_xml_template)
+        baremetal_xml_template = open(FLAGS.libvirt_xml_template)
         try:
             self.mox.StubOutWithMock(__builtin__, 'open')
             open(mox.StrContains('baremetal.xml.template')).AndReturn(\
