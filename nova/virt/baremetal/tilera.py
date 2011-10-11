@@ -1,3 +1,4 @@
+import base64
 import multiprocessing
 import os
 import random
@@ -96,8 +97,7 @@ class BareMetalNodes(object):
                     'local_gb_used': int(l[self.LOCAL_GB_USED]),
                     'hypervisor_type': l[self.HYPERVISOR_TYPE],
                     'hypervisor_version': int(l[self.HYPERVISOR_VER]),
-                    'cpu_info': l[self.CPU_INFO]
-                  }
+                    'cpu_info': l[self.CPU_INFO]}
             self.nodes.append(l_d)
         fp.close()
 
@@ -215,13 +215,20 @@ class BareMetalNodes(object):
         Sets network configuration
             based on the given ip_address and mac_address from nova
             so that user can access the bare-metal node using ssh
-        and Sets security setting (iptables:port) if needed
         """
         utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
             '--resume', '--net', node_ip, '--run', '-', \
             'ifconfig', 'xgbe0', 'hw', 'ether', mac_address, '-', \
             '--wait', '--run', '-', 'ifconfig', 'xgbe0', ip_address, \
             '-', '--wait', '--quit')
+
+    def iptables_set(self, node_ip, user_data):
+        """
+        Sets security setting (iptables:port) if needed
+        """
+        if user_data != '':
+            open_ip = base64.b64decode(user_data)
+            utils.execute('/tftpboot/iptables_rule', node_ip, open_ip)
         """utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
             '--resume', '--net', node_ip, '--run', '-', \
             'iptables', '-A', 'INPUT', '-p', 'tcp', '!', '-s', \
@@ -232,18 +239,22 @@ class BareMetalNodes(object):
         """
         Checks whether the given node is activated or not
         """
-        """grep_cmd = "ls | grep bin >> tile_output"
-        utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
-                '--resume', '--net', node_ip, '--', grep_cmd)
-        file = open("./tile_output")
+        """tile_output = "/tftpboot/tile_output_" + str(node_id)
+        grep_cmd = "ping -c1 " + node_ip + " | grep Unreachable > " \
+                   + tile_output
+        subprocess.Popen(grep_cmd, shell=True)
+        file = open(tile_output)
         out_msg = file.readline()
-        utils.execute('rm', './tile_output')
+        utils.execute('sudo', 'rm', tile_output)
         file.close()
-        if out_msg.find("bin") < 0:
+        if out_msg.find("Unreachable") >= 0:
             cmd = "TILERA_BOARD_#" + str(node_id) + " " \
                 + node_ip + " is not ready, out_msg=" + out_msg
-            print cmd
-            return power_state.NOSTATE
+            LOG.debug(_(cmd))
+            self.power_mgr(node_id, 3)
+            cmd = "Rebooting board is being done... Please wait 90 secs more."
+            self.sleep_mgr(90)
+            LOG.debug(_(cmd))
         else:"""
         cmd = "TILERA_BOARD_#" + str(node_id) + " " + node_ip \
                 + " is ready"
@@ -252,6 +263,8 @@ class BareMetalNodes(object):
     def vmlinux_set(self, node_id, mode):
         """
         Sets kernel into default path (/tftpboot) if needed
+        in case of dummy image
+        from basepath to /tftpboot
             based on the given mode
             such as 0-NoSet, 1-SetVmlinux, 9-RemoveVmlinux
         """
@@ -273,7 +286,7 @@ class BareMetalNodes(object):
             '/usr/sbin/sshd', '-', '--wait', '--quit')
 
     def activate_node(self, node_id, node_ip, name, mac_address, \
-                      ip_address):
+                      ip_address, user_data):
         """
         Activates the given node using ID, IP, and MAC address
         """
@@ -284,8 +297,9 @@ class BareMetalNodes(object):
         self.sleep_mgr(90)
 
         self.check_activated(node_id, node_ip)
-        self.ssh_set(node_ip)
         self.network_set(node_ip, mac_address, ip_address)
+        self.ssh_set(node_ip)
+        self.iptables_set(node_ip, user_data)
 
         return power_state.RUNNING
 
@@ -305,8 +319,9 @@ class BareMetalNodes(object):
     def get_image(self, bp):
         """
         Gets the bare-metal file system image into the instance path
+        in case of dummy image
         """
-        path_fs = "/tftpboot/tilera_fs_5G"
+        path_fs = "/tftpboot/tilera_fs"
         path_root = bp + "/root"
         utils.execute('cp', path_fs, path_root)
 

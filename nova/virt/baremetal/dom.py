@@ -68,7 +68,7 @@ class BareMetalDom(object):
         self.fp = 0
         self.baremetal_nodes = nodes.get_baremetal_nodes()
 
-        utils.execute('rm', self.fake_dom_file)
+        #  utils.execute('sudo', 'rm', self.fake_dom_file)
         LOG.debug(_("open %s"), self.fake_dom_file)
         try:
             self.fp = open(self.fake_dom_file, "r+")
@@ -114,6 +114,7 @@ class BareMetalDom(object):
 
         LOG.debug(_("--> domains after reading"))
         LOG.debug(_(self.domains))
+        self.store_domain()
 
     def reboot_domain(self, name):
         """
@@ -133,10 +134,12 @@ class BareMetalDom(object):
             raise exception.NotFound("Failed power down \
                                       Bare-metal node %s" % fd['node_id'])
         self.change_domain_state(name, power_state.BUILDING)
+        self.store_domain()
         try:
             state = self.baremetal_nodes.activate_node(fd['node_id'], \
                 node_ip, name, fd['mac_address'], fd['ip_address'])
             self.change_domain_state(name, state)
+            self.store_domain()
             return state
         except:
             LOG.debug(_("deactivate -> activate fails"))
@@ -188,6 +191,7 @@ class BareMetalDom(object):
                     'memory_kb': xml_dict['memory_kb'], \
                     'vcpus': xml_dict['vcpus'], \
                     'mac_address': xml_dict['mac_address'], \
+                    'user_data': xml_dict['user_data'], \
                     'ip_address': xml_dict['ip_address'], \
                     'image_id': xml_dict['image_id'], \
                     'kernel_id': xml_dict['kernel_id'], \
@@ -196,13 +200,14 @@ class BareMetalDom(object):
         self.domains.append(new_dom)
         LOG.debug(_(new_dom))
         self.change_domain_state(new_dom['name'], power_state.BUILDING)
+        self.store_domain()
 
         self.baremetal_nodes.set_image(bpath, node_id)
 
         try:
             state = self.baremetal_nodes.activate_node(node_id,
                 node_ip, new_dom['name'], new_dom['mac_address'], \
-                new_dom['ip_address'])
+                new_dom['ip_address'], new_dom['user_data'])
         except:
             self.domains.remove(new_dom)
             self.baremetal_nodes.free_node(node_id)
@@ -211,6 +216,7 @@ class BareMetalDom(object):
 
         LOG.debug(_("BEFORE last self.change_domain_state +++++++++++++++++"))
         self.change_domain_state(new_dom['name'], state)
+        self.store_domain()
         return state
 
     def change_domain_state(self, name, state):

@@ -88,7 +88,12 @@ class BareMetalNodes(object):
         Sets network configuration
             based on the given ip_address and mac_address from nova
             so that user can access the bare-metal node using ssh
-        and Sets security setting (iptables:port) if needed
+        """
+        pass
+
+    def iptables_set(self, node_ip, user_data):
+        """
+        Sets security setting (iptables:port) if needed
         """
         pass
 
