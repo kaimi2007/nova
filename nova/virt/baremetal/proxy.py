@@ -46,8 +46,6 @@ import uuid
 from eventlet import greenthread
 from eventlet import tpool
 
-import IPy
-
 from nova import context as nova_context
 from nova import db
 from nova import exception
