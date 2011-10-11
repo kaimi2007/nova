@@ -31,7 +31,7 @@ LOG = logging.getLogger('nova.instance_types')
 
 
 def create(name, memory, vcpus, local_gb, flavorid, swap=0,
-           rxtx_quota=0, rxtx_cap=0):
+           rxtx_quota=0, rxtx_cap=0, extra_specs={}):
     """Creates instance types."""
     for option in [memory, vcpus, local_gb, flavorid]:
         try:
@@ -53,7 +53,8 @@ def create(name, memory, vcpus, local_gb, flavorid, swap=0,
                     flavorid=flavorid,
                     swap=swap,
                     rxtx_quota=rxtx_quota,
-                    rxtx_cap=rxtx_cap))
+                    rxtx_cap=rxtx_cap,
+                    extra_specs=extra_specs))
     except exception.DBError, e:
         LOG.exception(_('DB error: %s') % e)
         raise exception.ApiError(_("Cannot create instance_type with "
@@ -91,8 +92,12 @@ def get_all_types(inactive=0):
     Pass true as argument if you want deleted instance types returned also.
 
     """
-    return db.instance_type_get_all(context.get_admin_context(), inactive)
-
+    ctxt = context.get_admin_context()
+    inst_types = db.instance_type_get_all(ctxt, inactive)
+    inst_type_dict = {}
+    for inst_type in inst_types:
+        inst_type_dict[inst_type['name']] = inst_type
+    return inst_type_dict
 
 get_all_flavors = get_all_types
 
@@ -112,7 +117,7 @@ def get_instance_type(id):
         return get_default_instance_type()
     try:
         ctxt = context.get_admin_context()
-        return db.instance_type_get_by_id(ctxt, id)
+        return db.instance_type_get(ctxt, id)
     except exception.DBError:
         raise exception.ApiError(_("Unknown instance type: %s") % id)
 
@@ -132,11 +137,8 @@ def get_instance_type_by_name(name):
 #               flavors.
 def get_instance_type_by_flavor_id(flavor_id):
     """Retrieve instance type by flavor_id."""
-    if flavor_id is None:
-        return get_default_instance_type()
+    ctxt = context.get_admin_context()
     try:
-        ctxt = context.get_admin_context()
         return db.instance_type_get_by_flavor_id(ctxt, flavor_id)
-    except exception.DBError, e:
-        LOG.exception(_('DB error: %s') % e)
-        raise exception.ApiError(_("Unknown flavor: %s") % flavor_id)
+    except ValueError:
+        raise exception.FlavorNotFound(flavor_id=flavor_id)

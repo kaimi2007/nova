@@ -18,7 +18,6 @@
 import unittest
 import time
 
-from nova import flags
 from nova.log import logging
 from nova.tests.integrated import integrated_helpers
 from nova.tests.integrated.api import client
@@ -26,10 +25,6 @@ from nova.volume import driver
 
 
 LOG = logging.getLogger('nova.tests.integrated')
-
-
-FLAGS = flags.FLAGS
-FLAGS.verbose = True
 
 
 class VolumesTest(integrated_helpers._IntegratedTestBase):
@@ -142,6 +137,7 @@ class VolumesTest(integrated_helpers._IntegratedTestBase):
 
     def test_attach_and_detach_volume(self):
         """Creates, attaches, detaches and deletes a volume."""
+        self.flags(stub_network=True)
 
         # Create server
         server_req = {'server': self._build_minimal_create_server_request()}
@@ -290,6 +286,23 @@ class VolumesTest(integrated_helpers._IntegratedTestBase):
         self.assertEquals(undisco_move['mountpoint'], device)
         self.assertEquals(undisco_move['instance_id'], server_id)
 
+    def test_create_volume_with_metadata(self):
+        """Creates and deletes a volume."""
+
+        # Create volume
+        metadata = {'key1': 'value1',
+                    'key2': 'value2'}
+        created_volume = self.api.post_volume(
+            {'volume': {'size': 1,
+                        'metadata': metadata}})
+        LOG.debug("created_volume: %s" % created_volume)
+        self.assertTrue(created_volume['id'])
+        created_volume_id = created_volume['id']
+
+        # Check it's there and metadata present
+        found_volume = self.api.get_volume(created_volume_id)
+        self.assertEqual(created_volume_id, found_volume['id'])
+        self.assertEqual(metadata, found_volume['metadata'])
 
 if __name__ == "__main__":
     unittest.main()

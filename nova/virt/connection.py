@@ -31,7 +31,6 @@ from nova.virt import vmwareapi_conn
 from nova.virt import xenapi_conn
 from nova.virt.libvirt import connection as libvirt_conn
 
-
 LOG = logging.getLogger("nova.virt.connection")
 FLAGS = flags.FLAGS
 
@@ -64,9 +63,10 @@ def get_connection(read_only=False):
     # TODO(termie): maybe lazy load after initial check for permissions
     # TODO(termie): check whether we can be disconnected
     t = FLAGS.connection_type
+#    t = connection_type
     if t == 'fake':
         conn = fake.get_connection(read_only)
-    elif t == 'libvirt':
+    elif t == 'libvirt' or t == 'gpu':
         conn = libvirt_conn.get_connection(read_only)
     elif t == 'xenapi':
         conn = xenapi_conn.get_connection(read_only)

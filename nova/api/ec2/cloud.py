@@ -25,11 +25,13 @@ datastore.
 import base64
 import netaddr
 import os
-import urllib
+import re
+import shutil
 import tempfile
 import time
-import shutil
+import urllib
 
+from nova import block_device
 from nova import compute
 from nova import context
 
@@ -45,10 +47,12 @@ from nova import utils
 from nova import volume
 from nova.api.ec2 import ec2utils
 from nova.compute import instance_types
+from nova.compute import vm_states
 from nova.image import s3
 
 
 FLAGS = flags.FLAGS
+flags.DECLARE('dhcp_domain', 'nova.network.manager')
 flags.DECLARE('service_down_time', 'nova.scheduler.driver')
 
 LOG = logging.getLogger("nova.api.cloud")
@@ -76,8 +80,37 @@ def _gen_key(context, user_id, key_name):
     return {'private_key': private_key, 'fingerprint': fingerprint}
 
 
+# EC2 API can return the following values as documented in the EC2 API
+# http://docs.amazonwebservices.com/AWSEC2/latest/APIReference/
+#    ApiReference-ItemType-InstanceStateType.html
+# pending | running | shutting-down | terminated | stopping | stopped
+_STATE_DESCRIPTION_MAP = {
+    None: 'pending',
+    vm_states.ACTIVE: 'running',
+    vm_states.BUILDING: 'pending',
+    vm_states.REBUILDING: 'pending',
+    vm_states.DELETED: 'terminated',
+    vm_states.SOFT_DELETE: 'terminated',
+    vm_states.STOPPED: 'stopped',
+    vm_states.MIGRATING: 'migrate',
+    vm_states.RESIZING: 'resize',
+    vm_states.PAUSED: 'pause',
+    vm_states.SUSPENDED: 'suspend',
+    vm_states.RESCUED: 'rescue',
+}
+
+
+def state_description_from_vm_state(vm_state):
+    """Map the vm state to the server status string"""
+    return _STATE_DESCRIPTION_MAP.get(vm_state, vm_state)
+
+
 # TODO(yamahata): hypervisor dependent default device name
 _DEFAULT_ROOT_DEVICE_NAME = '/dev/sda1'
+_DEFAULT_MAPPINGS = {'ami': 'sda1',
+                     'ephemeral0': 'sda2',
+                     'root': _DEFAULT_ROOT_DEVICE_NAME,
+                     'swap': 'sda3'}
 
 
 def _parse_block_device_mapping(bdm):
@@ -105,7 +138,7 @@ def _parse_block_device_mapping(bdm):
 
 
 def _properties_get_mappings(properties):
-    return ec2utils.mappings_prepend_dev(properties.get('mappings', []))
+    return block_device.mappings_prepend_dev(properties.get('mappings', []))
 
 
 def _format_block_device_mapping(bdm):
@@ -144,8 +177,7 @@ def _format_mappings(properties, result):
     """Format multiple BlockDeviceMappingItemType"""
     mappings = [{'virtualName': m['virtual'], 'deviceName': m['device']}
                 for m in _properties_get_mappings(properties)
-                if (m['virtual'] == 'swap' or
-                    m['virtual'].startswith('ephemeral'))]
+                if block_device.is_swap_or_ephemeral(m['virtual'])]
 
     block_device_mapping = [_format_block_device_mapping(bdm) for bdm in
                             properties.get('block_device_mapping', [])]
@@ -206,13 +238,58 @@ class CloudController(object):
             utils.runthis(_("Generating root CA: %s"), "sh", genrootca_sh_path)
             os.chdir(start)
 
+    def _get_floaters_for_fixed_ip(self, context, fixed_ip):
+        """Return all floating IPs given a fixed IP"""
+        return self.network_api.get_floating_ips_by_fixed_address(context,
+                fixed_ip)
+
+    def _get_fixed_ips_for_instance(self, context, instance):
+        """Return a list of all fixed IPs for an instance"""
+
+        ret_ips = []
+        ret_ip6s = []
+        nw_info = self.network_api.get_instance_nw_info(context, instance)
+        for net, info in nw_info:
+            if not info:
+                continue
+            ips = info.get('ips', [])
+            for ip in ips:
+                try:
+                    ret_ips.append(ip['ip'])
+                except KeyError:
+                    pass
+            if FLAGS.use_ipv6:
+                ip6s = info.get('ip6s', [])
+                for ip6 in ip6s:
+                    try:
+                        ret_ip6s.append(ip6['ip'])
+                    except KeyError:
+                        pass
+        return (ret_ips, ret_ip6s)
+
+    def _get_floaters_for_instance(self, context, instance, return_all=True):
+        """Return all floating IPs for an instance"""
+
+        ret_floaters = []
+        fixed_ips = self._get_fixed_ips_for_instance(context, instance)
+        for ip in fixed_ips:
+            floaters = self._get_floaters_for_fixed_ip(context, ip)
+            # Allows a short circuit if we just need any floater.
+            if floaters and not return_all:
+                return floaters
+            ret_floaters.extend(floaters)
+            if floaters and only_one:
+                return ret_floaters
+        return ret_floaters
+
     def _get_mpi_data(self, context, project_id):
         result = {}
+        search_opts = {'project_id': project_id}
         for instance in self.compute_api.get_all(context,
-                                                 project_id=project_id):
-            if instance['fixed_ips']:
-                line = '%s slots=%d' % (instance['fixed_ips'][0]['address'],
-                                        instance['vcpus'])
+                search_opts=search_opts):
+            fixed_ips = self._get_fixed_ips_for_instance(context, instance)[0]
+            if fixed_ips:
+                line = '%s slots=%d' % (fixed_ips[0], instance['vcpus'])
                 key = str(instance['key_name'])
                 if key in result:
                     result[key].append(line)
@@ -233,10 +310,61 @@ class CloudController(object):
             state = 'available'
         return image['properties'].get('image_state', state)
 
+    def _format_instance_mapping(self, ctxt, instance_ref):
+        root_device_name = instance_ref['root_device_name']
+        if root_device_name is None:
+            return _DEFAULT_MAPPINGS
+
+        mappings = {}
+        mappings['ami'] = block_device.strip_dev(root_device_name)
+        mappings['root'] = root_device_name
+        default_local_device = instance_ref.get('default_local_device')
+        if default_local_device:
+            mappings['ephemeral0'] = default_local_device
+        default_swap_device = instance_ref.get('default_swap_device')
+        if default_swap_device:
+            mappings['swap'] = default_swap_device
+        ebs_devices = []
+
+        # 'ephemeralN', 'swap' and ebs
+        for bdm in db.block_device_mapping_get_all_by_instance(
+            ctxt, instance_ref['id']):
+            if bdm['no_device']:
+                continue
+
+            # ebs volume case
+            if (bdm['volume_id'] or bdm['snapshot_id']):
+                ebs_devices.append(bdm['device_name'])
+                continue
+
+            virtual_name = bdm['virtual_name']
+            if not virtual_name:
+                continue
+
+            if block_device.is_swap_or_ephemeral(virtual_name):
+                mappings[virtual_name] = bdm['device_name']
+
+        # NOTE(yamahata): I'm not sure how ebs device should be numbered.
+        #                 Right now sort by device name for deterministic
+        #                 result.
+        if ebs_devices:
+            nebs = 0
+            ebs_devices.sort()
+            for ebs in ebs_devices:
+                mappings['ebs%d' % nebs] = ebs
+                nebs += 1
+
+        return mappings
+
     def get_metadata(self, address):
         ctxt = context.get_admin_context()
-        instance_ref = self.compute_api.get_all(ctxt, fixed_ip=address)
-        if instance_ref is None:
+        search_opts = {'fixed_ip': address}
+        try:
+            instance_ref = self.compute_api.get_all(ctxt,
+                    search_opts=search_opts)
+        except exception.NotFound:
+            instance_ref = None
+        if not instance_ref:
             return None
 
         # This ensures that all attributes of the instance
@@ -244,46 +372,45 @@ class CloudController(object):
         instance_ref = db.instance_get(ctxt, instance_ref[0]['id'])
 
         mpi = self._get_mpi_data(ctxt, instance_ref['project_id'])
-        if instance_ref['key_name']:
-            keys = {'0': {'_name': instance_ref['key_name'],
-                          'openssh-key': instance_ref['key_data']}}
-        else:
-            keys = ''
-        hostname = instance_ref['hostname']
+        hostname = "%s.%s" % (instance_ref['hostname'], FLAGS.dhcp_domain)
         host = instance_ref['host']
         availability_zone = self._get_availability_zone_by_host(ctxt, host)
-        floating_ip = db.instance_get_floating_address(ctxt,
-                                                       instance_ref['id'])
+
+        floaters = self._get_floaters_for_instance(ctxt, instance_ref,
+                return_all=False)
+        floating_ip = floaters and floaters[0] or ''
+
         ec2_id = ec2utils.id_to_ec2_id(instance_ref['id'])
         image_ec2_id = self.image_ec2_id(instance_ref['image_ref'])
         security_groups = db.security_group_get_by_instance(ctxt,
                                                             instance_ref['id'])
         security_groups = [x['name'] for x in security_groups]
+        mappings = self._format_instance_mapping(ctxt, instance_ref)
         data = {
-            'user-data': base64.b64decode(instance_ref['user_data']),
+            'user-data': self._format_user_data(instance_ref),
             'meta-data': {
                 'ami-id': image_ec2_id,
                 'ami-launch-index': instance_ref['launch_index'],
                 'ami-manifest-path': 'FIXME',
-                'block-device-mapping': {
-                    # TODO(vish): replace with real data
-                    'ami': 'sda1',
-                    'ephemeral0': 'sda2',
-                    'root': _DEFAULT_ROOT_DEVICE_NAME,
-                    'swap': 'sda3'},
+                'block-device-mapping': mappings,
                 'hostname': hostname,
                 'instance-action': 'none',
                 'instance-id': ec2_id,
-                'instance-type': instance_ref['instance_type'],
+                'instance-type': instance_ref['instance_type']['name'],
                 'local-hostname': hostname,
                 'local-ipv4': address,
                 'placement': {'availability-zone': availability_zone},
                 'public-hostname': hostname,
-                'public-ipv4': floating_ip or '',
-                'public-keys': keys,
+                'public-ipv4': floating_ip,
                 'reservation-id': instance_ref['reservation_id'],
                 'security-groups': security_groups,
                 'mpi': mpi}}
+
+        # public-keys should be in meta-data only if user specified one
+        if instance_ref['key_name']:
+            data['meta-data']['public-keys'] = {
+                '0': {'_name': instance_ref['key_name'],
+                      'openssh-key': instance_ref['key_data']}}
 
         for image_type in ['kernel', 'ramdisk']:
             if instance_ref.get('%s_id' % image_type):
@@ -516,21 +643,82 @@ class CloudController(object):
         g['ipPermissions'] = []
         for rule in group.rules:
             r = {}
-            r['ipProtocol'] = rule.protocol
-            r['fromPort'] = rule.from_port
-            r['toPort'] = rule.to_port
             r['groups'] = []
             r['ipRanges'] = []
             if rule.group_id:
                 source_group = db.security_group_get(context, rule.group_id)
                 r['groups'] += [{'groupName': source_group.name,
                                  'userId': source_group.project_id}]
+                if rule.protocol:
+                    r['ipProtocol'] = rule.protocol
+                    r['fromPort'] = rule.from_port
+                    r['toPort'] = rule.to_port
+                    g['ipPermissions'] += [dict(r)]
+                else:
+                    for protocol, min_port, max_port in (('icmp', -1, -1),
+                                                         ('tcp', 1, 65535),
+                                                         ('udp', 1, 65536)):
+                        r['ipProtocol'] = protocol
+                        r['fromPort'] = min_port
+                        r['toPort'] = max_port
+                        g['ipPermissions'] += [dict(r)]
             else:
+                r['ipProtocol'] = rule.protocol
+                r['fromPort'] = rule.from_port
+                r['toPort'] = rule.to_port
                 r['ipRanges'] += [{'cidrIp': rule.cidr}]
-            g['ipPermissions'] += [r]
+                g['ipPermissions'] += [r]
         return g
 
-    def _revoke_rule_args_to_dict(self, context, to_port=None, from_port=None,
+    def _rule_args_to_dict(self, context, kwargs):
+        rules = []
+        if not 'groups' in kwargs and not 'ip_ranges' in kwargs:
+            rule = self._rule_dict_last_step(context, **kwargs)
+            if rule:
+                rules.append(rule)
+            return rules
+        if 'ip_ranges' in kwargs:
+            rules = self._cidr_args_split(kwargs)
+        else:
+            rules = [kwargs]
+        finalset = []
+        for rule in rules:
+            if 'groups' in rule:
+                groups_values = self._groups_args_split(rule)
+                for groups_value in groups_values:
+                    final = self._rule_dict_last_step(context, **groups_value)
+                    finalset.append(final)
+            else:
+                final = self._rule_dict_last_step(context, **rule)
+                finalset.append(final)
+        return finalset
+
+    def _cidr_args_split(self, kwargs):
+        cidr_args_split = []
+        cidrs = kwargs['ip_ranges']
+        for key, cidr in cidrs.iteritems():
+            mykwargs = kwargs.copy()
+            del mykwargs['ip_ranges']
+            mykwargs['cidr_ip'] = cidr['cidr_ip']
+            cidr_args_split.append(mykwargs)
+        return cidr_args_split
+
+    def _groups_args_split(self, kwargs):
+        groups_args_split = []
+        groups = kwargs['groups']
+        for key, group in groups.iteritems():
+            mykwargs = kwargs.copy()
+            del mykwargs['groups']
+            if 'group_name' in group:
+                mykwargs['source_security_group_name'] = group['group_name']
+            if 'user_id' in group:
+                mykwargs['source_security_group_owner_id'] = group['user_id']
+            if 'group_id' in group:
+                mykwargs['source_security_group_id'] = group['group_id']
+            groups_args_split.append(mykwargs)
+        return groups_args_split
+
+    def _rule_dict_last_step(self, context, to_port=None, from_port=None,
                                   ip_protocol=None, cidr_ip=None, user_id=None,
                                   source_security_group_name=None,
                                   source_security_group_owner_id=None):
@@ -545,6 +733,9 @@ class CloudController(object):
                     db.security_group_get_by_name(context.elevated(),
                                                   source_project_id,
                                                   source_security_group_name)
+            notfound = exception.SecurityGroupNotFound
+            if not source_security_group:
+                raise notfound(security_group_id=source_security_group_name)
             values['group_id'] = source_security_group['id']
         elif cidr_ip:
             # If this fails, it throws an exception. This is what we want.
@@ -583,7 +774,7 @@ class CloudController(object):
         for rule in security_group.rules:
             if 'group_id' in values:
                 if rule['group_id'] == values['group_id']:
-                    return True
+                    return rule['id']
             else:
                 is_duplicate = True
                 for key in ('cidr', 'from_port', 'to_port', 'protocol'):
@@ -591,7 +782,7 @@ class CloudController(object):
                         is_duplicate = False
                         break
                 if is_duplicate:
-                    return True
+                    return rule['id']
         return False
 
     def revoke_security_group_ingress(self, context, group_name=None,
@@ -614,22 +805,30 @@ class CloudController(object):
 
         msg = "Revoke security group ingress %s"
         LOG.audit(_(msg), security_group['name'], context=context)
+        prevalues = []
+        try:
+            prevalues = kwargs['ip_permissions']
+        except KeyError:
+            prevalues.append(kwargs)
+        rule_id = None
+        for values in prevalues:
+            rulesvalues = self._rule_args_to_dict(context, values)
+            if not rulesvalues:
+                err = "%s Not enough parameters to build a valid rule"
+                raise exception.ApiError(_(err % rulesvalues))
 
-        criteria = self._revoke_rule_args_to_dict(context, **kwargs)
-        if criteria is None:
-            raise exception.ApiError(_("Not enough parameters to build a "
-                                       "valid rule."))
-
-        for rule in security_group.rules:
-            match = True
-            for (k, v) in criteria.iteritems():
-                if getattr(rule, k, False) != v:
-                    match = False
-            if match:
-                db.security_group_rule_destroy(context, rule['id'])
-                self.compute_api.trigger_security_group_rules_refresh(context,
-                                        security_group_id=security_group['id'])
-                return True
+            for values_for_rule in rulesvalues:
+                values_for_rule['parent_group_id'] = security_group.id
+                rule_id = self._security_group_rule_exists(security_group,
+                                                           values_for_rule)
+                if rule_id:
+                    db.security_group_rule_destroy(context, rule_id)
+        if rule_id:
+            # NOTE(vish): we removed a rule, so refresh
+            self.compute_api.trigger_security_group_rules_refresh(
+                    context,
+                    security_group_id=security_group['id'])
+            return True
         raise exception.ApiError(_("No rule for the specified parameters."))
 
     # TODO(soren): This has only been tested with Boto as the client.
@@ -656,22 +855,37 @@ class CloudController(object):
 
         msg = "Authorize security group ingress %s"
         LOG.audit(_(msg), security_group['name'], context=context)
-        values = self._revoke_rule_args_to_dict(context, **kwargs)
-        if values is None:
-            raise exception.ApiError(_("Not enough parameters to build a "
-                                       "valid rule."))
-        values['parent_group_id'] = security_group.id
+        prevalues = []
+        try:
+            prevalues = kwargs['ip_permissions']
+        except KeyError:
+            prevalues.append(kwargs)
+        postvalues = []
+        for values in prevalues:
+            rulesvalues = self._rule_args_to_dict(context, values)
+            if not rulesvalues:
+                err = "%s Not enough parameters to build a valid rule"
+                raise exception.ApiError(_(err % rulesvalues))
+            for values_for_rule in rulesvalues:
+                values_for_rule['parent_group_id'] = security_group.id
+                if self._security_group_rule_exists(security_group,
+                                                    values_for_rule):
+                    err = '%s - This rule already exists in group'
+                    raise exception.ApiError(_(err) % values_for_rule)
+                postvalues.append(values_for_rule)
 
-        if self._security_group_rule_exists(security_group, values):
-            raise exception.ApiError(_('This rule already exists in group %s')
-                                     % group_name)
+        for values_for_rule in postvalues:
+            security_group_rule = db.security_group_rule_create(
+                    context,
+                    values_for_rule)
 
-        security_group_rule = db.security_group_rule_create(context, values)
+        if postvalues:
+            self.compute_api.trigger_security_group_rules_refresh(
+                    context,
+                    security_group_id=security_group['id'])
+            return True
 
-        self.compute_api.trigger_security_group_rules_refresh(context,
-                                      security_group_id=security_group['id'])
-
-        return True
+        raise exception.ApiError(_("No rule for the specified parameters."))
 
     def _get_source_project_id(self, context, source_security_group_owner_id):
         if source_security_group_owner_id:
@@ -691,6 +905,22 @@ class CloudController(object):
         return source_project_id
 
     def create_security_group(self, context, group_name, group_description):
+        if not re.match('^[a-zA-Z0-9_\- ]+$', str(group_name)):
+            # Some validation to ensure that values match API spec.
+            # - Alphanumeric characters, spaces, dashes, and underscores.
+            # TODO(Daviey): LP: #813685 extend beyond group_name checking, and
+            #  probably create a param validator that can be used elsewhere.
+            err = _("Value (%s) for parameter GroupName is invalid."
+                    " Content limited to Alphanumeric characters, "
+                    "spaces, dashes, and underscores.") % group_name
+            # err not that of master ec2 implementation, as they fail to raise.
+            raise exception.InvalidParameterValue(err=err)
+
+        if len(str(group_name)) > 255:
+            err = _("Value (%s) for parameter GroupName is invalid."
+                    " Length exceeds maximum of 255.") % group_name
+            raise exception.InvalidParameterValue(err=err)
+
         LOG.audit(_("Create Security Group %s"), group_name, context=context)
         self.compute_api.ensure_default_security_group(context)
         if db.security_group_exists(context, context.project_id, group_name):
@@ -874,19 +1104,106 @@ class CloudController(object):
                 'status': volume['attach_status'],
                 'volumeId': ec2utils.id_to_ec2_vol_id(volume_id)}
 
-    def _convert_to_set(self, lst, label):
-        if lst is None or lst == []:
-            return None
-        if not isinstance(lst, list):
-            lst = [lst]
-        return [{label: x} for x in lst]
+    def _format_kernel_id(self, instance_ref, result, key):
+        kernel_id = instance_ref['kernel_id']
+        if kernel_id is None:
+            return
+        result[key] = self.image_ec2_id(instance_ref['kernel_id'], 'aki')
+
+    def _format_ramdisk_id(self, instance_ref, result, key):
+        ramdisk_id = instance_ref['ramdisk_id']
+        if ramdisk_id is None:
+            return
+        result[key] = self.image_ec2_id(instance_ref['ramdisk_id'], 'ari')
+
+    @staticmethod
+    def _format_user_data(instance_ref):
+        return base64.b64decode(instance_ref['user_data'])
+
+    def describe_instance_attribute(self, context, instance_id, attribute,
+                                    **kwargs):
+        def _unsupported_attribute(instance, result):
+            raise exception.ApiError(_('attribute not supported: %s') %
+                                     attribute)
+
+        def _format_attr_block_device_mapping(instance, result):
+            tmp = {}
+            self._format_instance_root_device_name(instance, tmp)
+            self._format_instance_bdm(context, instance_id,
+                                      tmp['rootDeviceName'], result)
+
+        def _format_attr_disable_api_termination(instance, result):
+            _unsupported_attribute(instance, result)
+
+        def _format_attr_group_set(instance, result):
+            CloudController._format_group_set(instance, result)
+
+        def _format_attr_instance_initiated_shutdown_behavior(instance,
+                                                               result):
+            vm_state = instance['vm_state']
+            state_to_value = {
+                vm_states.STOPPED: 'stopped',
+                vm_states.DELETED: 'terminated',
+            }
+            value = state_to_value.get(vm_state)
+            if value:
+                result['instanceInitiatedShutdownBehavior'] = value
+
+        def _format_attr_instance_type(instance, result):
+            self._format_instance_type(instance, result)
+
+        def _format_attr_kernel(instance, result):
+            self._format_kernel_id(instance, result, 'kernel')
+
+        def _format_attr_ramdisk(instance, result):
+            self._format_ramdisk_id(instance, result, 'ramdisk')
+
+        def _format_attr_root_device_name(instance, result):
+            self._format_instance_root_device_name(instance, result)
+
+        def _format_attr_source_dest_check(instance, result):
+            _unsupported_attribute(instance, result)
+
+        def _format_attr_user_data(instance, result):
+            result['userData'] = self._format_user_data(instance)
+
+        attribute_formatter = {
+            'blockDeviceMapping': _format_attr_block_device_mapping,
+            'disableApiTermination': _format_attr_disable_api_termination,
+            'groupSet': _format_attr_group_set,
+            'instanceInitiatedShutdownBehavior':
+            _format_attr_instance_initiated_shutdown_behavior,
+            'instanceType': _format_attr_instance_type,
+            'kernel': _format_attr_kernel,
+            'ramdisk': _format_attr_ramdisk,
+            'rootDeviceName': _format_attr_root_device_name,
+            'sourceDestCheck': _format_attr_source_dest_check,
+            'userData': _format_attr_user_data,
+            }
+
+        fn = attribute_formatter.get(attribute)
+        if fn is None:
+            raise exception.ApiError(
+                _('attribute not supported: %s') % attribute)
+
+        ec2_instance_id = instance_id
+        instance_id = ec2utils.ec2_id_to_id(ec2_instance_id)
+        instance = self.compute_api.get(context, instance_id)
+        result = {'instance_id': ec2_instance_id}
+        fn(instance, result)
+        return result
 
     def describe_instances(self, context, **kwargs):
-        return self._format_describe_instances(context, **kwargs)
+        # Optional DescribeInstances argument
+        instance_id = kwargs.get('instance_id', None)
+        return self._format_describe_instances(context,
+                instance_id=instance_id)
 
     def describe_instances_v6(self, context, **kwargs):
-        kwargs['use_v6'] = True
-        return self._format_describe_instances(context, **kwargs)
+        # Optional DescribeInstancesV6 argument
+        instance_id = kwargs.get('instance_id', None)
+        return self._format_describe_instances(context,
+                instance_id=instance_id, use_v6=True)
 
     def _format_describe_instances(self, context, **kwargs):
         return {'reservationSet': self._format_instances(context, **kwargs)}
@@ -927,7 +1244,29 @@ class CloudController(object):
             result['blockDeviceMapping'] = mapping
         result['rootDeviceType'] = root_device_type
 
-    def _format_instances(self, context, instance_id=None, **kwargs):
+    @staticmethod
+    def _format_instance_root_device_name(instance, result):
+        result['rootDeviceName'] = (instance.get('root_device_name') or
+                                    _DEFAULT_ROOT_DEVICE_NAME)
+
+    @staticmethod
+    def _format_instance_type(instance, result):
+        if instance['instance_type']:
+            result['instanceType'] = instance['instance_type'].get('name')
+        else:
+            result['instanceType'] = None
+
+    @staticmethod
+    def _format_group_set(instance, result):
+        security_group_names = []
+        if instance.get('security_groups'):
+            for security_group in instance['security_groups']:
+                security_group_names.append(security_group['name'])
+        result['groupSet'] = utils.convert_to_list_dict(
+            security_group_names, 'groupId')
+
+    def _format_instances(self, context, instance_id=None, use_v6=False,
+            **search_opts):
         # TODO(termie): this method is poorly named as its name does not imply
         #               that it will be making a variety of database calls
         #               rather than simply formatting a bunch of instances that
@@ -938,11 +1277,19 @@ class CloudController(object):
             instances = []
             for ec2_id in instance_id:
                 internal_id = ec2utils.ec2_id_to_id(ec2_id)
-                instance = self.compute_api.get(context,
-                                                instance_id=internal_id)
+                try:
+                    instance = self.compute_api.get(context, internal_id)
+                except exception.NotFound:
+                    continue
                 instances.append(instance)
         else:
-            instances = self.compute_api.get_all(context, **kwargs)
+            try:
+                # always filter out deleted instances
+                search_opts['deleted'] = False
+                instances = self.compute_api.get_all(context,
+                                                     search_opts=search_opts)
+            except exception.NotFound:
+                instances = []
         for instance in instances:
             if not context.is_admin:
                 if instance['image_ref'] == str(FLAGS.vpn_image_id):
@@ -952,26 +1299,32 @@ class CloudController(object):
             ec2_id = ec2utils.id_to_ec2_id(instance_id)
             i['instanceId'] = ec2_id
             i['imageId'] = self.image_ec2_id(instance['image_ref'])
+            self._format_kernel_id(instance, i, 'kernelId')
+            self._format_ramdisk_id(instance, i, 'ramdiskId')
             i['instanceState'] = {
-                'code': instance['state'],
-                'name': instance['state_description']}
-            fixed_addr = None
-            floating_addr = None
-            if instance['fixed_ips']:
-                fixed = instance['fixed_ips'][0]
-                fixed_addr = fixed['address']
-                if fixed['floating_ips']:
-                    floating_addr = fixed['floating_ips'][0]['address']
-                if fixed['network'] and 'use_v6' in kwargs:
-                    i['dnsNameV6'] = ipv6.to_global(
-                        fixed['network']['cidr_v6'],
-                        fixed['virtual_interface']['address'],
-                        instance['project_id'])
+                'code': instance['power_state'],
+                'name': state_description_from_vm_state(instance['vm_state'])}
 
-            i['privateDnsName'] = fixed_addr
-            i['privateIpAddress'] = fixed_addr
-            i['publicDnsName'] = floating_addr
-            i['ipAddress'] = floating_addr or fixed_addr
+            fixed_ip = None
+            floating_ip = None
+            (fixed_ips, fixed_ip6s) = self._get_fixed_ips_for_instance(context,
+                    instance)
+            if fixed_ips:
+                fixed_ip = fixed_ips[0]
+                # Now look for a floater.
+                for ip in fixed_ips:
+                    floating_ips = self._get_floaters_for_fixed_ip(context, ip)
+                    # NOTE(comstud): Will it float?
+                    if floating_ips:
+                        floating_ip = floating_ips[0]
+                        # Got one, exit out.
+                        break
+            if fixed_ip6s:
+                i['dnsNameV6'] = fixed_ip6s[0]
+            i['privateDnsName'] = fixed_ip
+            i['privateIpAddress'] = fixed_ip
+            i['publicDnsName'] = floating_ip
+            i['ipAddress'] = floating_ip or fixed_ip
             i['dnsName'] = i['publicDnsName'] or i['privateDnsName']
             i['keyName'] = instance['key_name']
 
@@ -979,17 +1332,14 @@ class CloudController(object):
                 i['keyName'] = '%s (%s, %s)' % (i['keyName'],
                     instance['project_id'],
                     instance['host'])
-            i['productCodesSet'] = self._convert_to_set([], 'product_codes')
-            if instance['instance_type']:
-                i['instanceType'] = instance['instance_type'].get('name')
-            else:
-                i['instanceType'] = None
+            i['productCodesSet'] = utils.convert_to_list_dict([],
+                                                              'product_codes')
+            self._format_instance_type(instance, i)
             i['launchTime'] = instance['created_at']
             i['amiLaunchIndex'] = instance['launch_index']
             i['displayName'] = instance['display_name']
             i['displayDescription'] = instance['display_description']
-            i['rootDeviceName'] = (instance.get('root_device_name') or
-                                   _DEFAULT_ROOT_DEVICE_NAME)
+            self._format_instance_root_device_name(instance, i)
             self._format_instance_bdm(context, instance_id,
                                       i['rootDeviceName'], i)
             host = instance['host']
@@ -999,12 +1349,7 @@ class CloudController(object):
                 r = {}
                 r['reservationId'] = instance['reservation_id']
                 r['ownerId'] = instance['project_id']
-                security_group_names = []
-                if instance.get('security_groups'):
-                    for security_group in instance['security_groups']:
-                        security_group_names.append(security_group['name'])
-                r['groupSet'] = self._convert_to_set(security_group_names,
-                                                     'groupId')
+                self._format_group_set(instance, r)
                 r['instancesSet'] = []
                 reservations[instance['reservation_id']] = r
             reservations[instance['reservation_id']]['instancesSet'].append(i)
@@ -1072,6 +1417,16 @@ class CloudController(object):
 
     def run_instances(self, context, **kwargs):
         max_count = int(kwargs.get('max_count', 1))
+        metadata = {}
+        LOG.debug(_('run instance with extra feature'))
+        extended_arg = kwargs.get('instance_type', None)
+        instance_type = None
+        if extended_arg is not None:
+            extra_features = extended_arg.rsplit(';')
+            instance_type = extra_features.pop(0)
+            for feature in extra_features:
+                feature = feature.rsplit('=')
+                metadata[feature[0].strip()] = feature[1].strip()
         if kwargs.get('kernel_id'):
             kernel = self._get_image(context, kwargs['kernel_id'])
             kwargs['kernel_id'] = kernel['id']
@@ -1091,9 +1446,9 @@ class CloudController(object):
         if image_state != 'available':
             raise exception.ApiError(_('Image must be available'))
 
-        instances = self.compute_api.create(context,
+        (instances, resv_id) = self.compute_api.create(context,
             instance_type=instance_types.get_instance_type_by_name(
-                kwargs.get('instance_type', None)),
+                instance_type),
             image_href=self._get_image(context, kwargs['image_id'])['id'],
             min_count=int(kwargs.get('min_count', max_count)),
             max_count=max_count,
@@ -1104,11 +1459,14 @@ class CloudController(object):
             key_name=kwargs.get('key_name'),
             user_data=kwargs.get('user_data'),
             security_group=kwargs.get('security_group'),
+            metadata=metadata,
             availability_zone=kwargs.get('placement', {}).get(
                                   'AvailabilityZone'),
-            block_device_mapping=kwargs.get('block_device_mapping', {}))
-        return self._format_run_instances(context,
-                                          instances[0]['reservation_id'])
+            block_device_mapping=kwargs.get('block_device_mapping', {}),
+            # NOTE(comstud): Unfortunately, EC2 requires that the
+            # instance DB entries have been created..
+            wait_for_instances=True)
+        return self._format_run_instances(context, resv_id)
 
     def _do_instance(self, action, context, ec2_id):
         instance_id = ec2utils.ec2_id_to_id(ec2_id)
@@ -1147,7 +1505,7 @@ class CloudController(object):
 
     def rescue_instance(self, context, instance_id, **kwargs):
         """This is an extension to the normal ec2_api"""
-        self._do_instance(self.compute_api.rescue, contect, instnace_id)
+        self._do_instance(self.compute_api.rescue, context, instance_id)
         return True
 
     def unrescue_instance(self, context, instance_id, **kwargs):
@@ -1210,7 +1568,7 @@ class CloudController(object):
         return image
 
     def _format_image(self, image):
-        """Convert from format defined by BaseImageService to S3 format."""
+        """Convert from format defined by GlanceImageService to S3 format."""
         i = {}
         image_type = self._image_type(image.get('container_format'))
         ec2_id = self.image_ec2_id(image.get('id'), image_type)
@@ -1240,7 +1598,7 @@ class CloudController(object):
         i['architecture'] = image['properties'].get('architecture')
 
         properties = image['properties']
-        root_device_name = ec2utils.properties_root_device_name(properties)
+        root_device_name = block_device.properties_root_device_name(properties)
         root_device_type = 'instance-store'
         for bdm in properties.get('block_device_mapping', []):
             if (bdm.get('device_name') == root_device_name and
@@ -1313,7 +1671,7 @@ class CloudController(object):
 
         def _root_device_name_attribute(image, result):
             result['rootDeviceName'] = \
-                    ec2utils.properties_root_device_name(image['properties'])
+                block_device.properties_root_device_name(image['properties'])
             if result['rootDeviceName'] is None:
                 result['rootDeviceName'] = _DEFAULT_ROOT_DEVICE_NAME
 
@@ -1382,22 +1740,22 @@ class CloudController(object):
         # stop the instance if necessary
         restart_instance = False
         if not no_reboot:
-            state_description = instance['state_description']
+            vm_state = instance['vm_state']
 
             # if the instance is in subtle state, refuse to proceed.
-            if state_description not in ('running', 'stopping', 'stopped'):
+            if vm_state not in (vm_states.ACTIVE, vm_states.STOPPED):
                 raise exception.InstanceNotRunning(instance_id=ec2_instance_id)
 
-            if state_description == 'running':
+            if vm_state == vm_states.ACTIVE:
                 restart_instance = True
                 self.compute_api.stop(context, instance_id=instance_id)
 
             # wait instance for really stopped
             start_time = time.time()
-            while state_description != 'stopped':
+            while vm_state != vm_states.STOPPED:
                 time.sleep(1)
                 instance = self.compute_api.get(context, instance_id)
-                state_description = instance['state_description']
+                vm_state = instance['vm_state']
                 # NOTE(yamahata): timeout and error. 1 hour for now for safety.
                 #                 Is it too short/long?
                 #                 Or is there any better way?
@@ -1446,8 +1804,7 @@ class CloudController(object):
             if virtual_name in ('ami', 'root'):
                 continue
 
-            assert (virtual_name == 'swap' or
-                    virtual_name.startswith('ephemeral'))
+            assert block_device.is_swap_or_ephemeral(virtual_name)
             device_name = m['device']
             if device_name in [b['device_name'] for b in mapping
                                if not b.get('no_device', False)]:

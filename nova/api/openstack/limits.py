@@ -20,6 +20,7 @@ Module dedicated functions/classes dealing with rate limiting requests.
 import copy
 import httplib
 import json
+from lxml import etree
 import math
 import re
 import time
@@ -37,6 +38,7 @@ from nova.api.openstack import common
 from nova.api.openstack import faults
 from nova.api.openstack.views import limits as limits_views
 from nova.api.openstack import wsgi
+from nova.api.openstack import xmlutil
 
 
 # Convenience constants for the limits dictionary passed to Limiter().
@@ -76,6 +78,55 @@ class LimitsControllerV11(LimitsController):
         return limits_views.ViewBuilderV11()
 
 
+class LimitsXMLSerializer(wsgi.XMLDictSerializer):
+
+    xmlns = wsgi.XMLNS_V11
+
+    NSMAP = {None: xmlutil.XMLNS_V11, 'atom': xmlutil.XMLNS_ATOM}
+
+    def __init__(self):
+        pass
+
+    def _create_rates_node(self, rates):
+        rates_elem = etree.Element('rates', nsmap=self.NSMAP)
+        for rate in rates:
+            rate_node = etree.SubElement(rates_elem, 'rate')
+            rate_node.set('uri', rate['uri'])
+            rate_node.set('regex', rate['regex'])
+            for limit in rate['limit']:
+                limit_elem = etree.SubElement(rate_node, 'limit')
+                limit_elem.set('value', str(limit['value']))
+                limit_elem.set('verb', str(limit['verb']))
+                limit_elem.set('remaining', str(limit['remaining']))
+                limit_elem.set('unit', str(limit['unit']))
+                limit_elem.set('next-available', str(limit['next-available']))
+        return rates_elem
+
+    def _create_absolute_node(self, absolute_dict):
+        absolute_elem = etree.Element('absolute', nsmap=self.NSMAP)
+        for key, value in absolute_dict.items():
+            limit_elem = etree.SubElement(absolute_elem, 'limit')
+            limit_elem.set('name', str(key))
+            limit_elem.set('value', str(value))
+        return absolute_elem
+
+    def _populate_limits(self, limits_elem, limits_dict):
+        """Populate a limits xml element from a dict."""
+
+        rates_elem = self._create_rates_node(
+                        limits_dict.get('rate', []))
+        limits_elem.append(rates_elem)
+
+        absolutes_elem = self._create_absolute_node(
+                        limits_dict.get('absolute', {}))
+        limits_elem.append(absolutes_elem)
+
+    def index(self, limits_dict):
+        limits = etree.Element('limits', nsmap=self.NSMAP)
+        self._populate_limits(limits, limits_dict['limits'])
+        return self._to_xml(limits)
+
+
 def create_resource(version='1.0'):
     controller = {
         '1.0': LimitsControllerV10,
@@ -97,9 +148,13 @@ def create_resource(version='1.0'):
         },
     }
 
+    xml_serializer = {
+        '1.0': wsgi.XMLDictSerializer(xmlns=xmlns, metadata=metadata),
+        '1.1': LimitsXMLSerializer(),
+    }[version]
+
     body_serializers = {
-        'application/xml': wsgi.XMLDictSerializer(xmlns=xmlns,
-                                                  metadata=metadata),
+        'application/xml': xml_serializer,
     }
 
     serializer = wsgi.ResponseSerializer(body_serializers)

@@ -16,10 +16,13 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import functools
 import imp
 import inspect
 import os
 import sys
+
+from lxml import etree
 import routes
 import webob.dec
 import webob.exc
@@ -28,12 +31,14 @@ from nova import exception
 from nova import flags
 from nova import log as logging
 from nova import wsgi as base_wsgi
+import nova.api.openstack
 from nova.api.openstack import common
 from nova.api.openstack import faults
 from nova.api.openstack import wsgi
+from nova.api.openstack import xmlutil
 
 
-LOG = logging.getLogger('extensions')
+LOG = logging.getLogger('nova.api.openstack.extensions')
 
 
 FLAGS = flags.FLAGS
@@ -194,7 +199,7 @@ class ExtensionsResource(wsgi.Resource):
     def show(self, req, id):
         # NOTE(dprince): the extensions alias is used as the 'id' for show
         ext = self.extension_manager.extensions[id]
-        return self._translate(ext)
+        return dict(extension=self._translate(ext))
 
     def delete(self, req, id):
         raise faults.Fault(webob.exc.HTTPNotFound())
@@ -218,12 +223,13 @@ class ExtensionMiddleware(base_wsgi.Middleware):
         for action in ext_mgr.get_actions():
             if not action.collection in action_resources.keys():
                 resource = ActionExtensionResource(application)
-                mapper.connect("/%s/:(id)/action.:(format)" %
+                mapper.connect("/:(project_id)/%s/:(id)/action.:(format)" %
                                 action.collection,
                                 action='action',
                                 controller=resource,
                                 conditions=dict(method=['POST']))
-                mapper.connect("/%s/:(id)/action" % action.collection,
+                mapper.connect("/:(project_id)/%s/:(id)/action" %
+                                action.collection,
                                 action='action',
                                 controller=resource,
                                 conditions=dict(method=['POST']))
@@ -256,17 +262,28 @@ class ExtensionMiddleware(base_wsgi.Middleware):
             ext_mgr = ExtensionManager(FLAGS.osapi_extensions_path)
         self.ext_mgr = ext_mgr
 
-        mapper = routes.Mapper()
+        mapper = nova.api.openstack.ProjectMapper()
 
+        serializer = wsgi.ResponseSerializer(
+            {'application/xml': ExtensionsXMLSerializer()})
         # extended resources
         for resource in ext_mgr.get_resources():
             LOG.debug(_('Extended resource: %s'),
                         resource.collection)
-            mapper.resource(resource.collection, resource.collection,
-                            controller=wsgi.Resource(resource.controller),
-                            collection=resource.collection_actions,
-                            member=resource.member_actions,
-                            parent_resource=resource.parent)
+            if resource.serializer is None:
+                resource.serializer = serializer
+
+            kargs = dict(
+                controller=wsgi.Resource(
+                    resource.controller, resource.deserializer,
+                    resource.serializer),
+                collection=resource.collection_actions,
+                member=resource.member_actions)
+
+            if resource.parent:
+                kargs['parent_resource'] = resource.parent
+
+            mapper.resource(resource.collection, resource.collection, **kargs)
 
         # extended actions
         action_resources = self._action_ext_resources(application, ext_mgr,
@@ -456,9 +473,75 @@ class ResourceExtension(object):
     """Add top level resources to the OpenStack API in nova."""
 
     def __init__(self, collection, controller, parent=None,
-                 collection_actions={}, member_actions={}):
+                 collection_actions=None, member_actions=None,
+                 deserializer=None, serializer=None):
+        if not collection_actions:
+            collection_actions = {}
+        if not member_actions:
+            member_actions = {}
         self.collection = collection
         self.controller = controller
         self.parent = parent
         self.collection_actions = collection_actions
         self.member_actions = member_actions
+        self.deserializer = deserializer
+        self.serializer = serializer
+
+
+class ExtensionsXMLSerializer(wsgi.XMLDictSerializer):
+
+    NSMAP = {None: xmlutil.XMLNS_V11, 'atom': xmlutil.XMLNS_ATOM}
+
+    def show(self, ext_dict):
+        ext = etree.Element('extension', nsmap=self.NSMAP)
+        self._populate_ext(ext, ext_dict['extension'])
+        return self._to_xml(ext)
+
+    def index(self, exts_dict):
+        exts = etree.Element('extensions', nsmap=self.NSMAP)
+        for ext_dict in exts_dict['extensions']:
+            ext = etree.SubElement(exts, 'extension')
+            self._populate_ext(ext, ext_dict)
+        return self._to_xml(exts)
+
+    def _populate_ext(self, ext_elem, ext_dict):
+        """Populate an extension xml element from a dict."""
+
+        ext_elem.set('name', ext_dict['name'])
+        ext_elem.set('namespace', ext_dict['namespace'])
+        ext_elem.set('alias', ext_dict['alias'])
+        ext_elem.set('updated', ext_dict['updated'])
+        desc = etree.Element('description')
+        desc.text = ext_dict['description']
+        ext_elem.append(desc)
+        for link in ext_dict.get('links', []):
+            elem = etree.SubElement(ext_elem, '{%s}link' % xmlutil.XMLNS_ATOM)
+            elem.set('rel', link['rel'])
+            elem.set('href', link['href'])
+            elem.set('type', link['type'])
+        return ext_elem
+
+    def _to_xml(self, root):
+        """Convert the xml object to an xml string."""
+
+        return etree.tostring(root, encoding='UTF-8')
+
+
+def admin_only(fnc):
+    @functools.wraps(fnc)
+    def _wrapped(self, *args, **kwargs):
+        if FLAGS.allow_admin_api:
+            return fnc(self, *args, **kwargs)
+        return faults.Fault(webob.exc.HTTPNotFound())
+    _wrapped.func_name = fnc.func_name
+    return _wrapped
+
+
+def wrap_errors(fn):
+    """"Ensure errors are not passed along."""
+    def wrapped(*args):
+        try:
+            return fn(*args)
+        except Exception, e:
+            return faults.Fault(webob.exc.HTTPInternalServerError())
+    return wrapped

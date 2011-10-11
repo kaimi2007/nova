@@ -18,9 +18,10 @@ ZoneManager oversees all communications with child Zones.
 """
 
 import datetime
-import novaclient
 import thread
 import traceback
+
+from novaclient import v1_1 as novaclient
 
 from eventlet import greenpool
 
@@ -50,16 +51,18 @@ class ZoneState(object):
     def update_credentials(self, zone):
         """Update zone credentials from db"""
         self.zone_id = zone.id
+        self.name = zone.name
         self.api_url = zone.api_url
         self.username = zone.username
         self.password = zone.password
+        self.weight_offset = zone.weight_offset
+        self.weight_scale = zone.weight_scale
 
     def update_metadata(self, zone_metadata):
         """Update zone metadata after successful communications with
            child zone."""
         self.last_seen = utils.utcnow()
         self.attempt = 0
-        self.name = zone_metadata.get("name", "n/a")
         self.capabilities = ", ".join(["%s=%s" % (k, v)
                         for k, v in zone_metadata.iteritems() if k != 'name'])
         self.is_active = True
@@ -67,7 +70,8 @@ class ZoneState(object):
     def to_dict(self):
         return dict(name=self.name, capabilities=self.capabilities,
                     is_active=self.is_active, api_url=self.api_url,
-                    id=self.zone_id)
+                    id=self.zone_id, weight_scale=self.weight_scale,
+                    weight_offset=self.weight_offset)
 
     def log_error(self, exception):
         """Something went wrong. Check to see if zone should be
@@ -88,15 +92,19 @@ class ZoneState(object):
 
 
 def _call_novaclient(zone):
-    """Call novaclient. Broken out for testing purposes."""
-    client = novaclient.OpenStack(zone.username, zone.password, None,
-                                  zone.api_url)
+    """Call novaclient. Broken out for testing purposes. Note that
+    we have to use the admin credentials for this since there is no
+    available context."""
+    client = novaclient.Client(zone.username, zone.password, None,
+                               zone.api_url, region_name=zone.name)
     return client.zones.info()._info
 
 
 def _poll_zone(zone):
     """Eventlet worker to poll a zone."""
-    logging.debug(_("Polling zone: %s") % zone.api_url)
+    name = zone.name
+    url = zone.api_url
+    logging.debug(_("Polling zone: %(name)s @ %(url)s") % locals())
     try:
         zone.update_metadata(_call_novaclient(zone))
     except Exception, e:
@@ -109,6 +117,7 @@ class ZoneManager(object):
         self.last_zone_db_check = datetime.datetime.min
         self.zone_states = {}  # { <zone_id> : ZoneState }
         self.service_states = {}  # { <host> : { <service> : { cap k : v }}}
+        self.service_time_stamp = {}  # reported time
         self.green_pool = greenpool.GreenPool()
 
     def get_zone_list(self):
@@ -163,6 +172,28 @@ class ZoneManager(object):
         self.delete_expired_host_services(stale_host_services)
         return combined
 
+    def get_hosts_capabilities(self, context):
+        """Return the capabilities of the individual hosts within a zone.
+
+        Returns a dict: { <host> : {<service> : {<cap_key> : <cap_value>}}}
+        """
+
+        hosts_dict = self.service_states
+
+        allowed_time_diff = FLAGS.periodic_interval * 3
+
+        combined = {}  # { <service>_<cap> : (min, max), ... }
+        for host, host_dict in hosts_dict.iteritems():
+#            print "TIME CHECK: now = " , utils.utcnow()
+#            print "TIME CHECK: time_stamp=", self.service_time_stamp[host]
+#            print "TIME CHECK: a_diff= " , allowed_time_diff
+            if (utils.utcnow() - self.service_time_stamp[host]) <= \
+                datetime.timedelta(seconds=allowed_time_diff):
+
+                combined[host] = host_dict
+
+        return combined
+
     def _refresh_from_db(self, context):
         """Make our zone state map match the db."""
         # Add/update existing zones ...
@@ -197,11 +228,12 @@ class ZoneManager(object):
     def update_service_capabilities(self, service_name, host, capabilities):
         """Update the per-service capabilities based on this notification."""
         logging.debug(_("Received %(service_name)s service update from "
-                            "%(host)s: %(capabilities)s") % locals())
+                "%(host)s.") % locals())
         service_caps = self.service_states.get(host, {})
         capabilities["timestamp"] = utils.utcnow()  # Reported time
         service_caps[service_name] = capabilities
         self.service_states[host] = service_caps
+        self.service_time_stamp[host] = utils.utcnow()
 
     def host_service_caps_stale(self, host, service):
         """Check if host service capabilites are not recent enough."""

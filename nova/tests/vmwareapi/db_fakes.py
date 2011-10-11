@@ -23,6 +23,8 @@ import time
 
 from nova import db
 from nova import utils
+from nova.compute import task_states
+from nova.compute import vm_states
 
 
 def stub_out_db_instance_api(stubs):
@@ -64,14 +66,15 @@ def stub_out_db_instance_api(stubs):
             'image_ref': values['image_ref'],
             'kernel_id': values['kernel_id'],
             'ramdisk_id': values['ramdisk_id'],
-            'state_description': 'scheduling',
+            'vm_state': vm_states.BUILDING,
+            'task_state': task_states.SCHEDULING,
             'user_id': values['user_id'],
             'project_id': values['project_id'],
             'launch_time': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
             'instance_type': values['instance_type'],
             'memory_mb': type_data['memory_mb'],
-            'mac_address': values['mac_address'],
             'vcpus': type_data['vcpus'],
+            'mac_addresses': [{'address': values['mac_address']}],
             'local_gb': type_data['local_gb'],
             }
         return FakeModel(base_options)
@@ -83,6 +86,8 @@ def stub_out_db_instance_api(stubs):
             'bridge': 'vmnet0',
             'netmask': '255.255.255.0',
             'gateway': '10.10.10.1',
+            'broadcast': '10.10.10.255',
+            'dns1': 'fake',
             'vlan': 100}
         return FakeModel(fields)
 
@@ -90,12 +95,12 @@ def stub_out_db_instance_api(stubs):
         """Stubs out the db.instance_action_create method."""
         pass
 
-    def fake_instance_get_fixed_address(context, instance_id):
+    def fake_instance_get_fixed_addresses(context, instance_id):
         """Stubs out the db.instance_get_fixed_address method."""
         return '10.10.10.10'
 
-    def fake_instance_type_get_all(context, inactive=0):
-        return INSTANCE_TYPES
+    def fake_instance_type_get_all(context, inactive=0, filters=None):
+        return INSTANCE_TYPES.values()
 
     def fake_instance_type_get_by_name(context, name):
         return INSTANCE_TYPES[name]
@@ -103,7 +108,7 @@ def stub_out_db_instance_api(stubs):
     stubs.Set(db, 'instance_create', fake_instance_create)
     stubs.Set(db, 'network_get_by_instance', fake_network_get_by_instance)
     stubs.Set(db, 'instance_action_create', fake_instance_action_create)
-    stubs.Set(db, 'instance_get_fixed_address',
-                fake_instance_get_fixed_address)
+    stubs.Set(db, 'instance_get_fixed_addresses',
+                fake_instance_get_fixed_addresses)
     stubs.Set(db, 'instance_type_get_all', fake_instance_type_get_all)
     stubs.Set(db, 'instance_type_get_by_name', fake_instance_type_get_by_name)

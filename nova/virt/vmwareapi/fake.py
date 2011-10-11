@@ -402,7 +402,17 @@ def _remove_file(file_path):
                     lst_files.remove(file)
 
 
-def fake_fetch_image(image, instance, **kwargs):
+def fake_plug_vifs(*args, **kwargs):
+    """Fakes plugging vifs."""
+    pass
+
+
+def fake_get_network(*args, **kwargs):
+    """Fake get network."""
+    return {'type': 'fake'}
+
+
+def fake_fetch_image(context, image, instance, **kwargs):
     """Fakes fetch image call. Just adds a reference to the db for the file."""
     ds_name = kwargs.get("datastore_name")
     file_path = kwargs.get("file_path")
@@ -410,12 +420,12 @@ def fake_fetch_image(image, instance, **kwargs):
     _add_file(ds_file_path)
 
 
-def fake_upload_image(image, instance, **kwargs):
+def fake_upload_image(context, image, instance, **kwargs):
     """Fakes the upload of an image."""
     pass
 
 
-def fake_get_vmdk_size_and_properties(image_id, instance):
+def fake_get_vmdk_size_and_properties(context, image_id, instance):
     """Fakes the file size and properties fetch for the image file."""
     props = {"vmware_ostype": "otherGuest",
             "vmware_adaptertype": "lsiLogic"}

@@ -25,6 +25,9 @@ FLAGS = flags.FLAGS
 
 flags.DEFINE_string('default_notification_level', 'INFO',
                     'Default notification level for outgoing notifications')
+flags.DEFINE_string('default_publisher_id', FLAGS.host,
+                    'Default publisher_id for outgoing notifications')
+
 
 WARN = 'WARN'
 INFO = 'INFO'
@@ -37,6 +40,30 @@ log_levels = (DEBUG, WARN, INFO, ERROR, CRITICAL)
 
 class BadPriorityException(Exception):
     pass
+
+
+def notify_decorator(name, fn):
+    """ decorator for notify which is used from utils.monkey_patch()
+
+        :param name: name of the function
+        :param function: - object of the function
+        :returns: function -- decorated function
+
+    """
+    def wrapped_func(*args, **kwarg):
+        body = {}
+        body['args'] = []
+        body['kwarg'] = {}
+        for arg in args:
+            body['args'].append(arg)
+        for key in kwarg:
+            body['kwarg'][key] = kwarg[key]
+        notify(FLAGS.default_publisher_id,
+                            name,
+                            FLAGS.default_notification_level,
+                            body)
+        return fn(*args, **kwarg)
+    return wrapped_func
 
 
 def publisher_id(service, host=None):
@@ -80,6 +107,10 @@ def notify(publisher_id, event_type, priority, payload):
     if priority not in log_levels:
         raise BadPriorityException(
                  _('%s not in valid priorities' % priority))
+
+    # Ensure everything is JSON serializable.
+    payload = utils.to_primitive(payload, convert_instances=True)
+
     driver = utils.import_object(FLAGS.notification_driver)
     msg = dict(message_id=str(uuid.uuid4()),
                    publisher_id=publisher_id,
@@ -91,4 +122,5 @@ def notify(publisher_id, event_type, priority, payload):
         driver.notify(msg)
     except Exception, e:
         LOG.exception(_("Problem '%(e)s' attempting to "
-                        "send to notification system." % locals()))
+                        "send to notification system. Payload=%(payload)s" %
+                        locals()))

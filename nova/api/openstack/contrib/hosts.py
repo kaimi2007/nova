@@ -70,7 +70,7 @@ class HostController(object):
             key = raw_key.lower().strip()
             val = raw_val.lower().strip()
             # NOTE: (dabo) Right now only 'status' can be set, but other
-            # actions may follow.
+            # settings may follow.
             if key == "status":
                 if val[:6] in ("enable", "disabl"):
                     return self._set_enabled_status(req, id,
@@ -89,7 +89,32 @@ class HostController(object):
         LOG.audit(_("Setting host %(host)s to %(state)s.") % locals())
         result = self.compute_api.set_host_enabled(context, host=host,
                 enabled=enabled)
+        if result not in ("enabled", "disabled"):
+            # An error message was returned
+            raise webob.exc.HTTPBadRequest(explanation=result)
         return {"host": host, "status": result}
+
+    def _host_power_action(self, req, host, action):
+        """Reboots, shuts down or powers up the host."""
+        context = req.environ['nova.context']
+        try:
+            result = self.compute_api.host_power_action(context, host=host,
+                    action=action)
+        except NotImplementedError as e:
+            raise webob.exc.HTTPBadRequest(explanation=e.msg)
+        return {"host": host, "power_action": result}
+
+    @extensions.admin_only
+    def startup(self, req, id):
+        return self._host_power_action(req, host=id, action="startup")
+
+    @extensions.admin_only
+    def shutdown(self, req, id):
+        return self._host_power_action(req, host=id, action="shutdown")
+
+    @extensions.admin_only
+    def reboot(self, req, id):
+        return self._host_power_action(req, host=id, action="reboot")
 
 
 class Hosts(extensions.ExtensionDescriptor):
@@ -109,6 +134,8 @@ class Hosts(extensions.ExtensionDescriptor):
         return "2011-06-29T00:00:00+00:00"
 
     def get_resources(self):
-        resources = [extensions.ResourceExtension('os-hosts', HostController(),
-                collection_actions={'update': 'PUT'}, member_actions={})]
+        resources = [extensions.ResourceExtension('os-hosts',
+                HostController(), collection_actions={'update': 'PUT'},
+                member_actions={"startup": "GET", "shutdown": "GET",
+                        "reboot": "GET"})]
         return resources

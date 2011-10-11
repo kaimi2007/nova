@@ -2,6 +2,7 @@
 
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
+# Copyright 2011 Piston Cloud Computing, Inc.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -31,6 +32,7 @@ from nova.db.sqlalchemy.session import get_session
 from nova import auth
 from nova import exception
 from nova import flags
+from nova import ipv6
 from nova import utils
 
 
@@ -126,14 +128,14 @@ class ComputeNode(BASE, NovaBase):
                                 'ComputeNode.service_id == Service.id,'
                                 'ComputeNode.deleted == False)')
 
-    vcpus = Column(Integer, nullable=True)
-    memory_mb = Column(Integer, nullable=True)
-    local_gb = Column(Integer, nullable=True)
-    vcpus_used = Column(Integer, nullable=True)
-    memory_mb_used = Column(Integer, nullable=True)
-    local_gb_used = Column(Integer, nullable=True)
-    hypervisor_type = Column(Text, nullable=True)
-    hypervisor_version = Column(Integer, nullable=True)
+    vcpus = Column(Integer)
+    memory_mb = Column(Integer)
+    local_gb = Column(Integer)
+    vcpus_used = Column(Integer)
+    memory_mb_used = Column(Integer)
+    local_gb_used = Column(Integer)
+    hypervisor_type = Column(Text)
+    hypervisor_version = Column(Integer)
 
     # Note(masumotok): Expected Strings example:
     #
@@ -172,21 +174,13 @@ class Instance(BASE, NovaBase):
             base_name += "-rescue"
         return base_name
 
-    admin_pass = Column(String(255))
     user_id = Column(String(255))
     project_id = Column(String(255))
-
-    @property
-    def user(self):
-        return auth.manager.AuthManager().get_user(self.user_id)
-
-    @property
-    def project(self):
-        return auth.manager.AuthManager().get_project(self.project_id)
 
     image_ref = Column(String(255))
     kernel_id = Column(String(255))
     ramdisk_id = Column(String(255))
+    server_name = Column(String(255))
 
 #    image_ref = Column(Integer, ForeignKey('images.id'), nullable=True)
 #    kernel_id = Column(Integer, ForeignKey('images.id'), nullable=True)
@@ -199,8 +193,9 @@ class Instance(BASE, NovaBase):
     key_name = Column(String(255))
     key_data = Column(Text)
 
-    state = Column(Integer)
-    state_description = Column(String(255))
+    power_state = Column(Integer)
+    vm_state = Column(String(255))
+    task_state = Column(String(255))
 
     memory_mb = Column(Integer)
     vcpus = Column(Integer)
@@ -209,7 +204,7 @@ class Instance(BASE, NovaBase):
     hostname = Column(String(255))
     host = Column(String(255))  # , ForeignKey('hosts.id'))
 
-    # aka flavor_id
+    # *not* flavor_id
     instance_type_id = Column(Integer)
 
     user_data = Column(Text)
@@ -237,17 +232,43 @@ class Instance(BASE, NovaBase):
     uuid = Column(String(36))
 
     root_device_name = Column(String(255))
+    default_local_device = Column(String(255), nullable=True)
+    default_swap_device = Column(String(255), nullable=True)
+    config_drive = Column(String(255))
 
-    # TODO(vish): see Ewan's email about state improvements, probably
-    #             should be in a driver base class or some such
-    # vmstate_state = running, halted, suspended, paused
-    # power_state = what we have
-    # task_state = transitory and may trigger power state transition
+    # User editable field meant to represent what ip should be used
+    # to connect to the instance
+    access_ip_v4 = Column(String(255))
+    access_ip_v6 = Column(String(255))
 
-    #@validates('state')
-    #def validate_state(self, key, state):
-    #    assert(state in ['nostate', 'running', 'blocked', 'paused',
-    #                     'shutdown', 'shutoff', 'crashed'])
+    managed_disk = Column(Boolean())
+    progress = Column(Integer)
+
+
+class VirtualStorageArray(BASE, NovaBase):
+    """
+    Represents a virtual storage array supplying block storage to instances.
+    """
+    __tablename__ = 'virtual_storage_arrays'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    @property
+    def name(self):
+        return FLAGS.vsa_name_template % self.id
+
+    # User editable field for display in user-facing UIs
+    display_name = Column(String(255))
+    display_description = Column(String(255))
+
+    project_id = Column(String(255))
+    availability_zone = Column(String(255))
+
+    instance_type_id = Column(Integer, ForeignKey('instance_types.id'))
+    image_ref = Column(String(255))
+    vc_count = Column(Integer, default=0)   # number of requested VC instances
+    vol_count = Column(Integer, default=0)  # total number of BE volumes
+    status = Column(String(255))
 
 
 class InstanceActions(BASE, NovaBase):
@@ -278,6 +299,12 @@ class InstanceTypes(BASE, NovaBase):
                            foreign_keys=id,
                            primaryjoin='and_(Instance.instance_type_id == '
                                        'InstanceTypes.id)')
+
+    vsas = relationship(VirtualStorageArray,
+                       backref=backref('vsa_instance_type', uselist=False),
+                       foreign_keys=id,
+                       primaryjoin='and_(VirtualStorageArray.instance_type_id'
+                                   ' == InstanceTypes.id)')
 
 
 class Volume(BASE, NovaBase):
@@ -317,6 +344,50 @@ class Volume(BASE, NovaBase):
 
     provider_location = Column(String(255))
     provider_auth = Column(String(255))
+
+    volume_type_id = Column(Integer)
+
+
+class VolumeMetadata(BASE, NovaBase):
+    """Represents a metadata key/value pair for a volume"""
+    __tablename__ = 'volume_metadata'
+    id = Column(Integer, primary_key=True)
+    key = Column(String(255))
+    value = Column(String(255))
+    volume_id = Column(Integer, ForeignKey('volumes.id'), nullable=False)
+    volume = relationship(Volume, backref="volume_metadata",
+                            foreign_keys=volume_id,
+                            primaryjoin='and_('
+                                'VolumeMetadata.volume_id == Volume.id,'
+                                'VolumeMetadata.deleted == False)')
+
+
+class VolumeTypes(BASE, NovaBase):
+    """Represent possible volume_types of volumes offered"""
+    __tablename__ = "volume_types"
+    id = Column(Integer, primary_key=True)
+    name = Column(String(255), unique=True)
+
+    volumes = relationship(Volume,
+                           backref=backref('volume_type', uselist=False),
+                           foreign_keys=id,
+                           primaryjoin='and_(Volume.volume_type_id == '
+                                       'VolumeTypes.id)')
+
+
+class VolumeTypeExtraSpecs(BASE, NovaBase):
+    """Represents additional specs as key/value pairs for a volume_type"""
+    __tablename__ = 'volume_type_extra_specs'
+    id = Column(Integer, primary_key=True)
+    key = Column(String(255))
+    value = Column(String(255))
+    volume_type_id = Column(Integer, ForeignKey('volume_types.id'),
+                              nullable=False)
+    volume_type = relationship(VolumeTypes, backref="extra_specs",
+                 foreign_keys=volume_type_id,
+                 primaryjoin='and_('
+                 'VolumeTypeExtraSpecs.volume_type_id == VolumeTypes.id,'
+                 'VolumeTypeExtraSpecs.deleted == False)')
 
 
 class Quota(BASE, NovaBase):
@@ -464,14 +535,6 @@ class SecurityGroup(BASE, NovaBase):
         'Instance.deleted == False)',
                              backref='security_groups')
 
-    @property
-    def user(self):
-        return auth.manager.AuthManager().get_user(self.user_id)
-
-    @property
-    def project(self):
-        return auth.manager.AuthManager().get_project(self.project_id)
-
 
 class SecurityGroupIngressRule(BASE, NovaBase):
     """Represents a rule in a security group."""
@@ -493,6 +556,11 @@ class SecurityGroupIngressRule(BASE, NovaBase):
     # Note: This is not the parent SecurityGroup. It's SecurityGroup we're
     # granting access for.
     group_id = Column(Integer, ForeignKey('security_groups.id'))
+    grantee_group = relationship("SecurityGroup",
+                                 foreign_keys=group_id,
+                                 primaryjoin='and_('
+        'SecurityGroupIngressRule.group_id == SecurityGroup.id,'
+        'SecurityGroupIngressRule.deleted == False)')
 
 
 class ProviderFirewallRule(BASE, NovaBase):
@@ -526,9 +594,10 @@ class Migration(BASE, NovaBase):
     source_compute = Column(String(255))
     dest_compute = Column(String(255))
     dest_host = Column(String(255))
-    old_flavor_id = Column(Integer())
-    new_flavor_id = Column(Integer())
-    instance_id = Column(Integer, ForeignKey('instances.id'), nullable=True)
+    old_instance_type_id = Column(Integer())
+    new_instance_type_id = Column(Integer())
+    instance_uuid = Column(String(255), ForeignKey('instances.uuid'),
+            nullable=True)
     #TODO(_cerberus_): enum
     status = Column(String(255))
 
@@ -545,6 +614,7 @@ class Network(BASE, NovaBase):
     injected = Column(Boolean, default=False)
     cidr = Column(String(255), unique=True)
     cidr_v6 = Column(String(255), unique=True)
+    multi_host = Column(Boolean, default=False)
 
     gateway_v6 = Column(String(255))
     netmask_v6 = Column(String(255))
@@ -553,7 +623,8 @@ class Network(BASE, NovaBase):
     bridge_interface = Column(String(255))
     gateway = Column(String(255))
     broadcast = Column(String(255))
-    dns = Column(String(255))
+    dns1 = Column(String(255))
+    dns2 = Column(String(255))
 
     vlan = Column(Integer)
     vpn_public_address = Column(String(255))
@@ -562,7 +633,9 @@ class Network(BASE, NovaBase):
     dhcp_start = Column(String(255))
 
     project_id = Column(String(255))
+    priority = Column(Integer)
     host = Column(String(255))  # , ForeignKey('hosts.id'))
+    uuid = Column(String(36))
 
 
 class VirtualInterface(BASE, NovaBase):
@@ -572,10 +645,21 @@ class VirtualInterface(BASE, NovaBase):
     address = Column(String(255), unique=True)
     network_id = Column(Integer, ForeignKey('networks.id'))
     network = relationship(Network, backref=backref('virtual_interfaces'))
+    instance_id = Column(Integer, nullable=False)
 
-    # TODO(tr3buchet): cut the cord, removed foreign key and backrefs
-    instance_id = Column(Integer, ForeignKey('instances.id'), nullable=False)
-    instance = relationship(Instance, backref=backref('virtual_interfaces'))
+    uuid = Column(String(36))
+
+    @property
+    def fixed_ipv6(self):
+        cidr_v6 = self.network.cidr_v6
+        if cidr_v6 is None:
+            ipv6_address = None
+        else:
+            project_id = self.instance.project_id
+            mac = self.address
+            ipv6_address = ipv6.to_global(cidr_v6, mac, project_id)
+
+        return ipv6_address
 
 
 # TODO(vish): can these both come from the same baseclass?
@@ -603,6 +687,7 @@ class FixedIp(BASE, NovaBase):
     # leased means dhcp bridge has leased the ip
     leased = Column(Boolean, default=False)
     reserved = Column(Boolean, default=False)
+    host = Column(String(255))
 
 
 class FloatingIp(BASE, NovaBase):
@@ -755,6 +840,7 @@ class Zone(BASE, NovaBase):
     """Represents a child zone of this zone."""
     __tablename__ = 'zones'
     id = Column(Integer, primary_key=True)
+    name = Column(String(255))
     api_url = Column(String(255))
     username = Column(String(255))
     password = Column(String(255))
@@ -787,7 +873,9 @@ def register_models():
               Network, SecurityGroup, SecurityGroupIngressRule,
               SecurityGroupInstanceAssociation, AuthToken, User,
               Project, Certificate, ConsolePool, Console, Zone,
-              AgentBuild, InstanceMetadata, InstanceTypeExtraSpecs, Migration)
+              VolumeMetadata, VolumeTypes, VolumeTypeExtraSpecs,
+              AgentBuild, InstanceMetadata, InstanceTypeExtraSpecs, Migration,
+              VirtualStorageArray)
     engine = create_engine(FLAGS.sql_connection, echo=False)
     for model in models:
         model.metadata.create_all(engine)

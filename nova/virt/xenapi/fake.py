@@ -51,6 +51,7 @@ A fake XenAPI SDK.
 """
 
 
+import random
 import uuid
 
 from pprint import pformat
@@ -103,8 +104,10 @@ def create_network(name_label, bridge):
 
 def create_vm(name_label, status,
               is_a_template=False, is_control_domain=False):
+    domid = status == 'Running' and random.randrange(1, 1 << 16) or -1
     return _create_object('VM',
                           {'name_label': name_label,
+                           'domid': domid,
                            'power-state': status,
                            'is_a_template': is_a_template,
                            'is_control_domain': is_control_domain})
@@ -140,6 +143,7 @@ def create_vdi(name_label, read_only, sr_ref, sharable):
                            'location': '',
                            'xenstore_data': '',
                            'sm_config': {},
+                           'physical_utilisation': '123',
                            'VBDs': {}})
 
 
@@ -194,6 +198,7 @@ def create_local_pifs():
        Do this one per host."""
     for host_ref in _db_content['host'].keys():
         _create_local_pif(host_ref)
+        _create_local_sr_iso(host_ref)
 
 
 def create_local_srs():
@@ -216,6 +221,25 @@ def _create_local_sr(host_ref):
               'other_config': {
                      'i18n-original-value-name_label': 'Local storage',
                      'i18n-key': 'local-storage'},
+              'VDIs': []})
+    pbd_ref = create_pbd('', host_ref, sr_ref, True)
+    _db_content['SR'][sr_ref]['PBDs'] = [pbd_ref]
+    return sr_ref
+
+
+def _create_local_sr_iso(host_ref):
+    sr_ref = _create_object(
+             'SR',
+             {'name_label': 'Local storage ISO',
+              'type': 'lvm',
+              'content_type': 'iso',
+              'shared': False,
+              'physical_size': str(1 << 30),
+              'physical_utilisation': str(0),
+              'virtual_allocation': str(0),
+              'other_config': {
+                     'i18n-original-value-name_label': 'Local storage ISO',
+                     'i18n-key': 'local-storage-iso'},
               'VDIs': []})
     pbd_ref = create_pbd('', host_ref, sr_ref, True)
     _db_content['SR'][sr_ref]['PBDs'] = [pbd_ref]
@@ -353,6 +377,12 @@ class SessionBase(object):
 
     def host_call_plugin(self, *args):
         return 'herp'
+
+    def VDI_resize_online(self, *args):
+        return 'derp'
+
+    def VM_clean_reboot(self, *args):
+        return 'burp'
 
     def network_get_all_records_where(self, _1, filter):
         return self.xenapi.network.get_all_records()

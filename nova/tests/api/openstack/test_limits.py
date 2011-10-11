@@ -19,16 +19,19 @@ Tests dealing with HTTP rate-limiting.
 
 import httplib
 import json
+from lxml import etree
 import StringIO
 import stubout
 import time
 import unittest
 import webob
-
-from xml.dom.minidom import parseString
+from xml.dom import minidom
 
 import nova.context
 from nova.api.openstack import limits
+from nova.api.openstack import views
+from nova.api.openstack import xmlutil
+from nova import test
 
 
 TEST_LIMITS = [
@@ -38,6 +41,10 @@ TEST_LIMITS = [
     limits.Limit("PUT", "*", "", 10, limits.PER_MINUTE),
     limits.Limit("PUT", "/servers", "^/servers", 5, limits.PER_MINUTE),
 ]
+NS = {
+    'atom': 'http://www.w3.org/2005/Atom',
+    'ns': 'http://docs.openstack.org/compute/api/v1.1'
+}
 
 
 class BaseLimitTestSuite(unittest.TestCase):
@@ -166,15 +173,14 @@ class LimitsControllerV10Test(BaseLimitTestSuite):
         request = self._get_index_request("application/xml")
         response = request.get_response(self.controller)
 
-        expected = parseString("""
-            <limits
-                xmlns="http://docs.rackspacecloud.com/servers/api/v1.0">
+        expected = minidom.parseString("""
+            <limits xmlns="http://docs.rackspacecloud.com/servers/api/v1.0">
                 <rate/>
                 <absolute/>
             </limits>
-        """.replace("  ", ""))
+        """.replace("  ", "").replace("\n", ""))
 
-        body = parseString(response.body.replace("  ", ""))
+        body = minidom.parseString(response.body.replace("  ", ""))
 
         self.assertEqual(expected.toxml(), body.toxml())
 
@@ -184,19 +190,18 @@ class LimitsControllerV10Test(BaseLimitTestSuite):
         request = self._populate_limits(request)
         response = request.get_response(self.controller)
 
-        expected = parseString("""
-            <limits
-                xmlns="http://docs.rackspacecloud.com/servers/api/v1.0">
+        expected = minidom.parseString("""
+            <limits xmlns="http://docs.rackspacecloud.com/servers/api/v1.0">
                 <rate>
                     <limit URI="*" regex=".*" remaining="10" resetTime="0"
-                        unit="MINUTE" value="10" verb="GET"/>
+                         unit="MINUTE" value="10" verb="GET"/>
                     <limit URI="*" regex=".*" remaining="5" resetTime="0"
-                        unit="HOUR" value="5" verb="POST"/>
+                         unit="HOUR" value="5" verb="POST"/>
                 </rate>
                 <absolute/>
             </limits>
-        """.replace("  ", ""))
-        body = parseString(response.body.replace("  ", ""))
+        """.replace("  ", "").replace("\n", ""))
+        body = minidom.parseString(response.body.replace("  ", ""))
 
         self.assertEqual(expected.toxml(), body.toxml())
 
@@ -210,6 +215,7 @@ class LimitsControllerV11Test(BaseLimitTestSuite):
         """Run before each test."""
         BaseLimitTestSuite.setUp(self)
         self.controller = limits.create_resource('1.1')
+        self.maxDiff = None
 
     def _get_index_request(self, accept_header="application/json"):
         """Helper to set routing arguments."""
@@ -266,14 +272,14 @@ class LimitsControllerV11Test(BaseLimitTestSuite):
                         "limit": [
                             {
                                 "verb": "GET",
-                                "next-available": 0,
+                                "next-available": "1970-01-01T00:00:00Z",
                                 "unit": "MINUTE",
                                 "value": 10,
                                 "remaining": 10,
                             },
                             {
                                 "verb": "POST",
-                                "next-available": 0,
+                                "next-available": "1970-01-01T00:00:00Z",
                                 "unit": "HOUR",
                                 "value": 5,
                                 "remaining": 5,
@@ -286,7 +292,7 @@ class LimitsControllerV11Test(BaseLimitTestSuite):
                         "limit": [
                             {
                                 "verb": "GET",
-                                "next-available": 0,
+                                "next-available": "1970-01-01T00:00:00Z",
                                 "unit": "MINUTE",
                                 "value": 5,
                                 "remaining": 5,
@@ -328,7 +334,7 @@ class LimitsControllerV11Test(BaseLimitTestSuite):
                         "limit": [
                             {
                                 "verb": "GET",
-                                "next-available": 0,
+                                "next-available": "1970-01-01T00:00:00Z",
                                 "unit": "MINUTE",
                                 "value": 10,
                                 "remaining": 10,
@@ -341,7 +347,7 @@ class LimitsControllerV11Test(BaseLimitTestSuite):
                         "limit": [
                             {
                                 "verb": "GET",
-                                "next-available": 0,
+                                "next-available": "1970-01-01T00:00:00Z",
                                 "unit": "MINUTE",
                                 "value": 10,
                                 "remaining": 10,
@@ -433,14 +439,14 @@ class LimitMiddlewareTest(BaseLimitTestSuite):
         self.assertEqual(200, response.status_int)
 
     def test_limited_request_json(self):
-        """Test a rate-limited (403) GET request through middleware."""
+        """Test a rate-limited (413) GET request through middleware."""
         request = webob.Request.blank("/")
         response = request.get_response(self.app)
         self.assertEqual(200, response.status_int)
 
         request = webob.Request.blank("/")
         response = request.get_response(self.app)
-        self.assertEqual(response.status_int, 403)
+        self.assertEqual(response.status_int, 413)
 
         body = json.loads(response.body)
         expected = "Only 1 GET request(s) can be made to * every minute."
@@ -448,7 +454,7 @@ class LimitMiddlewareTest(BaseLimitTestSuite):
         self.assertEqual(value, expected)
 
     def test_limited_request_xml(self):
-        """Test a rate-limited (403) response as XML"""
+        """Test a rate-limited (413) response as XML"""
         request = webob.Request.blank("/")
         response = request.get_response(self.app)
         self.assertEqual(200, response.status_int)
@@ -456,9 +462,9 @@ class LimitMiddlewareTest(BaseLimitTestSuite):
         request = webob.Request.blank("/")
         request.accept = "application/xml"
         response = request.get_response(self.app)
-        self.assertEqual(response.status_int, 403)
+        self.assertEqual(response.status_int, 413)
 
-        root = parseString(response.body).childNodes[0]
+        root = minidom.parseString(response.body).childNodes[0]
         expected = "Only 1 GET request(s) can be made to * every minute."
 
         details = root.getElementsByTagName("details")
@@ -817,12 +823,15 @@ class FakeHttplibConnection(object):
         self.app = app
         self.host = host
 
-    def request(self, method, path, body="", headers={}):
+    def request(self, method, path, body="", headers=None):
         """
         Requests made via this connection actually get translated and routed
         into our WSGI app, we then wait for the response and turn it back into
         an `httplib.HTTPResponse`.
         """
+        if not headers:
+            headers = {}
+
         req = webob.Request.blank(path)
         req.method = method
         req.headers = headers
@@ -904,3 +913,159 @@ class WsgiLimiterProxyTest(BaseLimitTestSuite):
             "made to /delayed every minute.")
 
         self.assertEqual((delay, error), expected)
+
+
+class LimitsViewBuilderV11Test(test.TestCase):
+
+    def setUp(self):
+        self.view_builder = views.limits.ViewBuilderV11()
+        self.rate_limits = [{"URI": "*",
+                             "regex": ".*",
+                             "value": 10,
+                             "verb": "POST",
+                             "remaining": 2,
+                             "unit": "MINUTE",
+                             "resetTime": 1311272226},
+                            {"URI": "*/servers",
+                             "regex": "^/servers",
+                             "value": 50,
+                             "verb": "POST",
+                             "remaining": 10,
+                             "unit": "DAY",
+                             "resetTime": 1311272226}]
+        self.absolute_limits = {"metadata_items": 1,
+                                "injected_files": 5,
+                                "injected_file_content_bytes": 5}
+
+    def tearDown(self):
+        pass
+
+    def test_build_limits(self):
+        expected_limits = {"limits": {
+                "rate": [{
+                      "uri": "*",
+                      "regex": ".*",
+                      "limit": [{"value": 10,
+                                 "verb": "POST",
+                                 "remaining": 2,
+                                 "unit": "MINUTE",
+                                 "next-available": "2011-07-21T18:17:06Z"}]},
+                   {"uri": "*/servers",
+                    "regex": "^/servers",
+                    "limit": [{"value": 50,
+                               "verb": "POST",
+                               "remaining": 10,
+                               "unit": "DAY",
+                               "next-available": "2011-07-21T18:17:06Z"}]}],
+                "absolute": {"maxServerMeta": 1,
+                             "maxImageMeta": 1,
+                             "maxPersonality": 5,
+                             "maxPersonalitySize": 5}}}
+
+        output = self.view_builder.build(self.rate_limits,
+                                         self.absolute_limits)
+        self.assertDictMatch(output, expected_limits)
+
+    def test_build_limits_empty_limits(self):
+        expected_limits = {"limits": {"rate": [],
+                           "absolute": {}}}
+
+        abs_limits = {}
+        rate_limits = []
+        output = self.view_builder.build(rate_limits, abs_limits)
+        self.assertDictMatch(output, expected_limits)
+
+
+class LimitsXMLSerializationTest(test.TestCase):
+
+    def setUp(self):
+        self.maxDiff = None
+
+    def tearDown(self):
+        pass
+
+    def test_xml_declaration(self):
+        serializer = limits.LimitsXMLSerializer()
+
+        fixture = {"limits": {
+                   "rate": [],
+                   "absolute": {}}}
+
+        output = serializer.serialize(fixture, 'index')
+        print output
+        has_dec = output.startswith("<?xml version='1.0' encoding='UTF-8'?>")
+        self.assertTrue(has_dec)
+
+    def test_index(self):
+        serializer = limits.LimitsXMLSerializer()
+        fixture = {
+            "limits": {
+                   "rate": [{
+                         "uri": "*",
+                         "regex": ".*",
+                         "limit": [{
+                              "value": 10,
+                              "verb": "POST",
+                              "remaining": 2,
+                              "unit": "MINUTE",
+                              "next-available": "2011-12-15T22:42:45Z"}]},
+                          {"uri": "*/servers",
+                           "regex": "^/servers",
+                           "limit": [{
+                              "value": 50,
+                              "verb": "POST",
+                              "remaining": 10,
+                              "unit": "DAY",
+                              "next-available": "2011-12-15T22:42:45Z"}]}],
+                    "absolute": {"maxServerMeta": 1,
+                                 "maxImageMeta": 1,
+                                 "maxPersonality": 5,
+                                 "maxPersonalitySize": 10240}}}
+
+        output = serializer.serialize(fixture, 'index')
+        print output
+        root = etree.XML(output)
+        xmlutil.validate_schema(root, 'limits')
+
+        #verify absolute limits
+        absolutes = root.xpath('ns:absolute/ns:limit', namespaces=NS)
+        self.assertEqual(len(absolutes), 4)
+        for limit in absolutes:
+            name = limit.get('name')
+            value = limit.get('value')
+            self.assertEqual(value, str(fixture['limits']['absolute'][name]))
+
+        #verify rate limits
+        rates = root.xpath('ns:rates/ns:rate', namespaces=NS)
+        self.assertEqual(len(rates), 2)
+        for i, rate in enumerate(rates):
+            for key in ['uri', 'regex']:
+                self.assertEqual(rate.get(key),
+                                 str(fixture['limits']['rate'][i][key]))
+            rate_limits = rate.xpath('ns:limit', namespaces=NS)
+            self.assertEqual(len(rate_limits), 1)
+            for j, limit in enumerate(rate_limits):
+                for key in ['verb', 'value', 'remaining', 'unit',
+                            'next-available']:
+                    self.assertEqual(limit.get(key),
+                         str(fixture['limits']['rate'][i]['limit'][j][key]))
+
+    def test_index_no_limits(self):
+        serializer = limits.LimitsXMLSerializer()
+
+        fixture = {"limits": {
+                   "rate": [],
+                   "absolute": {}}}
+
+        output = serializer.serialize(fixture, 'index')
+        print output
+        root = etree.XML(output)
+        xmlutil.validate_schema(root, 'limits')
+
+        #verify absolute limits
+        absolutes = root.xpath('ns:absolute/ns:limit', namespaces=NS)
+        self.assertEqual(len(absolutes), 0)
+
+        #verify rate limits
+        rates = root.xpath('ns:rates/ns:rate', namespaces=NS)
+        self.assertEqual(len(rates), 0)

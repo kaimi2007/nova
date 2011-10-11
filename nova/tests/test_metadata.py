@@ -19,14 +19,26 @@
 """Tests for the testing the metadata code."""
 
 import base64
-import httplib
-
 import webob
 
-from nova import test
-from nova import wsgi
 from nova.api.ec2 import metadatarequesthandler
 from nova.db.sqlalchemy import api
+from nova import exception
+from nova import flags
+from nova import network
+from nova import test
+from nova.tests import fake_network
+
+
+FLAGS = flags.FLAGS
+flags.DECLARE('dhcp_domain', 'nova.network.manager')
+
+USER_DATA_STRING = ("This is an encoded string")
+ENCODE_USER_DATA_STRING = base64.b64encode(USER_DATA_STRING)
+
+
+def return_non_existing_server_by_address(context, address, *args, **kwarg):
+    raise exception.NotFound()
 
 
 class MetadataTestCase(test.TestCase):
@@ -39,22 +51,45 @@ class MetadataTestCase(test.TestCase):
                          'key_name': None,
                          'host': 'test',
                          'launch_index': 1,
-                         'instance_type': 'm1.tiny',
+                         'instance_type': {'name': 'm1.tiny'},
                          'reservation_id': 'r-xxxxxxxx',
                          'user_data': '',
                          'image_ref': 7,
+                         'vcpus': 1,
+                         'fixed_ips': [],
+                         'root_device_name': '/dev/sda1',
                          'hostname': 'test'})
+
+        def fake_get_instance_nw_info(self, context, instance):
+            return [(None, {'label': 'public',
+                            'ips': [{'ip': '192.168.0.3'},
+                                    {'ip': '192.168.0.4'}],
+                            'ip6s': [{'ip': 'fe80::beef'}]})]
+
+        def fake_get_floating_ips_by_fixed_address(self, context, fixed_ip):
+            return ['1.2.3.4', '5.6.7.8']
 
         def instance_get(*args, **kwargs):
             return self.instance
 
+        def instance_get_list(*args, **kwargs):
+            return [self.instance]
+
         def floating_get(*args, **kwargs):
             return '99.99.99.99'
 
+        self.stubs.Set(network.API, 'get_instance_nw_info',
+                fake_get_instance_nw_info)
+        self.stubs.Set(network.API, 'get_floating_ips_by_fixed_address',
+                fake_get_floating_ips_by_fixed_address)
         self.stubs.Set(api, 'instance_get', instance_get)
-        self.stubs.Set(api, 'fixed_ip_get_instance', instance_get)
+        self.stubs.Set(api, 'instance_get_all_by_filters', instance_get_list)
         self.stubs.Set(api, 'instance_get_floating_address', floating_get)
         self.app = metadatarequesthandler.MetadataRequestHandler()
+        network_manager = fake_network.FakeNetworkManager()
+        self.stubs.Set(self.app.cc.network_api,
+                       'get_instance_uuids_by_ip_filter',
+                       network_manager.get_instance_uuids_by_ip_filter)
 
     def request(self, relative_url):
         request = webob.Request.blank(relative_url)
@@ -74,3 +109,38 @@ class MetadataTestCase(test.TestCase):
         self.stubs.Set(api, 'security_group_get_by_instance', sg_get)
         self.assertEqual(self.request('/meta-data/security-groups'),
                          'default\nother')
+
+    def test_user_data_non_existing_fixed_address(self):
+        self.stubs.Set(api, 'instance_get_all_by_filters',
+                       return_non_existing_server_by_address)
+        request = webob.Request.blank('/user-data')
+        request.remote_addr = "127.1.1.1"
+        response = request.get_response(self.app)
+        self.assertEqual(response.status_int, 404)
+
+    def test_user_data_none_fixed_address(self):
+        self.stubs.Set(api, 'instance_get_all_by_filters',
+                       return_non_existing_server_by_address)
+        request = webob.Request.blank('/user-data')
+        request.remote_addr = None
+        response = request.get_response(self.app)
+        self.assertEqual(response.status_int, 500)
+
+    def test_user_data_invalid_url(self):
+        request = webob.Request.blank('/user-data-invalid')
+        request.remote_addr = "127.0.0.1"
+        response = request.get_response(self.app)
+        self.assertEqual(response.status_int, 404)
+
+    def test_user_data_with_use_forwarded_header(self):
+        self.instance['user_data'] = ENCODE_USER_DATA_STRING
+        self.flags(use_forwarded_for=True)
+        request = webob.Request.blank('/user-data')
+        request.remote_addr = "127.0.0.1"
+        response = request.get_response(self.app)
+        self.assertEqual(response.status_int, 200)
+        self.assertEqual(response.body, USER_DATA_STRING)
+
+    def test_local_hostname_fqdn(self):
+        self.assertEqual(self.request('/meta-data/local-hostname'),
+            "%s.%s" % (self.instance['hostname'], FLAGS.dhcp_domain))

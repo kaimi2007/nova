@@ -20,6 +20,10 @@ Starting point for routing EC2 requests.
 
 """
 
+from urlparse import urlparse
+
+import eventlet
+from eventlet.green import httplib
 import webob
 import webob.dec
 import webob.exc
@@ -34,18 +38,15 @@ from nova.api.ec2 import apirequest
 from nova.api.ec2 import ec2utils
 from nova.auth import manager
 
-
 FLAGS = flags.FLAGS
 LOG = logging.getLogger("nova.api")
-flags.DEFINE_boolean('use_forwarded_for', False,
-                     'Treat X-Forwarded-For as the canonical remote address. '
-                     'Only enable this if you have a sanitizing proxy.')
 flags.DEFINE_integer('lockout_attempts', 5,
                      'Number of failed auths before lockout.')
 flags.DEFINE_integer('lockout_minutes', 15,
                      'Number of minutes to lockout if triggered.')
 flags.DEFINE_integer('lockout_window', 15,
                      'Number of minutes for lockout window.')
+flags.DECLARE('use_forwarded_for', 'nova.api.auth')
 
 
 class RequestLogging(wsgi.Middleware):
@@ -66,7 +67,7 @@ class RequestLogging(wsgi.Middleware):
         else:
             controller = None
             action = None
-        ctxt = request.environ.get('ec2.context', None)
+        ctxt = request.environ.get('nova.context', None)
         delta = utils.utcnow() - start
         seconds = delta.seconds
         microseconds = delta.microseconds
@@ -138,9 +139,29 @@ class Lockout(wsgi.Middleware):
         return res
 
 
-class Authenticate(wsgi.Middleware):
+class NoAuth(wsgi.Middleware):
+    """Add user:project as 'nova.context' to WSGI environ."""
 
-    """Authenticate an EC2 request and add 'ec2.context' to WSGI environ."""
+    @webob.dec.wsgify(RequestClass=wsgi.Request)
+    def __call__(self, req):
+        if 'AWSAccessKeyId' not in req.params:
+            raise webob.exc.HTTPBadRequest()
+        user_id, _sep, project_id = req.params['AWSAccessKeyId'].partition(':')
+        project_id = project_id or user_id
+        remote_address = getattr(req, 'remote_address', '127.0.0.1')
+        if FLAGS.use_forwarded_for:
+            remote_address = req.headers.get('X-Forwarded-For', remote_address)
+        ctx = context.RequestContext(user_id,
+                                     project_id,
+                                     is_admin=True,
+                                     remote_address=remote_address)
+
+        req.environ['nova.context'] = ctx
+        return self.application
+
+
+class Authenticate(wsgi.Middleware):
+    """Authenticate an EC2 request and add 'nova.context' to WSGI environ."""
 
     @webob.dec.wsgify(RequestClass=wsgi.Request)
     def __call__(self, req):
@@ -148,7 +169,7 @@ class Authenticate(wsgi.Middleware):
         try:
             signature = req.params['Signature']
             access = req.params['AWSAccessKeyId']
-        except:
+        except KeyError:
             raise webob.exc.HTTPBadRequest()
 
         # Make a copy of args for authentication and signature verification.
@@ -157,8 +178,9 @@ class Authenticate(wsgi.Middleware):
         auth_params.pop('Signature')
 
         # Authenticate the request.
+        authman = manager.AuthManager()
         try:
-            (user, project) = manager.AuthManager().authenticate(
+            (user, project) = authman.authenticate(
                     access,
                     signature,
                     auth_params,
@@ -174,14 +196,17 @@ class Authenticate(wsgi.Middleware):
         remote_address = req.remote_addr
         if FLAGS.use_forwarded_for:
             remote_address = req.headers.get('X-Forwarded-For', remote_address)
-        ctxt = context.RequestContext(user=user,
-                                      project=project,
+        roles = authman.get_active_roles(user, project)
+        ctxt = context.RequestContext(user_id=user.id,
+                                      project_id=project.id,
+                                      is_admin=user.is_admin(),
+                                      roles=roles,
                                       remote_address=remote_address)
-        req.environ['ec2.context'] = ctxt
+        req.environ['nova.context'] = ctxt
         uname = user.name
         pname = project.name
         msg = _('Authenticated Request For %(uname)s:%(pname)s)') % locals()
-        LOG.audit(msg, context=req.environ['ec2.context'])
+        LOG.audit(msg, context=req.environ['nova.context'])
         return self.application
 
 
@@ -208,7 +233,7 @@ class Requestify(wsgi.Middleware):
             for non_arg in non_args:
                 # Remove, but raise KeyError if omitted
                 args.pop(non_arg)
-        except:
+        except KeyError, e:
             raise webob.exc.HTTPBadRequest()
 
         LOG.debug(_('action: %s'), action)
@@ -228,7 +253,7 @@ class Authorizer(wsgi.Middleware):
     """Authorize an EC2 API request.
 
     Return a 401 if ec2.controller and ec2.action in WSGI environ may not be
-    executed in ec2.context.
+    executed in nova.context.
     """
 
     def __init__(self, application):
@@ -282,7 +307,7 @@ class Authorizer(wsgi.Middleware):
 
     @webob.dec.wsgify(RequestClass=wsgi.Request)
     def __call__(self, req):
-        context = req.environ['ec2.context']
+        context = req.environ['nova.context']
         controller = req.environ['ec2.request'].controller.__class__.__name__
         action = req.environ['ec2.request'].action
         allowed_roles = self.action_roles[controller].get(action, ['none'])
@@ -295,28 +320,27 @@ class Authorizer(wsgi.Middleware):
 
     def _matches_any_role(self, context, roles):
         """Return True if any role in roles is allowed in context."""
-        if context.user.is_superuser():
+        if context.is_admin:
             return True
         if 'all' in roles:
             return True
         if 'none' in roles:
             return False
-        return any(context.project.has_role(context.user_id, role)
-                   for role in roles)
+        return any(role in context.roles for role in roles)
 
 
 class Executor(wsgi.Application):
 
     """Execute an EC2 API request.
 
-    Executes 'ec2.action' upon 'ec2.controller', passing 'ec2.context' and
+    Executes 'ec2.action' upon 'ec2.controller', passing 'nova.context' and
     'ec2.action_args' (all variables in WSGI environ.)  Returns an XML
     response, or a 400 upon failure.
     """
 
     @webob.dec.wsgify(RequestClass=wsgi.Request)
     def __call__(self, req):
-        context = req.environ['ec2.context']
+        context = req.environ['nova.context']
         api_request = req.environ['ec2.request']
         result = None
         try:
@@ -324,18 +348,20 @@ class Executor(wsgi.Application):
         except exception.InstanceNotFound as ex:
             LOG.info(_('InstanceNotFound raised: %s'), unicode(ex),
                      context=context)
-            return self._error(req, context, type(ex).__name__, ex.message)
+            ec2_id = ec2utils.id_to_ec2_id(ex.kwargs['instance_id'])
+            message = ex.message % {'instance_id': ec2_id}
+            return self._error(req, context, type(ex).__name__, message)
         except exception.VolumeNotFound as ex:
             LOG.info(_('VolumeNotFound raised: %s'), unicode(ex),
                      context=context)
-            ec2_id = ec2utils.id_to_ec2_vol_id(ex.volume_id)
-            message = _('Volume %s not found') % ec2_id
+            ec2_id = ec2utils.id_to_ec2_vol_id(ex.kwargs['volume_id'])
+            message = ex.message % {'volume_id': ec2_id}
             return self._error(req, context, type(ex).__name__, message)
         except exception.SnapshotNotFound as ex:
             LOG.info(_('SnapshotNotFound raised: %s'), unicode(ex),
                      context=context)
-            ec2_id = ec2utils.id_to_ec2_snap_id(ex.snapshot_id)
-            message = _('Snapshot %s not found') % ec2_id
+            ec2_id = ec2utils.id_to_ec2_snap_id(ex.kwargs['snapshot_id'])
+            message = ex.message % {'snapshot_id': ec2_id}
             return self._error(req, context, type(ex).__name__, message)
         except exception.NotFound as ex:
             LOG.info(_('NotFound raised: %s'), unicode(ex), context=context)
@@ -351,6 +377,18 @@ class Executor(wsgi.Application):
         except exception.KeyPairExists as ex:
             LOG.debug(_('KeyPairExists raised: %s'), unicode(ex),
                      context=context)
+            return self._error(req, context, type(ex).__name__, unicode(ex))
+        except exception.InvalidParameterValue as ex:
+            LOG.debug(_('InvalidParameterValue raised: %s'), unicode(ex),
+                     context=context)
+            return self._error(req, context, type(ex).__name__, unicode(ex))
+        except exception.InvalidPortRange as ex:
+            LOG.debug(_('InvalidPortRange raised: %s'), unicode(ex),
+                     context=context)
+            return self._error(req, context, type(ex).__name__, unicode(ex))
+        except exception.NotAuthorized as ex:
+            LOG.info(_('NotAuthorized raised: %s'), unicode(ex),
+                    context=context)
             return self._error(req, context, type(ex).__name__, unicode(ex))
         except Exception as ex:
             extra = {'environment': req.environ}

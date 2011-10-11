@@ -18,6 +18,8 @@
 
 import eventlet
 import json
+import random
+
 from nova.virt import xenapi_conn
 from nova.virt.xenapi import fake
 from nova.virt.xenapi import volume_utils
@@ -28,10 +30,10 @@ from nova import utils
 
 def stubout_instance_snapshot(stubs):
     @classmethod
-    def fake_fetch_image(cls, session, instance_id, image, user, project,
-                         type):
+    def fake_fetch_image(cls, context, session, instance, image, user,
+                         project, type):
         from nova.virt.xenapi.fake import create_vdi
-        name_label = "instance-%s" % instance_id
+        name_label = "instance-%s" % instance.id
         #TODO: create fake SR record
         sr_ref = "fakesr"
         vdi_ref = create_vdi(name_label=name_label, read_only=False,
@@ -191,6 +193,7 @@ class FakeSessionForVMTests(fake.SessionBase):
         vm['power_state'] = 'Running'
         vm['is_a_template'] = False
         vm['is_control_domain'] = False
+        vm['domid'] = random.randrange(1, 1 << 16)
 
     def VM_snapshot(self, session_ref, vm_ref, label):
         status = "Running"
@@ -227,7 +230,7 @@ def stub_out_vm_methods(stubs):
     def fake_release_bootlock(self, vm):
         pass
 
-    def fake_spawn_rescue(self, inst):
+    def fake_spawn_rescue(self, context, inst, network_info):
         inst._rescue = False
 
     stubs.Set(vmops.VMOps, "_shutdown", fake_shutdown)
@@ -279,9 +282,6 @@ class FakeSessionForMigrationTests(fake.SessionBase):
     def VDI_get_by_uuid(self, *args):
         return 'hurr'
 
-    def VDI_resize_online(self, *args):
-        pass
-
     def VM_start(self, _1, ref, _2, _3):
         vm = fake.get_record('VM', ref)
         if vm['power_state'] != 'Halted':
@@ -290,10 +290,17 @@ class FakeSessionForMigrationTests(fake.SessionBase):
         vm['power_state'] = 'Running'
         vm['is_a_template'] = False
         vm['is_control_domain'] = False
+        vm['domid'] = random.randrange(1, 1 << 16)
+
+    def VM_set_name_label(self, *args):
+        pass
+
+    def VDI_set_name_label(self, session_ref, vdi_ref, name_label):
+        pass
 
 
 def stub_out_migration_methods(stubs):
-    def fake_get_snapshot(self, instance):
+    def fake_create_snapshot(self, instance):
         return 'vm_ref', dict(image='foo', snap='bar')
 
     @classmethod
@@ -323,7 +330,7 @@ def stub_out_migration_methods(stubs):
     stubs.Set(vmops.VMOps, '_destroy', fake_destroy)
     stubs.Set(vm_utils.VMHelper, 'scan_default_sr', fake_sr)
     stubs.Set(vm_utils.VMHelper, 'scan_sr', fake_sr)
-    stubs.Set(vmops.VMOps, '_get_snapshot', fake_get_snapshot)
+    stubs.Set(vmops.VMOps, '_create_snapshot', fake_create_snapshot)
     stubs.Set(vm_utils.VMHelper, 'get_vdi_for_vm_safely', fake_get_vdi)
     stubs.Set(xenapi_conn.XenAPISession, 'wait_for_task', lambda x, y, z: None)
     stubs.Set(vm_utils.VMHelper, 'get_sr_path', fake_get_sr_path)

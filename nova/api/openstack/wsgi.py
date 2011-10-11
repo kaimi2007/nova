@@ -1,5 +1,22 @@
+# vim: tabstop=4 shiftwidth=4 softtabstop=4
+
+# Copyright 2011 OpenStack LLC.
+# All Rights Reserved.
+#
+#    Licensed under the Apache License, Version 2.0 (the "License"); you may
+#    not use this file except in compliance with the License. You may obtain
+#    a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+#    License for the specific language governing permissions and limitations
+#    under the License.
 
 import json
+from lxml import etree
 import webob
 from xml.dom import minidom
 from xml.parsers import expat
@@ -14,27 +31,45 @@ from nova import wsgi
 XMLNS_V10 = 'http://docs.rackspacecloud.com/servers/api/v1.0'
 XMLNS_V11 = 'http://docs.openstack.org/compute/api/v1.1'
 
+XMLNS_ATOM = 'http://www.w3.org/2005/Atom'
+
 LOG = logging.getLogger('nova.api.openstack.wsgi')
+
+# The vendor content types should serialize identically to the non-vendor
+# content types. So to avoid littering the code with both options, we
+# map the vendor to the other when looking up the type
+_CONTENT_TYPE_MAP = {
+    'application/vnd.openstack.compute+json': 'application/json',
+    'application/vnd.openstack.compute+xml': 'application/xml',
+}
+
+_SUPPORTED_CONTENT_TYPES = (
+    'application/json',
+    'application/vnd.openstack.compute+json',
+    'application/xml',
+    'application/vnd.openstack.compute+xml',
+)
 
 
 class Request(webob.Request):
     """Add some Openstack API-specific logic to the base webob.Request."""
 
-    def best_match_content_type(self):
+    def best_match_content_type(self, supported_content_types=None):
         """Determine the requested response content-type.
 
         Based on the query extension then the Accept header.
 
         """
-        supported = ('application/json', 'application/xml')
+        supported_content_types = supported_content_types or \
+            _SUPPORTED_CONTENT_TYPES
 
         parts = self.path.rsplit('.', 1)
         if len(parts) > 1:
             ctype = 'application/{0}'.format(parts[1])
-            if ctype in supported:
+            if ctype in supported_content_types:
                 return ctype
 
-        bm = self.accept.best_match(supported)
+        bm = self.accept.best_match(supported_content_types)
 
         # default to application/json if we don't find a preference
         return bm or 'application/json'
@@ -48,7 +83,7 @@ class Request(webob.Request):
         if not "Content-Type" in self.headers:
             return None
 
-        allowed_types = ("application/xml", "application/json")
+        allowed_types = _SUPPORTED_CONTENT_TYPES
         content_type = self.content_type
 
         if content_type not in allowed_types:
@@ -134,8 +169,41 @@ class XMLDeserializer(TextDeserializer):
                                                                  listnames)
             return result
 
+    def find_first_child_named(self, parent, name):
+        """Search a nodes children for the first child with a given name"""
+        for node in parent.childNodes:
+            if node.nodeName == name:
+                return node
+        return None
+
+    def find_children_named(self, parent, name):
+        """Return all of a nodes children who have the given name"""
+        for node in parent.childNodes:
+            if node.nodeName == name:
+                yield node
+
+    def extract_text(self, node):
+        """Get the text field contained by the given node"""
+        if len(node.childNodes) == 1:
+            child = node.childNodes[0]
+            if child.nodeType == child.TEXT_NODE:
+                return child.nodeValue
+        return ""
+
     def default(self, datastring):
         return {'body': self._from_xml(datastring)}
+
+
+class MetadataXMLDeserializer(XMLDeserializer):
+
+    def extract_metadata(self, metadata_node):
+        """Marshal the metadata attribute of a parsed request"""
+        metadata = {}
+        if metadata_node is not None:
+            for meta_node in self.find_children_named(metadata_node, "meta"):
+                key = meta_node.getAttribute("key")
+                metadata[key] = self.extract_text(meta_node)
+        return metadata
 
 
 class RequestHeadersDeserializer(ActionDispatcher):
@@ -151,7 +219,12 @@ class RequestHeadersDeserializer(ActionDispatcher):
 class RequestDeserializer(object):
     """Break up a Request object into more useful pieces."""
 
-    def __init__(self, body_deserializers=None, headers_deserializer=None):
+    def __init__(self, body_deserializers=None, headers_deserializer=None,
+                 supported_content_types=None):
+
+        self.supported_content_types = supported_content_types or \
+                _SUPPORTED_CONTENT_TYPES
+
         self.body_deserializers = {
             'application/xml': XMLDeserializer(),
             'application/json': JSONDeserializer(),
@@ -208,12 +281,13 @@ class RequestDeserializer(object):
 
     def get_body_deserializer(self, content_type):
         try:
-            return self.body_deserializers[content_type]
+            ctype = _CONTENT_TYPE_MAP.get(content_type, content_type)
+            return self.body_deserializers[ctype]
         except (KeyError, TypeError):
             raise exception.InvalidContentType(content_type=content_type)
 
     def get_expected_content_type(self, request):
-        return request.best_match_content_type()
+        return request.best_match_content_type(self.supported_content_types)
 
     def get_action_args(self, request_environment):
         """Parse dictionary created by routes library."""
@@ -274,7 +348,7 @@ class XMLDictSerializer(DictSerializer):
 
     def to_xml_string(self, node, has_atom=False):
         self._add_xmlns(node, has_atom)
-        return node.toprettyxml(indent='    ', encoding='UTF-8')
+        return node.toxml('UTF-8')
 
     #NOTE (ameade): the has_atom should be removed after all of the
     # xml serializers and view builders have been updated to the current
@@ -346,8 +420,14 @@ class XMLDictSerializer(DictSerializer):
             link_node = xml_doc.createElement('atom:link')
             link_node.setAttribute('rel', link['rel'])
             link_node.setAttribute('href', link['href'])
+            if 'type' in link:
+                link_node.setAttribute('type', link['type'])
             link_nodes.append(link_node)
         return link_nodes
+
+    def _to_xml(self, root):
+        """Convert the xml object to an xml string."""
+        return etree.tostring(root, encoding='UTF-8', xml_declaration=True)
 
 
 class ResponseHeadersSerializer(ActionDispatcher):
@@ -390,12 +470,14 @@ class ResponseSerializer(object):
 
     def serialize_body(self, response, data, content_type, action):
         response.headers['Content-Type'] = content_type
-        serializer = self.get_body_serializer(content_type)
-        response.body = serializer.serialize(data, action)
+        if data is not None:
+            serializer = self.get_body_serializer(content_type)
+            response.body = serializer.serialize(data, action)
 
     def get_body_serializer(self, content_type):
         try:
-            return self.body_serializers[content_type]
+            ctype = _CONTENT_TYPE_MAP.get(content_type, content_type)
+            return self.body_serializers[ctype]
         except (KeyError, TypeError):
             raise exception.InvalidContentType(content_type=content_type)
 
@@ -412,6 +494,7 @@ class Resource(wsgi.Application):
     serialized by requested content type.
 
     """
+
     def __init__(self, controller, deserializer=None, serializer=None):
         """
         :param controller: object that implement methods created by routes lib
@@ -436,14 +519,21 @@ class Resource(wsgi.Application):
             action, args, accept = self.deserializer.deserialize(request)
         except exception.InvalidContentType:
             msg = _("Unsupported Content-Type")
-            return webob.exc.HTTPBadRequest(explanation=msg)
+            return faults.Fault(webob.exc.HTTPBadRequest(explanation=msg))
         except exception.MalformedRequestBody:
             msg = _("Malformed request body")
             return faults.Fault(webob.exc.HTTPBadRequest(explanation=msg))
 
-        action_result = self.dispatch(request, action, args)
+        project_id = args.pop("project_id", None)
+        if 'nova.context' in request.environ and project_id:
+            request.environ['nova.context'].project_id = project_id
 
-        #TODO(bcwaldon): find a more elegant way to pass through non-dict types
+        try:
+            action_result = self.dispatch(request, action, args)
+        except webob.exc.HTTPException as ex:
+            LOG.info(_("HTTP exception thrown: %s"), unicode(ex))
+            action_result = faults.Fault(ex)
+
         if type(action_result) is dict or action_result is None:
             response = self.serializer.serialize(action_result,
                                                  accept,
@@ -468,6 +558,6 @@ class Resource(wsgi.Application):
         controller_method = getattr(self.controller, action)
         try:
             return controller_method(req=request, **action_args)
-        except TypeError, exc:
-            LOG.debug(str(exc))
-            return webob.exc.HTTPBadRequest()
+        except TypeError as exc:
+            LOG.exception(exc)
+            return faults.Fault(webob.exc.HTTPBadRequest())

@@ -15,39 +15,33 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import copy
-import random
-import string
-
 import webob
 import webob.dec
 from paste import urlmap
 
 from glance import client as glance_client
-from glance.common import exception as glance_exc
 
 from nova import context
 from nova import exception as exc
 from nova import utils
+from nova import wsgi
 import nova.api.openstack.auth
 from nova.api import openstack
+from nova.api import auth as api_auth
 from nova.api.openstack import auth
 from nova.api.openstack import extensions
 from nova.api.openstack import versions
 from nova.api.openstack import limits
 from nova.auth.manager import User, Project
 import nova.image.fake
-from nova.image import glance
-from nova.image import service
-from nova.tests import fake_flags
-from nova.wsgi import Router
+from nova.tests.glance import stubs as glance_stubs
 
 
 class Context(object):
     pass
 
 
-class FakeRouter(Router):
+class FakeRouter(wsgi.Router):
     def __init__(self):
         pass
 
@@ -68,21 +62,34 @@ def fake_auth_init(self, application):
 
 @webob.dec.wsgify
 def fake_wsgi(self, req):
-    req.environ['nova.context'] = context.RequestContext(1, 1)
     return self.application
 
 
-def wsgi_app(inner_app10=None, inner_app11=None):
+def wsgi_app(inner_app10=None, inner_app11=None, fake_auth=True,
+        fake_auth_context=None):
     if not inner_app10:
         inner_app10 = openstack.APIRouterV10()
     if not inner_app11:
         inner_app11 = openstack.APIRouterV11()
-    mapper = urlmap.URLMap()
-    api10 = openstack.FaultWrapper(auth.AuthMiddleware(
+
+    if fake_auth:
+        if fake_auth_context is not None:
+            ctxt = fake_auth_context
+        else:
+            ctxt = context.RequestContext('fake', 'fake', auth_token=True)
+        api10 = openstack.FaultWrapper(api_auth.InjectContext(ctxt,
               limits.RateLimitingMiddleware(inner_app10)))
-    api11 = openstack.FaultWrapper(auth.AuthMiddleware(
+        api11 = openstack.FaultWrapper(api_auth.InjectContext(ctxt,
               limits.RateLimitingMiddleware(
                   extensions.ExtensionMiddleware(inner_app11))))
+    else:
+        api10 = openstack.FaultWrapper(auth.AuthMiddleware(
+              limits.RateLimitingMiddleware(inner_app10)))
+        api11 = openstack.FaultWrapper(auth.AuthMiddleware(
+              limits.RateLimitingMiddleware(
+                  extensions.ExtensionMiddleware(inner_app11))))
+        Auth = auth
+    mapper = urlmap.URLMap()
     mapper['/v1.0'] = api10
     mapper['/v1.1'] = api11
     mapper['/'] = openstack.FaultWrapper(versions.Versions())
@@ -93,19 +100,25 @@ def stub_out_key_pair_funcs(stubs, have_key_pair=True):
     def key_pair(context, user_id):
         return [dict(name='key', public_key='public_key')]
 
+    def one_key_pair(context, user_id, name):
+        if name == 'key':
+            return dict(name='key', public_key='public_key')
+        else:
+            raise exc.KeypairNotFound(user_id=user_id, name=name)
+
     def no_key_pair(context, user_id):
         return []
 
     if have_key_pair:
-        stubs.Set(nova.db, 'key_pair_get_all_by_user', key_pair)
+        stubs.Set(nova.db.api, 'key_pair_get_all_by_user', key_pair)
+        stubs.Set(nova.db.api, 'key_pair_get', one_key_pair)
     else:
-        stubs.Set(nova.db, 'key_pair_get_all_by_user', no_key_pair)
+        stubs.Set(nova.db.api, 'key_pair_get_all_by_user', no_key_pair)
 
 
 def stub_out_image_service(stubs):
-    def fake_get_image_service(image_href):
-        image_id = int(str(image_href).split('/')[-1])
-        return (nova.image.fake.FakeImageService(), image_id)
+    def fake_get_image_service(context, image_href):
+        return (nova.image.fake.FakeImageService(), image_href)
     stubs.Set(nova.image, 'get_image_service', fake_get_image_service)
     stubs.Set(nova.image, 'get_default_image_service',
         lambda: nova.image.fake.FakeImageService())
@@ -157,6 +170,79 @@ def stub_out_compute_api_backup(stubs):
     stubs.Set(nova.compute.API, 'backup', backup)
 
 
+def stub_out_nw_api_get_instance_nw_info(stubs, func=None):
+    def get_instance_nw_info(self, context, instance):
+        return [(None, {'label': 'public',
+                         'ips': [{'ip': '192.168.0.3'}],
+                         'ip6s': []})]
+
+    if func is None:
+        func = get_instance_nw_info
+    stubs.Set(nova.network.API, 'get_instance_nw_info', func)
+
+
+def stub_out_nw_api_get_floating_ips_by_fixed_address(stubs, func=None):
+    def get_floating_ips_by_fixed_address(self, context, fixed_ip):
+        return ['1.2.3.4']
+
+    if func is None:
+        func = get_floating_ips_by_fixed_address
+    stubs.Set(nova.network.API, 'get_floating_ips_by_fixed_address', func)
+
+
+def stub_out_nw_api(stubs, cls=None, private=None, publics=None):
+    if not private:
+        private = '192.168.0.3'
+    if not publics:
+        publics = ['1.2.3.4']
+
+    class Fake:
+        def get_instance_nw_info(*args, **kwargs):
+            return [(None, {'label': 'private',
+                            'ips': [{'ip': private}]})]
+
+        def get_floating_ips_by_fixed_address(*args, **kwargs):
+            return publics
+
+    if cls is None:
+        cls = Fake
+    stubs.Set(nova.network, 'API', cls)
+
+
+def _make_image_fixtures():
+    NOW_GLANCE_FORMAT = "2010-10-11T10:30:22"
+
+    image_id = 123
+    base_attrs = {'deleted': False}
+
+    fixtures = []
+
+    def add_fixture(**kwargs):
+        kwargs.update(base_attrs)
+        fixtures.append(kwargs)
+
+    # Public image
+    add_fixture(id=image_id, name='public image', is_public=True,
+                status='active', properties={'key1': 'value1'},
+                min_ram="128", min_disk="10")
+    image_id += 1
+
+    # Snapshot for User 1
+    server_ref = 'http://localhost/v1.1/servers/42'
+    snapshot_properties = {'instance_ref': server_ref, 'user_id': 'fake'}
+    for status in ('queued', 'saving', 'active', 'killed',
+                   'deleted', 'pending_delete'):
+        add_fixture(id=image_id, name='%s snapshot' % status,
+                    is_public=False, status=status,
+                    properties=snapshot_properties)
+        image_id += 1
+
+    # Image without a name
+    add_fixture(id=image_id, is_public=True, status='active', properties={})
+
+    return fixtures
+
+
 def stub_out_glance_add_image(stubs, sent_to_glance):
     """
     We return the metadata sent to glance by modifying the sent_to_glance dict
@@ -172,91 +258,11 @@ def stub_out_glance_add_image(stubs, sent_to_glance):
     stubs.Set(glance_client.Client, 'add_image', fake_add_image)
 
 
-def stub_out_glance(stubs, initial_fixtures=None):
-
-    class FakeGlanceClient:
-
-        def __init__(self, initial_fixtures):
-            self.fixtures = initial_fixtures or []
-
-        def _filter_images(self, filters=None, marker=None, limit=None):
-            found = True
-            if marker:
-                found = False
-            if limit == 0:
-                limit = None
-
-            fixtures = []
-            count = 0
-            for f in self.fixtures:
-                if limit and count >= limit:
-                    break
-                if found:
-                    fixtures.append(f)
-                    count = count + 1
-                if f['id'] == marker:
-                    found = True
-
-            return fixtures
-
-        def fake_get_images(self, filters=None, marker=None, limit=None):
-            fixtures = self._filter_images(filters, marker, limit)
-            return [dict(id=f['id'], name=f['name'])
-                    for f in fixtures]
-
-        def fake_get_images_detailed(self, filters=None,
-                                     marker=None, limit=None):
-            return self._filter_images(filters, marker, limit)
-
-        def fake_get_image_meta(self, image_id):
-            image = self._find_image(image_id)
-            if image:
-                return copy.deepcopy(image)
-            raise glance_exc.NotFound
-
-        def fake_add_image(self, image_meta, data=None):
-            image_meta = copy.deepcopy(image_meta)
-            image_id = ''.join(random.choice(string.letters)
-                               for _ in range(20))
-            image_meta['id'] = image_id
-            self.fixtures.append(image_meta)
-            return copy.deepcopy(image_meta)
-
-        def fake_update_image(self, image_id, image_meta, data=None):
-            for attr in ('created_at', 'updated_at', 'deleted_at', 'deleted'):
-                if attr in image_meta:
-                    del image_meta[attr]
-
-            f = self._find_image(image_id)
-            if not f:
-                raise glance_exc.NotFound
-
-            f.update(image_meta)
-            return copy.deepcopy(f)
-
-        def fake_delete_image(self, image_id):
-            f = self._find_image(image_id)
-            if not f:
-                raise glance_exc.NotFound
-
-            self.fixtures.remove(f)
-
-        def _find_image(self, image_id):
-            for f in self.fixtures:
-                if str(f['id']) == str(image_id):
-                    return f
-            return None
-
-    GlanceClient = glance_client.Client
-    fake = FakeGlanceClient(initial_fixtures)
-
-    stubs.Set(GlanceClient, 'get_images', fake.fake_get_images)
-    stubs.Set(GlanceClient, 'get_images_detailed',
-              fake.fake_get_images_detailed)
-    stubs.Set(GlanceClient, 'get_image_meta', fake.fake_get_image_meta)
-    stubs.Set(GlanceClient, 'add_image', fake.fake_add_image)
-    stubs.Set(GlanceClient, 'update_image', fake.fake_update_image)
-    stubs.Set(GlanceClient, 'delete_image', fake.fake_delete_image)
+def stub_out_glance(stubs):
+    def fake_get_image_service():
+        client = glance_stubs.StubGlanceClient(_make_image_fixtures())
+        return nova.image.glance.GlanceImageService(client)
+    stubs.Set(nova.image, 'get_default_image_service', fake_get_image_service)
 
 
 class FakeToken(object):
@@ -359,17 +365,18 @@ class FakeAuthManager(object):
             if admin is not None:
                 user.admin = admin
 
-    def is_admin(self, user):
+    def is_admin(self, user_id):
+        user = self.get_user(user_id)
         return user.admin
 
-    def is_project_member(self, user, project):
+    def is_project_member(self, user_id, project):
         if not isinstance(project, Project):
             try:
                 project = self.get_project(project)
             except exc.NotFound:
                 raise webob.exc.HTTPUnauthorized()
-        return ((user.id in project.member_ids) or
-                (user.id == project.project_manager_id))
+        return ((user_id in project.member_ids) or
+                (user_id == project.project_manager_id))
 
     def create_project(self, name, manager_user, description=None,
                        member_users=None):
@@ -396,13 +403,13 @@ class FakeAuthManager(object):
         else:
             raise exc.NotFound
 
-    def get_projects(self, user=None):
-        if not user:
+    def get_projects(self, user_id=None):
+        if not user_id:
             return FakeAuthManager.projects.values()
         else:
             return [p for p in FakeAuthManager.projects.values()
-                    if (user.id in p.member_ids) or
-                       (user.id == p.project_manager_id)]
+                    if (user_id in p.member_ids) or
+                       (user_id == p.project_manager_id)]
 
 
 class FakeRateLimiter(object):

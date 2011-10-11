@@ -32,6 +32,7 @@ import json
 import logging
 import logging.handlers
 import os
+import stat
 import sys
 import traceback
 
@@ -43,8 +44,8 @@ from nova import version
 FLAGS = flags.FLAGS
 flags.DEFINE_string('logging_context_format_string',
                     '%(asctime)s %(levelname)s %(name)s '
-                    '[%(request_id)s %(user)s '
-                    '%(project)s] %(message)s',
+                    '[%(request_id)s %(user_id)s '
+                    '%(project_id)s] %(message)s',
                     'format string to use for log messages with context')
 flags.DEFINE_string('logging_default_format_string',
                     '%(asctime)s %(levelname)s %(name)s [-] '
@@ -257,6 +258,10 @@ class NovaRootLogger(NovaLogger):
                 self.filelog = WatchedFileHandler(logpath)
                 self.addHandler(self.filelog)
                 self.logpath = logpath
+
+                st = os.stat(self.logpath)
+                if st.st_mode != (stat.S_IFREG | FLAGS.logfile_mode):
+                    os.chmod(self.logpath, FLAGS.logfile_mode)
         else:
             self.removeHandler(self.filelog)
             self.addHandler(self.streamlog)

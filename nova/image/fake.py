@@ -24,7 +24,6 @@ import random
 from nova import exception
 from nova import flags
 from nova import log as logging
-from nova.image import service
 
 
 LOG = logging.getLogger('nova.image.fake')
@@ -33,7 +32,7 @@ LOG = logging.getLogger('nova.image.fake')
 FLAGS = flags.FLAGS
 
 
-class _FakeImageService(service.BaseImageService):
+class _FakeImageService(object):
     """Mock (fake) image service for unit testing."""
 
     def __init__(self):
@@ -45,9 +44,12 @@ class _FakeImageService(service.BaseImageService):
                  'name': 'fakeimage123456',
                  'created_at': timestamp,
                  'updated_at': timestamp,
+                 'deleted_at': None,
+                 'deleted': False,
                  'status': 'active',
-                 'container_format': 'ami',
-                 'disk_format': 'raw',
+                 'is_public': False,
+#                 'container_format': 'ami',
+#                 'disk_format': 'raw',
                  'properties': {'kernel_id': FLAGS.null_kernel,
                                 'ramdisk_id': FLAGS.null_kernel,
                                 'architecture': 'x86_64'}}
@@ -56,9 +58,12 @@ class _FakeImageService(service.BaseImageService):
                  'name': 'fakeimage123456',
                  'created_at': timestamp,
                  'updated_at': timestamp,
+                 'deleted_at': None,
+                 'deleted': False,
                  'status': 'active',
-                 'container_format': 'ami',
-                 'disk_format': 'raw',
+                 'is_public': True,
+#                 'container_format': 'ami',
+#                 'disk_format': 'raw',
                  'properties': {'kernel_id': FLAGS.null_kernel,
                                 'ramdisk_id': FLAGS.null_kernel}}
 
@@ -66,9 +71,12 @@ class _FakeImageService(service.BaseImageService):
                  'name': 'fakeimage123456',
                  'created_at': timestamp,
                  'updated_at': timestamp,
+                 'deleted_at': None,
+                 'deleted': False,
                  'status': 'active',
-                 'container_format': 'ami',
-                 'disk_format': 'raw',
+                 'is_public': True,
+#                 'container_format': 'ami',
+#                 'disk_format': 'raw',
                  'properties': {'kernel_id': FLAGS.null_kernel,
                                 'ramdisk_id': FLAGS.null_kernel}}
 
@@ -76,9 +84,12 @@ class _FakeImageService(service.BaseImageService):
                  'name': 'fakeimage123456',
                  'created_at': timestamp,
                  'updated_at': timestamp,
+                 'deleted_at': None,
+                 'deleted': False,
                  'status': 'active',
-                 'container_format': 'ami',
-                 'disk_format': 'raw',
+                 'is_public': True,
+#                 'container_format': 'ami',
+#                 'disk_format': 'raw',
                  'properties': {'kernel_id': FLAGS.null_kernel,
                                 'ramdisk_id': FLAGS.null_kernel}}
 
@@ -86,9 +97,12 @@ class _FakeImageService(service.BaseImageService):
                  'name': 'fakeimage123456',
                  'created_at': timestamp,
                  'updated_at': timestamp,
+                 'deleted_at': None,
+                 'deleted': False,
                  'status': 'active',
-                 'container_format': 'ami',
-                 'disk_format': 'raw',
+                 'is_public': True,
+#                 'container_format': 'ami',
+#                 'disk_format': 'raw',
                  'properties': {'kernel_id': FLAGS.null_kernel,
                                 'ramdisk_id': FLAGS.null_kernel}}
 
@@ -101,7 +115,11 @@ class _FakeImageService(service.BaseImageService):
 
     def index(self, context, filters=None, marker=None, limit=None):
         """Returns list of images."""
-        return copy.deepcopy(self.images.values())
+        retval = []
+        for img in self.images.values():
+            retval += [dict([(k, v) for k, v in img.iteritems()
+                                                  if k in ['id', 'name']])]
+        return retval
 
     def detail(self, context, filters=None, marker=None, limit=None):
         """Return list of detailed image information."""

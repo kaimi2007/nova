@@ -47,6 +47,29 @@ class InstanceTypeTestCase(test.TestCase):
         self.id = max_id["id"] + 1
         self.name = str(int(time.time()))
 
+    def _nonexistent_flavor_name(self):
+        """return an instance type name not in the DB"""
+        nonexistent_flavor = "sdfsfsdf"
+        flavors = instance_types.get_all_types()
+        while nonexistent_flavor in flavors:
+            nonexistent_flavor += "z"
+        else:
+            return nonexistent_flavor
+
+    def _nonexistent_flavor_id(self):
+        """return an instance type ID not in the DB"""
+        nonexistent_flavor = 2700
+        flavor_ids = [value["id"] for key, value in\
+                    instance_types.get_all_types().iteritems()]
+        while nonexistent_flavor in flavor_ids:
+            nonexistent_flavor += 1
+        else:
+            return nonexistent_flavor
+
+    def _existing_flavor(self):
+        """return first instance type name"""
+        return instance_types.get_all_types().keys()[0]
+
     def test_instance_type_create_then_delete(self):
         """Ensure instance types can be created"""
         starting_inst_list = instance_types.get_all_types()
@@ -84,10 +107,11 @@ class InstanceTypeTestCase(test.TestCase):
                 exception.InvalidInput,
                 instance_types.create, self.name, 256, 1, "aa", self.flavorid)
 
-    def test_non_existant_inst_type_shouldnt_delete(self):
+    def test_non_existent_inst_type_shouldnt_delete(self):
         """Ensures that instance type creation fails with invalid args"""
         self.assertRaises(exception.ApiError,
-                          instance_types.destroy, "sfsfsdfdfs")
+                          instance_types.destroy,
+                          self._nonexistent_flavor_name())
 
     def test_repeated_inst_types_should_raise_api_error(self):
         """Ensures that instance duplicates raises ApiError"""
@@ -97,3 +121,145 @@ class InstanceTypeTestCase(test.TestCase):
         self.assertRaises(
                 exception.ApiError,
                 instance_types.create, new_name, 256, 1, 120, self.flavorid)
+
+    def test_will_not_destroy_with_no_name(self):
+        """Ensure destroy sad path of no name raises error"""
+        self.assertRaises(exception.ApiError,
+                          instance_types.destroy,
+                          self._nonexistent_flavor_name())
+
+    def test_will_not_purge_without_name(self):
+        """Ensure purge without a name raises error"""
+        self.assertRaises(exception.InvalidInstanceType,
+                          instance_types.purge, None)
+
+    def test_will_not_purge_with_wrong_name(self):
+        """Ensure purge without correct name raises error"""
+        self.assertRaises(exception.ApiError,
+                          instance_types.purge,
+                          self._nonexistent_flavor_name())
+
+    def test_will_not_get_bad_default_instance_type(self):
+        """ensures error raised on bad default instance type"""
+        FLAGS.default_instance_type = self._nonexistent_flavor_name()
+        self.assertRaises(exception.InstanceTypeNotFoundByName,
+                          instance_types.get_default_instance_type)
+
+    def test_will_not_get_instance_type_by_name_with_no_name(self):
+        """Ensure get by name returns default flavor with no name"""
+        self.assertEqual(instance_types.get_default_instance_type(),
+                              instance_types.get_instance_type_by_name(None))
+
+    def test_will_not_get_instance_type_with_bad_name(self):
+        """Ensure get by name returns default flavor with bad name"""
+        self.assertRaises(exception.InstanceTypeNotFound,
+                          instance_types.get_instance_type,
+                          self._nonexistent_flavor_name())
+
+    def test_will_not_get_flavor_by_bad_flavor_id(self):
+        """Ensure get by flavor raises error with wrong flavorid"""
+        self.assertRaises(exception.InstanceTypeNotFound,
+                          instance_types.get_instance_type_by_name,
+                          self._nonexistent_flavor_id())
+
+
+class InstanceTypeFilteringTest(test.TestCase):
+    """Test cases for the filter option available for instance_type_get_all"""
+    def setUp(self):
+        super(InstanceTypeFilteringTest, self).setUp()
+        self.context = context.get_admin_context()
+
+    def assertFilterResults(self, filters, expected):
+        inst_types = db.api.instance_type_get_all(
+                self.context, filters=filters)
+        inst_names = [i['name'] for i in inst_types]
+        self.assertEqual(inst_names, expected)
+
+    def test_no_filters(self):
+        filters = None
+        expected = [
+             'cg1.2xlarge',
+             'cg1.4xlarge',
+             'cg1.large',
+             'cg1.medium',
+             'cg1.small',
+             'cg1.xlarge',
+             'm1.large',
+             'm1.medium',
+             'm1.small',
+             'm1.tiny',
+             'm1.xlarge',
+             'sh1.16xlarge',
+             'sh1.2xlarge',
+             'sh1.32xlarge',
+             'sh1.4xlarge',
+             'sh1.8xlarge',
+             'sh1.large',
+             'sh1.medium',
+             'sh1.small',
+             'sh1.xlarge',
+             'tp64.8x8']
+        self.assertFilterResults(filters, expected)
+
+    def test_min_memory_mb_filter(self):
+        """Exclude tiny instance which is 512 MB"""
+        filters = dict(min_memory_mb=513)
+        expected = [
+             'cg1.2xlarge',
+             'cg1.4xlarge',
+             'cg1.large',
+             'cg1.medium',
+             'cg1.small',
+             'cg1.xlarge',
+             'm1.large',
+             'm1.medium',
+             'm1.small',
+             'm1.xlarge',
+             'sh1.16xlarge',
+             'sh1.2xlarge',
+             'sh1.32xlarge',
+             'sh1.4xlarge',
+             'sh1.8xlarge',
+             'sh1.large',
+             'sh1.medium',
+             'sh1.small',
+             'sh1.xlarge',
+             'tp64.8x8']
+        self.assertFilterResults(filters, expected)
+
+    def test_min_local_gb_filter(self):
+        """Exclude everything but large and xlarge which have >= 80 GB"""
+        filters = dict(min_local_gb=80)
+        expected = [
+             'cg1.2xlarge',
+             'cg1.4xlarge',
+             'cg1.large',
+             'cg1.xlarge',
+             'm1.large',
+             'm1.xlarge',
+             'sh1.16xlarge',
+             'sh1.2xlarge',
+             'sh1.32xlarge',
+             'sh1.4xlarge',
+             'sh1.8xlarge',
+             'sh1.large',
+             'sh1.xlarge',
+             'tp64.8x8']
+        self.assertFilterResults(filters, expected)
+
+    def test_min_memory_mb_AND_local_gb_filter(self):
+        """Exclude everything but large and xlarge which have >= 80 GB"""
+        filters = dict(min_memory_mb=16384, min_local_gb=80)
+        expected = [
+             'cg1.2xlarge',
+             'cg1.4xlarge',
+             'cg1.xlarge',
+             'm1.xlarge',
+             'sh1.16xlarge',
+             'sh1.2xlarge',
+             'sh1.32xlarge',
+             'sh1.4xlarge',
+             'sh1.8xlarge',
+             'sh1.xlarge',
+             'tp64.8x8']
+        self.assertFilterResults(filters, expected)

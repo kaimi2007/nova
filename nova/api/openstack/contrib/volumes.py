@@ -16,15 +16,19 @@
 """The volumes extension."""
 
 from webob import exc
+import webob
 
 from nova import compute
 from nova import exception
 from nova import flags
 from nova import log as logging
+from nova import quota
 from nova import volume
+from nova.volume import volume_types
 from nova.api.openstack import common
 from nova.api.openstack import extensions
 from nova.api.openstack import faults
+from nova.api.openstack import servers
 
 
 LOG = logging.getLogger("nova.api.volumes")
@@ -60,6 +64,22 @@ def _translate_volume_summary_view(context, vol):
 
     d['displayName'] = vol['display_name']
     d['displayDescription'] = vol['display_description']
+
+    if vol['volume_type_id'] and vol.get('volume_type'):
+        d['volumeType'] = vol['volume_type']['name']
+    else:
+        d['volumeType'] = vol['volume_type_id']
+
+    LOG.audit(_("vol=%s"), vol, context=context)
+
+    if vol.get('volume_metadata'):
+        meta_dict = {}
+        for i in vol['volume_metadata']:
+            meta_dict[i['key']] = i['value']
+        d['metadata'] = meta_dict
+    else:
+        d['metadata'] = {}
+
     return d
 
 
@@ -77,6 +97,8 @@ class VolumeController(object):
                     "createdAt",
                     "displayName",
                     "displayDescription",
+                    "volumeType",
+                    "metadata",
                     ]}}}
 
     def __init__(self):
@@ -104,7 +126,7 @@ class VolumeController(object):
             self.volume_api.delete(context, volume_id=id)
         except exception.NotFound:
             return faults.Fault(exc.HTTPNotFound())
-        return exc.HTTPAccepted()
+        return webob.Response(status_int=202)
 
     def index(self, req):
         """Returns a summary list of volumes."""
@@ -133,12 +155,25 @@ class VolumeController(object):
         vol = body['volume']
         size = vol['size']
         LOG.audit(_("Create volume of %s GB"), size, context=context)
+
+        vol_type = vol.get('volume_type', None)
+        if vol_type:
+            try:
+                vol_type = volume_types.get_volume_type_by_name(context,
+                                                                vol_type)
+            except exception.NotFound:
+                return faults.Fault(exc.HTTPNotFound())
+
+        metadata = vol.get('metadata', None)
+
         new_volume = self.volume_api.create(context, size, None,
                                             vol.get('display_name'),
-                                            vol.get('display_description'))
+                                            vol.get('display_description'),
+                                            volume_type=vol_type,
+                                            metadata=metadata)
 
         # Work around problem that instance is lazy-loaded...
-        new_volume['instance'] = None
+        new_volume = self.volume_api.get(context, new_volume['id'])
 
         retval = _translate_volume_detail_view(context, new_volume)
 
@@ -279,7 +314,7 @@ class VolumeAttachmentController(object):
         self.compute_api.detach_volume(context,
                                        volume_id=volume_id)
 
-        return exc.HTTPAccepted()
+        return webob.Response(status_int=202)
 
     def _items(self, req, server_id, entity_maker):
         """Returns a list of attachments, transformed through entity_maker."""
@@ -294,6 +329,13 @@ class VolumeAttachmentController(object):
         limited_list = common.limited(volumes, req)
         res = [entity_maker(context, vol) for vol in limited_list]
         return {'volumeAttachments': res}
+
+
+class BootFromVolumeController(servers.ControllerV11):
+    """The boot from volume API controller for the Openstack API."""
+
+    def _get_block_device_mapping(self, data):
+        return data.get('block_device_mapping')
 
 
 class Volumes(extensions.ExtensionDescriptor):
@@ -327,6 +369,10 @@ class Volumes(extensions.ExtensionDescriptor):
                                            parent=dict(
                                                 member_name='server',
                                                 collection_name='servers'))
+        resources.append(res)
+
+        res = extensions.ResourceExtension('os-volumes_boot',
+                                           BootFromVolumeController())
         resources.append(res)
 
         return resources

@@ -116,7 +116,7 @@ def dict_from_dotted_str(items):
     args = {}
     for key, value in items:
         parts = key.split(".")
-        key = camelcase_to_underscore(parts[0])
+        key = str(camelcase_to_underscore(parts[0]))
         if isinstance(value, str) or isinstance(value, unicode):
             # NOTE(vish): Automatically convert strings back
             #             into their respective values
@@ -135,32 +135,3 @@ def dict_from_dotted_str(items):
                 args[key] = value
 
     return args
-
-
-def properties_root_device_name(properties):
-    """get root device name from image meta data.
-    If it isn't specified, return None.
-    """
-    root_device_name = None
-
-    # NOTE(yamahata): see image_service.s3.s3create()
-    for bdm in properties.get('mappings', []):
-        if bdm['virtual'] == 'root':
-            root_device_name = bdm['device']
-
-    # NOTE(yamahata): register_image's command line can override
-    #                 <machine>.manifest.xml
-    if 'root_device_name' in properties:
-        root_device_name = properties['root_device_name']
-
-    return root_device_name
-
-
-def mappings_prepend_dev(mappings):
-    """Prepend '/dev/' to 'device' entry of swap/ephemeral virtual type"""
-    for m in mappings:
-        virtual = m['virtual']
-        if ((virtual == 'swap' or virtual.startswith('ephemeral')) and
-            (not m['device'].startswith('/'))):
-            m['device'] = '/dev/' + m['device']
-    return mappings

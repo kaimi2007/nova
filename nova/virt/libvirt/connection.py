@@ -4,6 +4,7 @@
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
 # Copyright (c) 2010 Citrix Systems, Inc.
+# Copyright (c) 2011 Piston Cloud Computing, Inc
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -28,33 +29,38 @@ Supports KVM, LXC, QEMU, UML, and XEN.
                 (default: kvm).
 :libvirt_uri:  Override for the default libvirt URI (depends on libvirt_type).
 :libvirt_xml_template:  Libvirt XML Template.
-:rescue_image_id:  Rescue ami image (default: ami-rescue).
-:rescue_kernel_id:  Rescue aki image (default: aki-rescue).
-:rescue_ramdisk_id:  Rescue ari image (default: ari-rescue).
+:rescue_image_id:  Rescue ami image (None = original image).
+:rescue_kernel_id:  Rescue aki image (None = original image).
+:rescue_ramdisk_id:  Rescue ari image (None = original image).
 :injected_network_template:  Template file for injected network
-:allow_project_net_traffic:  Whether to allow in project network traffic
+:allow_same_net_traffic:  Whether to allow in project network traffic
 
 """
 
 import hashlib
+import functools
 import multiprocessing
 import netaddr
 import os
 import random
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
 import time
 import uuid
+#JP Walters
+import shlex
+import signal
+#END
 from xml.dom import minidom
 from xml.etree import ElementTree
 
 from eventlet import greenthread
 from eventlet import tpool
 
-from nova import context
+from nova import block_device
+from nova import context as nova_context
 from nova import db
 from nova import exception
 from nova import flags
@@ -82,9 +88,9 @@ LOG = logging.getLogger('nova.virt.libvirt_conn')
 FLAGS = flags.FLAGS
 flags.DECLARE('live_migration_retry_count', 'nova.compute.manager')
 # TODO(vish): These flags should probably go into a shared location
-flags.DEFINE_string('rescue_image_id', 'ami-rescue', 'Rescue ami image')
-flags.DEFINE_string('rescue_kernel_id', 'aki-rescue', 'Rescue aki image')
-flags.DEFINE_string('rescue_ramdisk_id', 'ari-rescue', 'Rescue ari image')
+flags.DEFINE_string('rescue_image_id', None, 'Rescue ami image')
+flags.DEFINE_string('rescue_kernel_id', None, 'Rescue aki image')
+flags.DEFINE_string('rescue_ramdisk_id', None, 'Rescue ari image')
 flags.DEFINE_string('libvirt_xml_template',
                     utils.abspath('virt/libvirt.xml.template'),
                     'Libvirt XML Template')
@@ -96,9 +102,9 @@ flags.DEFINE_string('libvirt_uri',
                     '',
                     'Override the default libvirt URI (which is dependent'
                     ' on libvirt_type)')
-flags.DEFINE_bool('allow_project_net_traffic',
+flags.DEFINE_bool('allow_same_net_traffic',
                   True,
-                  'Whether to allow in project network traffic')
+                  'Whether to allow network traffic from same network')
 flags.DEFINE_bool('use_cow_images',
                   True,
                   'Whether to use cow images')
@@ -117,12 +123,34 @@ flags.DEFINE_string('live_migration_uri',
 flags.DEFINE_string('live_migration_flag',
                     "VIR_MIGRATE_UNDEFINE_SOURCE, VIR_MIGRATE_PEER2PEER",
                     'Define live migration behavior.')
+flags.DEFINE_string('block_migration_flag',
+                    "VIR_MIGRATE_UNDEFINE_SOURCE, VIR_MIGRATE_PEER2PEER, "
+                    "VIR_MIGRATE_NON_SHARED_INC",
+                    'Define block migration behavior.')
 flags.DEFINE_integer('live_migration_bandwidth', 0,
                     'Define live migration behavior')
-flags.DEFINE_string('qemu_img', 'qemu-img',
-                    'binary to use for qemu-img commands')
-flags.DEFINE_bool('start_guests_on_host_boot', False,
-                  'Whether to restart guests when the host reboots')
+flags.DEFINE_string('snapshot_image_format', None,
+                    'Snapshot image format (valid options are : '
+                    'raw, qcow2, vmdk, vdi).'
+                    'Defaults to same as source image')
+flags.DEFINE_string('libvirt_vif_type', 'bridge',
+                    'Type of VIF to create.')
+flags.DEFINE_string('libvirt_vif_driver',
+                    'nova.virt.libvirt.vif.LibvirtBridgeDriver',
+                    'The libvirt VIF driver to configure the VIFs.')
+flags.DEFINE_string('default_local_format',
+                    None,
+                    'The default format a local_volume will be formatted with '
+                    'on creation.')
+flags.DEFINE_bool('libvirt_use_virtio_for_bridges',
+                  False,
+                  'Use virtio for bridge interfaces')
+flags.DEFINE_list('extra_node_capabilities',
+                   [],
+                   'Key/value list with extra caps of the compute node')
+
+if FLAGS.connection_type == 'gpu':
+    gvirtus_pids = {}
 
 
 def get_connection(read_only):
@@ -148,8 +176,8 @@ def _late_load_cheetah():
         Template = t.Template
 
 
-def _strip_dev(mount_path):
-        return re.sub(r'^/dev/', '', mount_path)
+def _get_eph_disk(ephemeral):
+    return 'disk.eph' + str(ephemeral['num'])
 
 
 class LibvirtConnection(driver.ComputeDriver):
@@ -165,29 +193,19 @@ class LibvirtConnection(driver.ComputeDriver):
 
         fw_class = utils.import_class(FLAGS.firewall_driver)
         self.firewall_driver = fw_class(get_connection=self._get_connection)
+        self.vif_driver = utils.import_object(FLAGS.libvirt_vif_driver)
+        self._host_state = None
+#        self.session = None
+
+    @property
+    def HostState(self):
+        if not self._host_state:
+            self._host_state = HostState(self.read_only)
+        return self._host_state
 
     def init_host(self, host):
-        # Adopt existing VM's running here
-        ctxt = context.get_admin_context()
-        for instance in db.instance_get_all_by_host(ctxt, host):
-            try:
-                LOG.debug(_('Checking state of %s'), instance['name'])
-                state = self.get_info(instance['name'])['state']
-            except exception.NotFound:
-                state = power_state.SHUTOFF
-
-            LOG.debug(_('Current state of %(name)s was %(state)s.'),
-                          {'name': instance['name'], 'state': state})
-            db.instance_set_state(ctxt, instance['id'], state)
-
-            # NOTE(justinsb): We no longer delete SHUTOFF instances,
-            # the user may want to power them back on
-
-            if state != power_state.RUNNING:
-                continue
-            self.firewall_driver.setup_basic_filtering(instance)
-            self.firewall_driver.prepare_instance_filter(instance)
-            self.firewall_driver.apply_instance_filter(instance)
+        # NOTE(nsokolov): moved instance restarting to ComputeManager
+        pass
 
     def _get_connection(self):
         if not self._wrapped_conn or not self._test_connection():
@@ -199,7 +217,7 @@ class LibvirtConnection(driver.ComputeDriver):
 
     def _test_connection(self):
         try:
-            self._wrapped_conn.getInfo()
+            self._wrapped_conn.getCapabilities()
             return True
         except libvirt.libvirtError as e:
             if e.get_error_code() == libvirt.VIR_ERR_SYSTEM_ERROR and \
@@ -218,6 +236,18 @@ class LibvirtConnection(driver.ComputeDriver):
         else:
             uri = FLAGS.libvirt_uri or 'qemu:///system'
         return uri
+
+    #JP Walters: poached this from the one defined below that's used
+    #by the ajax term.  I left the ajax term stuff in place to avoid
+    #unwanted side effects
+    def get_pty_for_instance(self, instance_name):
+        virt_dom = self._conn.lookupByName(instance_name)
+        xml = virt_dom.XMLDesc(0)
+        dom = minidom.parseString(xml)
+        for serial in dom.getElementsByTagName('serial'):
+            if serial.getAttribute('type') == 'pty':
+                source = serial.getElementsByTagName('source')[0]
+                return source.getAttribute('path')
 
     def _connect(self, uri, read_only):
         auth = [[libvirt.VIR_CRED_AUTHNAME, libvirt.VIR_CRED_NOECHOPROMPT],
@@ -256,7 +286,14 @@ class LibvirtConnection(driver.ComputeDriver):
             infos.append(info)
         return infos
 
-    def destroy(self, instance, cleanup=True):
+    def plug_vifs(self, instance, network_info):
+        """Plugin VIFs into networks."""
+        for (network, mapping) in network_info:
+            self.vif_driver.plug(instance, network, mapping)
+
+    def destroy(self, instance, network_info, cleanup=True):
+        if FLAGS.connection_type == 'gpu':
+            global gvirtus_pids
         instance_name = instance['name']
 
         try:
@@ -300,6 +337,25 @@ class LibvirtConnection(driver.ComputeDriver):
                             locals())
                 raise
 
+            for (network, mapping) in network_info:
+                self.vif_driver.unplug(instance, network, mapping)
+
+        if FLAGS.connection_type == 'gpu':
+            print 'Terminating gvirtus'
+            #JP Walters: retrieve the pid from the hash table
+            local_pid = gvirtus_pids[instance['name']]
+            #JP Walters: send that pid (gvirtus) a SIGTERM.
+            #gvirtus has been modified to catch SIGTERM and
+            #shut down gracefully
+            os.kill(local_pid, signal.SIGINT)
+            #JP Walters: this just ensures that we fully clean up the process.
+            #it avoids zombies
+            os.waitpid(local_pid, os.WNOHANG)
+            #JP Walters: remove the instance:pid mapping from the hash table
+            #to keep the hash table size manageable.
+            del gvirtus_pids[instance['name']]
+            print 'gvirtus dead'
+
         def _wait_for_destroy():
             """Called at an interval until the VM is gone."""
             instance_name = instance['name']
@@ -314,7 +370,8 @@ class LibvirtConnection(driver.ComputeDriver):
         timer = utils.LoopingCall(_wait_for_destroy)
         timer.start(interval=0.5, now=True)
 
-        self.firewall_driver.unfilter_instance(instance)
+        self.firewall_driver.unfilter_instance(instance,
+                                               network_info=network_info)
 
         if cleanup:
             self._cleanup(instance)
@@ -335,31 +392,27 @@ class LibvirtConnection(driver.ComputeDriver):
     def attach_volume(self, instance_name, device_path, mountpoint):
         virt_dom = self._lookup_by_name(instance_name)
         mount_device = mountpoint.rpartition("/")[2]
-        if device_path.startswith('/dev/'):
+        (type, protocol, name) = \
+            self._get_volume_device_info(device_path)
+        if type == 'block':
             xml = """<disk type='block'>
                          <driver name='qemu' type='raw'/>
                          <source dev='%s'/>
                          <target dev='%s' bus='virtio'/>
                      </disk>""" % (device_path, mount_device)
-        elif ':' in device_path:
-            (protocol, name) = device_path.split(':')
+        elif type == 'network':
             xml = """<disk type='network'>
                          <driver name='qemu' type='raw'/>
                          <source protocol='%s' name='%s'/>
                          <target dev='%s' bus='virtio'/>
-                     </disk>""" % (protocol,
-                                   name,
-                                   mount_device)
-        else:
-            raise exception.InvalidDevicePath(path=device_path)
-
+                     </disk>""" % (protocol, name, mount_device)
         virt_dom.attachDevice(xml)
 
     def _get_disk_xml(self, xml, device):
         """Returns the xml for the disk mounted at device"""
         try:
             doc = libxml2.parseDoc(xml)
-        except:
+        except Exception:
             return None
         ctx = doc.xpathNewContext()
         try:
@@ -385,27 +438,21 @@ class LibvirtConnection(driver.ComputeDriver):
         virt_dom.detachDevice(xml)
 
     @exception.wrap_exception()
-    def snapshot(self, instance, image_href):
+    def snapshot(self, context, instance, image_href):
         """Create snapshot from a running VM instance.
 
-        This command only works with qemu 0.14+, the qemu_img flag is
-        provided so that a locally compiled binary of qemu-img can be used
-        to support this command.
-
+        This command only works with qemu 0.14+
         """
         virt_dom = self._lookup_by_name(instance['name'])
-        elevated = context.get_admin_context()
 
         (image_service, image_id) = nova.image.get_image_service(
-            instance['image_ref'])
-        base = image_service.show(elevated, image_id)
+            context, instance['image_ref'])
+        base = image_service.show(context, image_id)
         (snapshot_image_service, snapshot_image_id) = \
-            nova.image.get_image_service(image_href)
-        snapshot = snapshot_image_service.show(elevated, snapshot_image_id)
+            nova.image.get_image_service(context, image_href)
+        snapshot = snapshot_image_service.show(context, snapshot_image_id)
 
-        metadata = {'disk_format': base['disk_format'],
-                    'container_format': base['container_format'],
-                    'is_public': False,
+        metadata = {'is_public': False,
                     'status': 'active',
                     'name': snapshot['name'],
                     'properties': {
@@ -419,6 +466,15 @@ class LibvirtConnection(driver.ComputeDriver):
         if 'architecture' in base['properties']:
             arch = base['properties']['architecture']
             metadata['properties']['architecture'] = arch
+
+        source_format = base.get('disk_format') or 'raw'
+        image_format = FLAGS.snapshot_image_format or source_format
+        if FLAGS.use_cow_images:
+            source_format = 'qcow2'
+        metadata['disk_format'] = image_format
+
+        if 'container_format' in base:
+            metadata['container_format'] = base['container_format']
 
         # Make the snapshot
         snapshot_name = uuid.uuid4().hex
@@ -437,50 +493,73 @@ class LibvirtConnection(driver.ComputeDriver):
 
         # Export the snapshot to a raw image
         temp_dir = tempfile.mkdtemp()
-        out_path = os.path.join(temp_dir, snapshot_name)
-        qemu_img_cmd = (FLAGS.qemu_img,
-                        'convert',
-                        '-f',
-                        'qcow2',
-                        '-O',
-                        'raw',
-                        '-s',
-                        snapshot_name,
-                        disk_path,
-                        out_path)
-        utils.execute(*qemu_img_cmd)
+        try:
+            out_path = os.path.join(temp_dir, snapshot_name)
+            qemu_img_cmd = ('qemu-img',
+                            'convert',
+                            '-f',
+                            source_format,
+                            '-O',
+                            image_format,
+                            '-s',
+                            snapshot_name,
+                            disk_path,
+                            out_path)
+            utils.execute(*qemu_img_cmd)
 
-        # Upload that image to the image service
-        with open(out_path) as image_file:
-            image_service.update(elevated,
-                                 image_href,
-                                 metadata,
-                                 image_file)
+            # Upload that image to the image service
+            with open(out_path) as image_file:
+                image_service.update(context,
+                                     image_href,
+                                     metadata,
+                                     image_file)
 
-        # Clean up
-        shutil.rmtree(temp_dir)
+        finally:
+            # Clean up
+            shutil.rmtree(temp_dir)
+            snapshot_ptr.delete(0)
 
     @exception.wrap_exception()
-    def reboot(self, instance):
+    def reboot(self, instance, network_info, reboot_type=None, xml=None):
         """Reboot a virtual machine, given an instance reference.
 
         This method actually destroys and re-creates the domain to ensure the
         reboot happens, as the guest OS cannot ignore this action.
 
         """
+        #JP Walters: we need to re-instantiate gvirtus, so we need
+        #access to the hash table
+        if FLAGS.connection_type == 'gpu':
+            global gvirtus_pids
+
         virt_dom = self._conn.lookupByName(instance['name'])
         # NOTE(itoumsn): Use XML delived from the running instance
-        # instead of using to_xml(instance). This is almost the ultimate
-        # stupid workaround.
-        xml = virt_dom.XMLDesc(0)
+        # instead of using to_xml(instance, network_info). This is almost
+        # the ultimate stupid workaround.
+        if not xml:
+            xml = virt_dom.XMLDesc(0)
+
         # NOTE(itoumsn): self.shutdown() and wait instead of self.destroy() is
         # better because we cannot ensure flushing dirty buffers
         # in the guest OS. But, in case of KVM, shutdown() does not work...
-        self.destroy(instance, False)
-        self.firewall_driver.setup_basic_filtering(instance)
-        self.firewall_driver.prepare_instance_filter(instance)
+        self.destroy(instance, network_info, cleanup=False)
+        self.plug_vifs(instance, network_info)
+        self.firewall_driver.setup_basic_filtering(instance, network_info)
+        self.firewall_driver.prepare_instance_filter(instance, network_info)
         self._create_new_domain(xml)
-        self.firewall_driver.apply_instance_filter(instance)
+        self.firewall_driver.apply_instance_filter(instance, network_info)
+
+        if FLAGS.connection_type == 'gpu':
+            #JP Walters: again, find the tty and kick off a gvirtus-backend
+            tty = self.get_pty_for_instance(instance['name'])
+            command_line = '/usr/local/gvirtus/sbin/gvirtus-backend \
+                            /usr/local/gvirtus/etc/gvirtus.properties 0 %s' \
+                            % (tty)
+
+            args = shlex.split(str(command_line))
+            print args
+            gvirtus_driver = subprocess.Popen(args)
+            gvirtus_pids[instance['name']] = gvirtus_driver.pid
 
         def _wait_for_reboot():
             """Called at an interval until the VM is running again."""
@@ -526,7 +605,7 @@ class LibvirtConnection(driver.ComputeDriver):
         dom.create()
 
     @exception.wrap_exception()
-    def rescue(self, instance):
+    def rescue(self, context, instance, callback, network_info):
         """Loads a VM using rescue images.
 
         A rescue is normally performed when something goes wrong with the
@@ -535,67 +614,70 @@ class LibvirtConnection(driver.ComputeDriver):
         data recovery.
 
         """
-        self.destroy(instance, False)
 
-        xml = self.to_xml(instance, rescue=True)
-        rescue_images = {'image_id': FLAGS.rescue_image_id,
-                         'kernel_id': FLAGS.rescue_kernel_id,
-                         'ramdisk_id': FLAGS.rescue_ramdisk_id}
-        self._create_image(instance, xml, '.rescue', rescue_images)
-        self._create_new_domain(xml)
+        virt_dom = self._conn.lookupByName(instance['name'])
+        unrescue_xml = virt_dom.XMLDesc(0)
+        unrescue_xml_path = os.path.join(FLAGS.instances_path,
+                                         instance['name'],
+                                         'unrescue.xml')
+        f = open(unrescue_xml_path, 'w')
+        f.write(unrescue_xml)
+        f.close()
 
-        def _wait_for_rescue():
-            """Called at an interval until the VM is running again."""
-            instance_name = instance['name']
-
-            try:
-                state = self.get_info(instance_name)['state']
-            except exception.NotFound:
-                msg = _("During reboot, %s disappeared.") % instance_name
-                LOG.error(msg)
-                raise utils.LoopingCallDone
-
-            if state == power_state.RUNNING:
-                msg = _("Instance %s rescued successfully.") % instance_name
-                LOG.info(msg)
-                raise utils.LoopingCallDone
-
-        timer = utils.LoopingCall(_wait_for_rescue)
-        return timer.start(interval=0.5, now=True)
+        xml = self.to_xml(instance, network_info, rescue=True)
+        rescue_images = {
+            'image_id': FLAGS.rescue_image_id or instance['image_ref'],
+            'kernel_id': FLAGS.rescue_kernel_id or instance['kernel_id'],
+            'ramdisk_id': FLAGS.rescue_ramdisk_id or instance['ramdisk_id'],
+        }
+        self._create_image(context, instance, xml, '.rescue', rescue_images,
+                           network_info=network_info)
+        self.reboot(instance, network_info, xml=xml)
 
     @exception.wrap_exception()
-    def unrescue(self, instance):
+    def unrescue(self, instance, callback, network_info):
         """Reboot the VM which is being rescued back into primary images.
 
         Because reboot destroys and re-creates instances, unresue should
         simply call reboot.
 
         """
-        self.reboot(instance)
+        unrescue_xml_path = os.path.join(FLAGS.instances_path,
+                                         instance['name'],
+                                         'unrescue.xml')
+        f = open(unrescue_xml_path)
+        unrescue_xml = f.read()
+        f.close()
+        os.remove(unrescue_xml_path)
+        self.reboot(instance, network_info, xml=unrescue_xml)
 
     @exception.wrap_exception()
     def poll_rescued_instances(self, timeout):
         pass
 
+    @exception.wrap_exception()
+    def poll_unconfirmed_resizes(self, resize_confirm_window):
+        pass
+
     # NOTE(ilyaalekseyev): Implementation like in multinics
     # for xenapi(tr3buchet)
     @exception.wrap_exception()
-    def spawn(self, instance, network_info=None, block_device_mapping=None):
-        xml = self.to_xml(instance, False, network_info=network_info,
-                          block_device_mapping=block_device_mapping)
-        block_device_mapping = block_device_mapping or []
+    def spawn(self, context, instance, network_info,
+              block_device_info=None):
+        #Added by JP Walters, gvirtus_pids is a hash table
+        #that maps instances to gvirtus_pids
+        if FLAGS.connection_type == 'gpu':
+            global gvirtus_pids
+        xml = self.to_xml(instance, network_info, False,
+                          block_device_info=block_device_info)
         self.firewall_driver.setup_basic_filtering(instance, network_info)
         self.firewall_driver.prepare_instance_filter(instance, network_info)
-        self._create_image(instance, xml, network_info=network_info,
-                           block_device_mapping=block_device_mapping)
+        self._create_image(context, instance, xml, network_info=network_info,
+                           block_device_info=block_device_info)
+
         domain = self._create_new_domain(xml)
         LOG.debug(_("instance %s: is running"), instance['name'])
-        self.firewall_driver.apply_instance_filter(instance)
-
-        if FLAGS.start_guests_on_host_boot:
-            LOG.debug(_("instance %s: setting autostart ON") %
-                      instance['name'])
-            domain.setAutostart(1)
+        self.firewall_driver.apply_instance_filter(instance, network_info)
 
         def _wait_for_boot():
             """Called at an interval until the VM is running."""
@@ -614,6 +696,24 @@ class LibvirtConnection(driver.ComputeDriver):
                 raise utils.LoopingCallDone
 
         timer = utils.LoopingCall(_wait_for_boot)
+
+        if FLAGS.connection_type == 'gpu':
+            #JP Walters: get the tty that's started.  We'll use this
+            #for our initial gvirtus_driver communication.  Note that
+            #this prevents the use of the ajax terminal since we're
+            #borrowing the tty.
+            tty = self.get_pty_for_instance(instance['name'])
+            command_line = '/usr/local/gvirtus/sbin/gvirtus-backend \
+                            /usr/local/gvirtus/etc/gvirtus.properties 0 %s' \
+                            % (tty)
+
+            args = shlex.split(str(command_line))
+            print args
+            #JP Walters: kick off gvirtus
+            gvirtus_driver = subprocess.Popen(args)
+            #JP Walters: record the pid in the hash table
+            gvirtus_pids[instance['name']] = gvirtus_driver.pid
+
         return timer.start(interval=0.5, now=True)
 
     def _flush_xen_console(self, virsh_output):
@@ -622,9 +722,10 @@ class LibvirtConnection(driver.ComputeDriver):
 
         if virsh_output.startswith('/dev/'):
             LOG.info(_("cool, it's a device"))
-            out, err = utils.execute('sudo', 'dd',
+            out, err = utils.execute('dd',
                                      "if=%s" % virsh_output,
                                      'iflag=nonblock',
+                                     run_as_root=True,
                                      check_exit_code=False)
             return out
         else:
@@ -647,7 +748,7 @@ class LibvirtConnection(driver.ComputeDriver):
         console_log = os.path.join(FLAGS.instances_path, instance['name'],
                                    'console.log')
 
-        utils.execute('sudo', 'chown', os.getuid(), console_log)
+        utils.execute('chown', os.getuid(), console_log, run_as_root=True)
 
         if FLAGS.libvirt_type == 'xen':
             # Xen is special
@@ -695,10 +796,10 @@ class LibvirtConnection(driver.ComputeDriver):
         ajaxterm_cmd = 'sudo socat - %s' \
                        % get_pty_for_instance(instance['name'])
 
-        cmd = '%s/tools/ajaxterm/ajaxterm.py --command "%s" -t %s -p %s' \
-              % (utils.novadir(), ajaxterm_cmd, token, port)
+        cmd = ['%s/tools/ajaxterm/ajaxterm.py' % utils.novadir(),
+               '--command', ajaxterm_cmd, '-t', token, '-p', port]
 
-        subprocess.Popen(cmd, shell=True)
+        utils.execute(cmd)
         return {'token': token, 'host': host, 'port': port}
 
     def get_host_ip_addr(self):
@@ -737,6 +838,7 @@ class LibvirtConnection(driver.ComputeDriver):
 
         If cow is True, it will make a CoW image instead of a copy.
         """
+
         if not os.path.exists(target):
             base_dir = os.path.join(FLAGS.instances_path, '_base')
             if not os.path.exists(base_dir):
@@ -757,21 +859,35 @@ class LibvirtConnection(driver.ComputeDriver):
             else:
                 utils.execute('cp', base, target)
 
-    def _fetch_image(self, target, image_id, user, project, size=None):
+    def _fetch_image(self, context, target, image_id, user_id, project_id,
+                     size=None):
         """Grab image and optionally attempt to resize it"""
-        images.fetch(image_id, target, user, project)
+        images.fetch_to_raw(context, image_id, target, user_id, project_id)
         if size:
             disk.extend(target, size)
 
-    def _create_local(self, target, local_gb):
+    def _create_local(self, target, local_size, unit='G', fs_format=None):
         """Create a blank image of specified size"""
-        utils.execute('truncate', target, '-s', "%dG" % local_gb)
-        # TODO(vish): should we format disk by default?
 
-    def _create_image(self, inst, libvirt_xml, suffix='', disk_images=None,
-                        network_info=None, block_device_mapping=None):
-        block_device_mapping = block_device_mapping or []
+        if not fs_format:
+            fs_format = FLAGS.default_local_format
 
+        utils.execute('truncate', target, '-s', "%d%c" % (local_size, unit))
+        if fs_format:
+            utils.execute('mkfs', '-t', fs_format, target)
+
+    def _create_ephemeral(self, target, local_size, fs_label, os_type):
+        self._create_local(target, local_size)
+        disk.mkfs(os_type, fs_label, target)
+
+    def _create_swap(self, target, swap_mb):
+        """Create a swap file of specified size"""
+        self._create_local(target, swap_mb, unit='M')
+        utils.execute('mkswap', target)
+
+    def _create_image(self, context, inst, libvirt_xml, suffix='',
+                      disk_images=None, network_info=None,
+                      block_device_info=None):
         if not suffix:
             suffix = ''
 
@@ -794,11 +910,10 @@ class LibvirtConnection(driver.ComputeDriver):
             utils.execute('mkdir', '-p', container_dir)
 
         # NOTE(vish): No need add the suffix to console.log
-        os.close(os.open(basepath('console.log', ''),
-                         os.O_CREAT | os.O_WRONLY, 0660))
-
-        user = manager.AuthManager().get_user(inst['user_id'])
-        project = manager.AuthManager().get_project(inst['project_id'])
+        console_log = basepath('console.log', '')
+        if os.path.exists(console_log):
+            utils.execute('chown', os.getuid(), console_log, run_as_root=True)
+        os.close(os.open(console_log, os.O_CREAT | os.O_WRONLY, 0660))
 
         if not disk_images:
             disk_images = {'image_id': inst['image_ref'],
@@ -808,19 +923,21 @@ class LibvirtConnection(driver.ComputeDriver):
         if disk_images['kernel_id']:
             fname = '%08x' % int(disk_images['kernel_id'])
             self._cache_image(fn=self._fetch_image,
+                              context=context,
                               target=basepath('kernel'),
                               fname=fname,
                               image_id=disk_images['kernel_id'],
-                              user=user,
-                              project=project)
+                              user_id=inst['user_id'],
+                              project_id=inst['project_id'])
             if disk_images['ramdisk_id']:
                 fname = '%08x' % int(disk_images['ramdisk_id'])
                 self._cache_image(fn=self._fetch_image,
+                                  context=context,
                                   target=basepath('ramdisk'),
                                   fname=fname,
                                   image_id=disk_images['ramdisk_id'],
-                                  user=user,
-                                  project=project)
+                                  user_id=inst['user_id'],
+                                  project_id=inst['project_id'])
 
         root_fname = hashlib.sha1(disk_images['image_id']).hexdigest()
         size = FLAGS.minimum_root_size
@@ -831,24 +948,58 @@ class LibvirtConnection(driver.ComputeDriver):
             size = None
             root_fname += "_sm"
 
-        if not self._volume_in_mapping(self.root_mount_device,
-                                       block_device_mapping):
+        if not self._volume_in_mapping(self.default_root_device,
+                                       block_device_info):
             self._cache_image(fn=self._fetch_image,
+                              context=context,
                               target=basepath('disk'),
                               fname=root_fname,
                               cow=FLAGS.use_cow_images,
                               image_id=disk_images['image_id'],
-                              user=user,
-                              project=project,
+                              user_id=inst['user_id'],
+                              project_id=inst['project_id'],
                               size=size)
 
-        if inst_type['local_gb'] and not self._volume_in_mapping(
-            self.local_mount_device, block_device_mapping):
-            self._cache_image(fn=self._create_local,
+        local_gb = inst['local_gb']
+        if local_gb and not self._volume_in_mapping(
+            self.default_local_device, block_device_info):
+            fn = functools.partial(self._create_ephemeral,
+                                   fs_label='ephemeral0',
+                                   os_type=inst.os_type)
+            self._cache_image(fn=fn,
                               target=basepath('disk.local'),
-                              fname="local_%s" % inst_type['local_gb'],
+                              fname="ephemeral_%s_%s_%s" %
+                              ("0", local_gb, inst.os_type),
                               cow=FLAGS.use_cow_images,
-                              local_gb=inst_type['local_gb'])
+                              local_size=local_gb)
+
+        for eph in driver.block_device_info_get_ephemerals(block_device_info):
+            fn = functools.partial(self._create_ephemeral,
+                                   fs_label='ephemeral%d' % eph['num'],
+                                   os_type=inst.os_type)
+            self._cache_image(fn=fn,
+                              target=basepath(_get_eph_disk(eph)),
+                              fname="ephemeral_%s_%s_%s" %
+                              (eph['num'], eph['size'], inst.os_type),
+                              cow=FLAGS.use_cow_images,
+                              local_size=eph['size'])
+
+        swap_mb = 0
+
+        swap = driver.block_device_info_get_swap(block_device_info)
+        if driver.swap_is_usable(swap):
+            swap_mb = swap['swap_size']
+        elif (inst_type['swap'] > 0 and
+              not self._volume_in_mapping(self.default_swap_device,
+                                          block_device_info)):
+            swap_mb = inst_type['swap']
+
+        if swap_mb > 0:
+            self._cache_image(fn=self._create_swap,
+                              target=basepath('disk.swap'),
+                              fname="swap_%s" % swap_mb,
+                              cow=FLAGS.use_cow_images,
+                              swap_mb=swap_mb)
 
         # For now, we assume that if we're not using a kernel, we're using a
         # partitioned disk image where the target partition is the first
@@ -857,8 +1008,23 @@ class LibvirtConnection(driver.ComputeDriver):
         if not inst['kernel_id']:
             target_partition = "1"
 
-        if FLAGS.libvirt_type == 'lxc':
+        config_drive_id = inst.get('config_drive_id')
+        config_drive = inst.get('config_drive')
+
+        if any((FLAGS.libvirt_type == 'lxc', config_drive, config_drive_id)):
             target_partition = None
+
+        if config_drive_id:
+            fname = '%08x' % int(config_drive_id)
+            self._cache_image(fn=self._fetch_image,
+                              target=basepath('disk.config'),
+                              fname=fname,
+                              image_id=config_drive_id,
+                              user_id=inst['user_id'],
+                              project_id=inst['project_id'],)
+        elif config_drive:
+            self._create_local(basepath('disk.config'), 64, unit='M',
+                               fs_format='msdos')  # 64MB
 
         if inst['key_data']:
             key = str(inst['key_data'])
@@ -870,7 +1036,7 @@ class LibvirtConnection(driver.ComputeDriver):
         ifc_template = open(FLAGS.injected_network_template).read()
         ifc_num = -1
         have_injected_networks = False
-        admin_context = context.get_admin_context()
+        admin_context = nova_context.get_admin_context()
         for (network_ref, mapping) in network_info:
             ifc_num += 1
 
@@ -881,17 +1047,20 @@ class LibvirtConnection(driver.ComputeDriver):
             address = mapping['ips'][0]['ip']
             netmask = mapping['ips'][0]['netmask']
             address_v6 = None
+            gateway_v6 = None
+            netmask_v6 = None
             if FLAGS.use_ipv6:
                 address_v6 = mapping['ip6s'][0]['ip']
                 netmask_v6 = mapping['ip6s'][0]['netmask']
+                gateway_v6 = mapping['gateway6']
             net_info = {'name': 'eth%d' % ifc_num,
                    'address': address,
                    'netmask': netmask,
                    'gateway': mapping['gateway'],
                    'broadcast': mapping['broadcast'],
-                   'dns': mapping['dns'],
+                   'dns': ' '.join(mapping['dns']),
                    'address_v6': address_v6,
-                   'gateway6': mapping['gateway6'],
+                   'gateway6': gateway_v6,
                    'netmask_v6': netmask_v6}
             nets.append(net_info)
 
@@ -900,88 +1069,90 @@ class LibvirtConnection(driver.ComputeDriver):
                                searchList=[{'interfaces': nets,
                                             'use_ipv6': FLAGS.use_ipv6}]))
 
-        if key or net:
+        metadata = inst.get('metadata')
+        if any((key, net, metadata)):
             inst_name = inst['name']
-            img_id = inst.image_ref
-            if key:
-                LOG.info(_('instance %(inst_name)s: injecting key into'
-                        ' image %(img_id)s') % locals())
-            if net:
-                LOG.info(_('instance %(inst_name)s: injecting net into'
-                        ' image %(img_id)s') % locals())
-            try:
-                disk.inject_data(basepath('disk'), key, net,
-                                 partition=target_partition,
-                                 nbd=FLAGS.use_cow_images)
 
-                if FLAGS.libvirt_type == 'lxc':
-                    disk.setup_container(basepath('disk'),
-                                        container_dir=container_dir,
-                                        nbd=FLAGS.use_cow_images)
+            if config_drive:  # Should be True or None by now.
+                injection_path = basepath('disk.config')
+                img_id = 'config-drive'
+                tune2fs = False
+            else:
+                injection_path = basepath('disk')
+                img_id = inst.image_ref
+                tune2fs = True
+
+            for injection in ('metadata', 'key', 'net'):
+                if locals()[injection]:
+                    LOG.info(_('instance %(inst_name)s: injecting '
+                               '%(injection)s into image %(img_id)s'
+                               % locals()))
+            try:
+                disk.inject_data(injection_path, key, net, metadata,
+                                 partition=target_partition,
+                                 nbd=FLAGS.use_cow_images,
+                                 tune2fs=tune2fs)
+
             except Exception as e:
                 # This could be a windows image, or a vmdk format disk
                 LOG.warn(_('instance %(inst_name)s: ignoring error injecting'
                         ' data into image %(img_id)s (%(e)s)') % locals())
 
+        if FLAGS.libvirt_type == 'lxc':
+            disk.setup_container(basepath('disk'),
+                                container_dir=container_dir,
+                                nbd=FLAGS.use_cow_images)
+
         if FLAGS.libvirt_type == 'uml':
-            utils.execute('sudo', 'chown', 'root', basepath('disk'))
+            utils.execute('chown', 'root', basepath('disk'), run_as_root=True)
 
-    def _get_nic_for_xml(self, network, mapping):
-        # Assume that the gateway also acts as the dhcp server.
-        dhcp_server = mapping['gateway']
-        gateway6 = mapping.get('gateway6')
-        mac_id = mapping['mac'].replace(':', '')
+    if FLAGS.libvirt_type == 'uml':
+        _disk_prefix = 'ubd'
+    elif FLAGS.libvirt_type == 'xen':
+        _disk_prefix = 'sd'
+    elif FLAGS.libvirt_type == 'lxc':
+        _disk_prefix = ''
+    else:
+        _disk_prefix = 'vd'
 
-        if FLAGS.allow_project_net_traffic:
-            template = "<parameter name=\"%s\"value=\"%s\" />\n"
-            net, mask = netutils.get_net_and_mask(network['cidr'])
-            values = [("PROJNET", net), ("PROJMASK", mask)]
-            if FLAGS.use_ipv6:
-                net_v6, prefixlen_v6 = netutils.get_net_and_prefixlen(
-                                           network['cidr_v6'])
-                values.extend([("PROJNETV6", net_v6),
-                               ("PROJMASKV6", prefixlen_v6)])
+    default_root_device = _disk_prefix + 'a'
+    default_local_device = _disk_prefix + 'b'
+    default_swap_device = _disk_prefix + 'c'
 
-            extra_params = "".join([template % value for value in values])
+    def _volume_in_mapping(self, mount_device, block_device_info):
+        block_device_list = [block_device.strip_dev(vol['mount_device'])
+                             for vol in
+                             driver.block_device_info_get_mapping(
+                                 block_device_info)]
+        swap = driver.block_device_info_get_swap(block_device_info)
+        if driver.swap_is_usable(swap):
+            block_device_list.append(
+                block_device.strip_dev(swap['device_name']))
+        block_device_list += [block_device.strip_dev(ephemeral['device_name'])
+                              for ephemeral in
+                              driver.block_device_info_get_ephemerals(
+                                  block_device_info)]
+
+        LOG.debug(_("block_device_list %s"), block_device_list)
+        return block_device.strip_dev(mount_device) in block_device_list
+
+    def _get_volume_device_info(self, device_path):
+        if device_path.startswith('/dev/'):
+            return ('block', None, None)
+        elif ':' in device_path:
+            (protocol, name) = device_path.split(':')
+            return ('network', protocol, name)
         else:
-            extra_params = "\n"
+            raise exception.InvalidDevicePath(path=device_path)
 
-        result = {
-            'id': mac_id,
-            'bridge_name': network['bridge'],
-            'mac_address': mapping['mac'],
-            'ip_address': mapping['ips'][0]['ip'],
-            'dhcp_server': dhcp_server,
-            'extra_params': extra_params,
-        }
-
-        if gateway6:
-            result['gateway6'] = gateway6 + "/128"
-
-        return result
-
-    root_mount_device = 'vda'  # FIXME for now. it's hard coded.
-    local_mount_device = 'vdb'  # FIXME for now. it's hard coded.
-
-    def _volume_in_mapping(self, mount_device, block_device_mapping):
-        mount_device_ = _strip_dev(mount_device)
-        for vol in block_device_mapping:
-            vol_mount_device = _strip_dev(vol['mount_device'])
-            if vol_mount_device == mount_device_:
-                return True
-        return False
-
-    def _prepare_xml_info(self, instance, rescue=False, network_info=None,
-                          block_device_mapping=None):
-        block_device_mapping = block_device_mapping or []
-        # TODO(adiantum) remove network_info creation code
-        # when multinics will be completed
-        if not network_info:
-            network_info = netutils.get_network_info(instance)
+    def _prepare_xml_info(self, instance, network_info, rescue,
+                          block_device_info=None):
+        block_device_mapping = driver.block_device_info_get_mapping(
+            block_device_info)
 
         nics = []
         for (network, mapping) in network_info:
-            nics.append(self._get_nic_for_xml(network, mapping))
+            nics.append(self.vif_driver.plug(instance, network, mapping))
         # FIXME(vish): stick this in db
         inst_type_id = instance['instance_type_id']
         inst_type = instance_types.get_instance_type(inst_type_id)
@@ -992,14 +1163,27 @@ class LibvirtConnection(driver.ComputeDriver):
             driver_type = 'raw'
 
         for vol in block_device_mapping:
-            vol['mount_device'] = _strip_dev(vol['mount_device'])
-        ebs_root = self._volume_in_mapping(self.root_mount_device,
-                                           block_device_mapping)
-        if self._volume_in_mapping(self.local_mount_device,
-                                   block_device_mapping):
-            local_gb = False
-        else:
-            local_gb = inst_type['local_gb']
+            vol['mount_device'] = block_device.strip_dev(vol['mount_device'])
+            (vol['type'], vol['protocol'], vol['name']) = \
+                self._get_volume_device_info(vol['device_path'])
+
+        ebs_root = self._volume_in_mapping(self.default_root_device,
+                                           block_device_info)
+
+        local_device = False
+        if not (self._volume_in_mapping(self.default_local_device,
+                                        block_device_info) or
+                0 in [eph['num'] for eph in
+                      driver.block_device_info_get_ephemerals(
+                          block_device_info)]):
+            if instance['local_gb'] > 0:
+                local_device = self.default_local_device
+
+        ephemerals = []
+        for eph in driver.block_device_info_get_ephemerals(block_device_info):
+            ephemerals.append({'device_path': _get_eph_disk(eph),
+                               'device': block_device.strip_dev(
+                                   eph['device_name'])})
 
         xml_info = {'type': FLAGS.libvirt_type,
                     'name': instance['name'],
@@ -1008,16 +1192,53 @@ class LibvirtConnection(driver.ComputeDriver):
                     'memory_kb': inst_type['memory_mb'] * 1024,
                     'vcpus': inst_type['vcpus'],
                     'rescue': rescue,
-                    'local': local_gb,
+                    'disk_prefix': self._disk_prefix,
                     'driver_type': driver_type,
+                    'vif_type': FLAGS.libvirt_vif_type,
                     'nics': nics,
                     'ebs_root': ebs_root,
-                    'volumes': block_device_mapping}
+                    'local_device': local_device,
+                    'volumes': block_device_mapping,
+                    'use_virtio_for_bridges':
+                            FLAGS.libvirt_use_virtio_for_bridges,
+                    'ephemerals': ephemerals}
 
-        if FLAGS.vnc_enabled:
-            if FLAGS.libvirt_type != 'lxc' or FLAGS.libvirt_type != 'uml':
-                xml_info['vncserver_host'] = FLAGS.vncserver_host
-                xml_info['vnc_keymap'] = FLAGS.vnc_keymap
+        root_device_name = driver.block_device_info_get_root(block_device_info)
+        if root_device_name:
+            xml_info['root_device'] = block_device.strip_dev(root_device_name)
+            xml_info['root_device_name'] = root_device_name
+        else:
+            # NOTE(yamahata):
+            # for nova.api.ec2.cloud.CloudController.get_metadata()
+            xml_info['root_device'] = self.default_root_device
+            db.instance_update(
+                nova_context.get_admin_context(), instance['id'],
+                {'root_device_name': '/dev/' + self.default_root_device})
+
+        if local_device:
+            db.instance_update(
+                nova_context.get_admin_context(), instance['id'],
+                {'default_local_device': '/dev/' + self.default_local_device})
+
+        swap = driver.block_device_info_get_swap(block_device_info)
+        if driver.swap_is_usable(swap):
+            xml_info['swap_device'] = block_device.strip_dev(
+                swap['device_name'])
+        elif (inst_type['swap'] > 0 and
+              not self._volume_in_mapping(self.default_swap_device,
+                                          block_device_info)):
+            xml_info['swap_device'] = self.default_swap_device
+            db.instance_update(
+                nova_context.get_admin_context(), instance['id'],
+                {'default_swap_device': '/dev/' + self.default_swap_device})
+
+        config_drive = False
+        if instance.get('config_drive') or instance.get('config_drive_id'):
+            xml_info['config_drive'] = xml_info['basepath'] + "/disk.config"
+
+        if FLAGS.vnc_enabled and FLAGS.libvirt_type not in ('lxc', 'uml'):
+            xml_info['vncserver_host'] = FLAGS.vncserver_host
+            xml_info['vnc_keymap'] = FLAGS.vnc_keymap
         if not rescue:
             if instance['kernel_id']:
                 xml_info['kernel'] = xml_info['basepath'] + "/kernel"
@@ -1028,13 +1249,12 @@ class LibvirtConnection(driver.ComputeDriver):
             xml_info['disk'] = xml_info['basepath'] + "/disk"
         return xml_info
 
-    def to_xml(self, instance, rescue=False, network_info=None,
-               block_device_mapping=None):
-        block_device_mapping = block_device_mapping or []
+    def to_xml(self, instance, network_info, rescue=False,
+               block_device_info=None):
         # TODO(termie): cache?
         LOG.debug(_('instance %s: starting toXML method'), instance['name'])
-        xml_info = self._prepare_xml_info(instance, rescue, network_info,
-                                          block_device_mapping)
+        xml_info = self._prepare_xml_info(instance, network_info, rescue,
+                                          block_device_info)
         xml = str(Template(self.libvirt_xml, searchList=[xml_info]))
         LOG.debug(_('instance %s: finished toXML method'), instance['name'])
         return xml
@@ -1097,8 +1317,7 @@ class LibvirtConnection(driver.ComputeDriver):
 
     def get_disks(self, instance_name):
         """
-        Note that this function takes an instance name, not an Instance, so
-        that it can be called by monitor.
+        Note that this function takes an instance name.
 
         Returns a list of all block devices for this domain.
         """
@@ -1109,7 +1328,7 @@ class LibvirtConnection(driver.ComputeDriver):
 
         try:
             doc = libxml2.parseDoc(xml)
-        except:
+        except Exception:
             return []
 
         ctx = doc.xpathNewContext()
@@ -1139,8 +1358,7 @@ class LibvirtConnection(driver.ComputeDriver):
 
     def get_interfaces(self, instance_name):
         """
-        Note that this function takes an instance name, not an Instance, so
-        that it can be called by monitor.
+        Note that this function takes an instance name.
 
         Returns a list of all network interfaces for this instance.
         """
@@ -1151,7 +1369,7 @@ class LibvirtConnection(driver.ComputeDriver):
 
         try:
             doc = libxml2.parseDoc(xml)
-        except:
+        except Exception:
             return []
 
         ctx = doc.xpathNewContext()
@@ -1355,16 +1573,14 @@ class LibvirtConnection(driver.ComputeDriver):
 
     def block_stats(self, instance_name, disk):
         """
-        Note that this function takes an instance name, not an Instance, so
-        that it can be called by monitor.
+        Note that this function takes an instance name.
         """
         domain = self._lookup_by_name(instance_name)
         return domain.blockStats(disk)
 
     def interface_stats(self, instance_name, interface):
         """
-        Note that this function takes an instance name, not an Instance, so
-        that it can be called by monitor.
+        Note that this function takes an instance name.
         """
         domain = self._lookup_by_name(instance_name)
         return domain.interfaceStats(interface)
@@ -1411,9 +1627,19 @@ class LibvirtConnection(driver.ComputeDriver):
                'local_gb_used': self.get_local_gb_used(),
                'hypervisor_type': self.get_hypervisor_type(),
                'hypervisor_version': self.get_hypervisor_version(),
-               'cpu_info': self.get_cpu_info()}
+               'cpu_info': self.get_cpu_info(),
+               #RLK
+               'cpu_arch': FLAGS.cpu_arch,
+               'xpu_arch': FLAGS.xpu_arch,
+               'xpus': FLAGS.xpus,
+               'xpu_info': FLAGS.xpu_info,
+               'net_arch': FLAGS.net_arch,
+               'net_info': FLAGS.net_info,
+               'net_mbps': FLAGS.net_mbps
+               }
 
         compute_node_ref = service_ref['compute_node']
+        LOG.info(_('#### RLK: cpu_arch = %s ') % FLAGS.cpu_arch)
         if not compute_node_ref:
             LOG.info(_('Compute_service record created for %s ') % host)
             dic['service_id'] = service_ref['id']
@@ -1457,7 +1683,7 @@ class LibvirtConnection(driver.ComputeDriver):
 
         return
 
-    def ensure_filtering_rules_for_instance(self, instance_ref,
+    def ensure_filtering_rules_for_instance(self, instance_ref, network_info,
                                             time=None):
         """Setting up filtering rules and waiting for its completion.
 
@@ -1487,14 +1713,16 @@ class LibvirtConnection(driver.ComputeDriver):
 
         # If any instances never launch at destination host,
         # basic-filtering must be set here.
-        self.firewall_driver.setup_basic_filtering(instance_ref)
-        # setting up n)ova-instance-instance-xx mainly.
-        self.firewall_driver.prepare_instance_filter(instance_ref)
+        self.firewall_driver.setup_basic_filtering(instance_ref, network_info)
+        # setting up nova-instance-instance-xx mainly.
+        self.firewall_driver.prepare_instance_filter(instance_ref,
+                network_info)
 
         # wait for completion
         timeout_count = range(FLAGS.live_migration_retry_count)
         while timeout_count:
-            if self.firewall_driver.instance_filter_exists(instance_ref):
+            if self.firewall_driver.instance_filter_exists(instance_ref,
+                                                           network_info):
                 break
             timeout_count.pop()
             if len(timeout_count) == 0:
@@ -1503,7 +1731,7 @@ class LibvirtConnection(driver.ComputeDriver):
             time.sleep(1)
 
     def live_migration(self, ctxt, instance_ref, dest,
-                       post_method, recover_method):
+                       post_method, recover_method, block_migration=False):
         """Spawning live_migration operation for distributing high-load.
 
         :params ctxt: security context
@@ -1511,20 +1739,22 @@ class LibvirtConnection(driver.ComputeDriver):
             nova.db.sqlalchemy.models.Instance object
             instance object that is migrated.
         :params dest: destination host
+        :params block_migration: destination host
         :params post_method:
             post operation method.
             expected nova.compute.manager.post_live_migration.
         :params recover_method:
             recovery method when any exception occurs.
             expected nova.compute.manager.recover_live_migration.
+        :params block_migration: if true, do block migration.
 
         """
 
         greenthread.spawn(self._live_migration, ctxt, instance_ref, dest,
-                          post_method, recover_method)
+                          post_method, recover_method, block_migration)
 
-    def _live_migration(self, ctxt, instance_ref, dest,
-                        post_method, recover_method):
+    def _live_migration(self, ctxt, instance_ref, dest, post_method,
+                        recover_method, block_migration=False):
         """Do live migration.
 
         :params ctxt: security context
@@ -1543,27 +1773,21 @@ class LibvirtConnection(driver.ComputeDriver):
 
         # Do live migration.
         try:
-            flaglist = FLAGS.live_migration_flag.split(',')
+            if block_migration:
+                flaglist = FLAGS.block_migration_flag.split(',')
+            else:
+                flaglist = FLAGS.live_migration_flag.split(',')
             flagvals = [getattr(libvirt, x.strip()) for x in flaglist]
             logical_sum = reduce(lambda x, y: x | y, flagvals)
 
-            if self.read_only:
-                tmpconn = self._connect(self.libvirt_uri, False)
-                dom = tmpconn.lookupByName(instance_ref.name)
-                dom.migrateToURI(FLAGS.live_migration_uri % dest,
-                                 logical_sum,
-                                 None,
-                                 FLAGS.live_migration_bandwidth)
-                tmpconn.close()
-            else:
-                dom = self._conn.lookupByName(instance_ref.name)
-                dom.migrateToURI(FLAGS.live_migration_uri % dest,
-                                 logical_sum,
-                                 None,
-                                 FLAGS.live_migration_bandwidth)
+            dom = self._conn.lookupByName(instance_ref.name)
+            dom.migrateToURI(FLAGS.live_migration_uri % dest,
+                             logical_sum,
+                             None,
+                             FLAGS.live_migration_bandwidth)
 
         except Exception:
-            recover_method(ctxt, instance_ref, dest=dest)
+            recover_method(ctxt, instance_ref, dest, block_migration)
             raise
 
         # Waiting for completion of live_migration.
@@ -1575,23 +1799,257 @@ class LibvirtConnection(driver.ComputeDriver):
                 self.get_info(instance_ref.name)['state']
             except exception.NotFound:
                 timer.stop()
-                post_method(ctxt, instance_ref, dest)
+                post_method(ctxt, instance_ref, dest, block_migration)
 
         timer.f = wait_for_live_migration
         timer.start(interval=0.5, now=True)
 
-    def unfilter_instance(self, instance_ref):
+    def pre_block_migration(self, ctxt, instance_ref, disk_info_json):
+        """Preparation block migration.
+
+        :params ctxt: security context
+        :params instance_ref:
+            nova.db.sqlalchemy.models.Instance object
+            instance object that is migrated.
+        :params disk_info_json:
+            json strings specified in get_instance_disk_info
+
+        """
+        disk_info = utils.loads(disk_info_json)
+
+        # make instance directory
+        instance_dir = os.path.join(FLAGS.instances_path, instance_ref['name'])
+        if os.path.exists(instance_dir):
+            raise exception.DestinationDiskExists(path=instance_dir)
+        os.mkdir(instance_dir)
+
+        for info in disk_info:
+            base = os.path.basename(info['path'])
+            # Get image type and create empty disk image, and
+            # create backing file in case of qcow2.
+            instance_disk = os.path.join(instance_dir, base)
+            if not info['backing_file']:
+                utils.execute('qemu-img', 'create', '-f', info['type'],
+                              instance_disk, info['local_gb'])
+
+            else:
+                # Creating backing file follows same way as spawning instances.
+                backing_file = os.path.join(FLAGS.instances_path,
+                                            '_base', info['backing_file'])
+
+                if not os.path.exists(backing_file):
+                    self._cache_image(fn=self._fetch_image,
+                        context=ctxt,
+                        target=info['path'],
+                        fname=info['backing_file'],
+                        cow=FLAGS.use_cow_images,
+                        image_id=instance_ref['image_ref'],
+                        user_id=instance_ref['user_id'],
+                        project_id=instance_ref['project_id'],
+                        size=instance_ref['local_gb'])
+
+                utils.execute('qemu-img', 'create', '-f', info['type'],
+                          '-o', 'backing_file=%s' % backing_file,
+                          instance_disk, info['local_gb'])
+
+        # if image has kernel and ramdisk, just download
+        # following normal way.
+        if instance_ref['kernel_id']:
+            user = manager.AuthManager().get_user(instance_ref['user_id'])
+            project = manager.AuthManager().get_project(
+                instance_ref['project_id'])
+            self._fetch_image(nova_context.get_admin_context(),
+                              os.path.join(instance_dir, 'kernel'),
+                              instance_ref['kernel_id'],
+                              user,
+                              project)
+            if instance_ref['ramdisk_id']:
+                self._fetch_image(nova_context.get_admin_context(),
+                                  os.path.join(instance_dir, 'ramdisk'),
+                                  instance_ref['ramdisk_id'],
+                                  user,
+                                  project)
+
+    def post_live_migration_at_destination(self, ctxt,
+                                           instance_ref,
+                                           network_info,
+                                           block_migration):
+        """Post operation of live migration at destination host.
+
+        :params ctxt: security context
+        :params instance_ref:
+            nova.db.sqlalchemy.models.Instance object
+            instance object that is migrated.
+        :params network_info: instance network infomation
+        :params : block_migration: if true, post operation of block_migraiton.
+        """
+        # Define migrated instance, otherwise, suspend/destroy does not work.
+        dom_list = self._conn.listDefinedDomains()
+        if instance_ref.name not in dom_list:
+            instance_dir = os.path.join(FLAGS.instances_path,
+                                        instance_ref.name)
+            xml_path = os.path.join(instance_dir, 'libvirt.xml')
+            # In case of block migration, destination does not have
+            # libvirt.xml
+            if not os.path.isfile(xml_path):
+                xml = self.to_xml(instance_ref, network_info=network_info)
+                f = open(os.path.join(instance_dir, 'libvirt.xml'), 'w+')
+                f.write(xml)
+                f.close()
+            # libvirt.xml should be made by to_xml(), but libvirt
+            # does not accept to_xml() result, since uuid is not
+            # included in to_xml() result.
+            dom = self._lookup_by_name(instance_ref.name)
+            self._conn.defineXML(dom.XMLDesc(0))
+
+    def get_instance_disk_info(self, ctxt, instance_ref):
+        """Preparation block migration.
+
+        :params ctxt: security context
+        :params instance_ref:
+            nova.db.sqlalchemy.models.Instance object
+            instance object that is migrated.
+        :return:
+            json strings with below format.
+           "[{'path':'disk', 'type':'raw', 'local_gb':'10G'},...]"
+
+        """
+        disk_info = []
+
+        virt_dom = self._lookup_by_name(instance_ref.name)
+        xml = virt_dom.XMLDesc(0)
+        doc = libxml2.parseDoc(xml)
+        disk_nodes = doc.xpathEval('//devices/disk')
+        path_nodes = doc.xpathEval('//devices/disk/source')
+        driver_nodes = doc.xpathEval('//devices/disk/driver')
+
+        for cnt, path_node in enumerate(path_nodes):
+            disk_type = disk_nodes[cnt].get_properties().getContent()
+            path = path_node.get_properties().getContent()
+
+            if disk_type != 'file':
+                LOG.debug(_('skipping %(path)s since it looks like volume') %
+                          locals())
+                continue
+
+            # In case of libvirt.xml, disk type can be obtained
+            # by the below statement.
+            # -> disk_type = driver_nodes[cnt].get_properties().getContent()
+            # but this xml is generated by kvm, format is slightly different.
+            disk_type = \
+                driver_nodes[cnt].get_properties().get_next().getContent()
+            if disk_type == 'raw':
+                size = int(os.path.getsize(path))
+                backing_file = ""
+            else:
+                out, err = utils.execute('qemu-img', 'info', path)
+                size = [i.split('(')[1].split()[0] for i in out.split('\n')
+                    if i.strip().find('virtual size') >= 0]
+                size = int(size[0])
+
+                backing_file = [i.split('actual path:')[1].strip()[:-1]
+                    for i in out.split('\n') if 0 <= i.find('backing file')]
+                backing_file = os.path.basename(backing_file[0])
+
+            # block migration needs same/larger size of empty image on the
+            # destination host. since qemu-img creates bit smaller size image
+            # depending on original image size, fixed value is necessary.
+            for unit, divisor in [('G', 1024 ** 3), ('M', 1024 ** 2),
+                                  ('K', 1024), ('', 1)]:
+                if size / divisor == 0:
+                    continue
+                if size % divisor != 0:
+                    size = size / divisor + 1
+                else:
+                    size = size / divisor
+                size = str(size) + unit
+                break
+
+            disk_info.append({'type': disk_type, 'path': path,
+                              'local_gb': size, 'backing_file': backing_file})
+
+        return utils.dumps(disk_info)
+
+    def unfilter_instance(self, instance_ref, network_info):
         """See comments of same method in firewall_driver."""
-        self.firewall_driver.unfilter_instance(instance_ref)
+        self.firewall_driver.unfilter_instance(instance_ref,
+                                               network_info=network_info)
 
     def update_host_status(self):
-        """See xenapi_conn.py implementation."""
-        pass
+        """Update the status info of the host, and return those values
+            to the calling program."""
+        return self.HostState.update_status()
 
     def get_host_stats(self, refresh=False):
-        """See xenapi_conn.py implementation."""
+        """Return the current state of the host. If 'refresh' is
+           True, run the update first."""
+        print 'Updating!'
+        return self.HostState.get_host_stats(refresh=refresh)
+
+    def host_power_action(self, host, action):
+        """Reboots, shuts down or powers up the host."""
         pass
 
     def set_host_enabled(self, host, enabled):
         """Sets the specified host's ability to accept new instances."""
         pass
+
+
+class HostState(object):
+    """Manages information about the XenServer host this compute
+    node is running on.
+    """
+    def __init__(self, read_only):
+        super(HostState, self).__init__()
+        self.read_only = read_only
+        self._stats = {}
+        self.connection = None
+        self.update_status()
+
+    def get_host_stats(self, refresh=False):
+        """Return the current state of the host. If 'refresh' is
+        True, run the update first.
+        """
+        if refresh:
+            self.update_status()
+        return self._stats
+
+    def update_status(self):
+        if FLAGS.connection_type == 'gpu':
+            global gvirtus_pids
+            print 'using %d GPUs' % len(gvirtus_pids)
+        """Since under Xenserver, a compute node runs on a given host,
+        we can get host status information using xenapi.
+        """
+        LOG.debug(_("Updating host stats"))
+        print 'Updating statistics!!'
+        if self.connection is None:
+            self.connection = get_connection(self.read_only)
+        data = {}
+        data["vcpus"] = self.connection.get_vcpu_total()
+        data["vcpus_used"] = self.connection.get_vcpu_used()
+        data["cpu_info"] = self.connection.get_cpu_info()
+        data["cpu_arch"] = FLAGS.cpu_arch
+        data["xpus"] = FLAGS.xpus
+        data["xpu_arch"] = FLAGS.xpu_arch
+        if FLAGS.connection_type == 'gpu':
+            data["xpus_used"] = len(gvirtus_pids)
+        data["xpu_info"] = FLAGS.xpu_info
+        data["net_arch"] = FLAGS.net_arch
+        data["net_info"] = FLAGS.net_info
+        data["net_mbps"] = FLAGS.net_mbps
+        data["disk_total"] = self.connection.get_local_gb_total()
+        data["disk_used"] = self.connection.get_local_gb_used()
+        data["disk_available"] = data["disk_total"] - data["disk_used"]
+        data["host_memory_total"] = self.connection.get_memory_mb_total()
+        data["host_memory_free"] = data["host_memory_total"] - \
+            self.connection.get_memory_mb_used()
+        data["hypervisor_type"] = self.connection.get_hypervisor_type()
+        data["hypervisor_version"] = self.connection.get_hypervisor_version()
+
+        # Add user-defined capabilities
+        caps = FLAGS.extra_node_capabilities
+        for cap in caps:
+            key, value = cap.split('=')
+            data[key] = value
+        self._stats = data

@@ -75,13 +75,13 @@ if [ "$CMD" == "install" ]; then
     sudo modprobe kvm
     sudo /etc/init.d/libvirt-bin restart
     sudo modprobe nbd
-    sudo apt-get install -y python-twisted python-mox python-ipy python-paste
+    sudo apt-get install -y python-mox python-ipy python-paste
     sudo apt-get install -y python-migrate python-gflags python-greenlet
     sudo apt-get install -y python-libvirt python-libxml2 python-routes
     sudo apt-get install -y python-netaddr python-pastedeploy python-eventlet
     sudo apt-get install -y python-novaclient python-glance python-cheetah
     sudo apt-get install -y python-carrot python-tempita python-sqlalchemy
-    sudo apt-get install -y python-suds
+    sudo apt-get install -y python-suds python-kombu
 
 
     if [ "$USE_IPV6" == 1 ]; then

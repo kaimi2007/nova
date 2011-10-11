@@ -15,15 +15,21 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import time
+from lxml import etree
 
 from webob import exc
 
 import nova
-from nova.api.openstack import faults
-import nova.api.openstack.views.addresses
+from nova.api.openstack import common
+from nova.api.openstack.views import addresses as views_addresses
 from nova.api.openstack import wsgi
-from nova import db
+from nova.api.openstack import xmlutil
+from nova import log as logging
+from nova import flags
+
+
+LOG = logging.getLogger('nova.api.openstack.ips')
+FLAGS = flags.FLAGS
 
 
 class Controller(object):
@@ -32,73 +38,104 @@ class Controller(object):
     def __init__(self):
         self.compute_api = nova.compute.API()
 
-    def _get_instance(self, req, server_id):
+    def _get_instance(self, context, server_id):
         try:
-            instance = self.compute_api.get(
-                req.environ['nova.context'], server_id)
+            instance = self.compute_api.get(context, server_id)
         except nova.exception.NotFound:
-            return faults.Fault(exc.HTTPNotFound())
+            msg = _("Instance does not exist")
+            raise exc.HTTPNotFound(explanation=msg)
         return instance
 
     def create(self, req, server_id, body):
-        return faults.Fault(exc.HTTPNotImplemented())
+        raise exc.HTTPNotImplemented()
 
     def delete(self, req, server_id, id):
-        return faults.Fault(exc.HTTPNotImplemented())
+        raise exc.HTTPNotImplemented()
 
 
 class ControllerV10(Controller):
 
     def index(self, req, server_id):
-        instance = self._get_instance(req, server_id)
-        builder = nova.api.openstack.views.addresses.ViewBuilderV10()
-        return {'addresses': builder.build(instance)}
+        context = req.environ['nova.context']
+        instance = self._get_instance(context, server_id)
+        networks = common.get_networks_for_instance(context, instance)
+        builder = self._get_view_builder(req)
+        return {'addresses': builder.build(networks)}
 
     def show(self, req, server_id, id):
-        instance = self._get_instance(req, server_id)
+        context = req.environ['nova.context']
+        instance = self._get_instance(context, server_id)
+        networks = common.get_networks_for_instance(context, instance)
         builder = self._get_view_builder(req)
         if id == 'private':
-            view = builder.build_private_parts(instance)
+            view = builder.build_private_parts(networks)
         elif id == 'public':
-            view = builder.build_public_parts(instance)
+            view = builder.build_public_parts(networks)
         else:
             msg = _("Only private and public networks available")
-            return faults.Fault(exc.HTTPNotFound(explanation=msg))
+            raise exc.HTTPNotFound(explanation=msg)
 
         return {id: view}
 
     def _get_view_builder(self, req):
-        return nova.api.openstack.views.addresses.ViewBuilderV10()
+        return views_addresses.ViewBuilderV10()
 
 
 class ControllerV11(Controller):
 
     def index(self, req, server_id):
         context = req.environ['nova.context']
-        interfaces = self._get_virtual_interfaces(context, server_id)
-        networks = self._get_view_builder(req).build(interfaces)
-        return {'addresses': networks}
+        instance = self._get_instance(context, server_id)
+        networks = common.get_networks_for_instance(context, instance)
+        return {'addresses': self._get_view_builder(req).build(networks)}
 
     def show(self, req, server_id, id):
         context = req.environ['nova.context']
-        interfaces = self._get_virtual_interfaces(context, server_id)
-        network = self._get_view_builder(req).build_network(interfaces, id)
+        instance = self._get_instance(context, server_id)
+        networks = common.get_networks_for_instance(context, instance)
+        network = self._get_view_builder(req).build_network(networks, id)
 
         if network is None:
             msg = _("Instance is not a member of specified network")
-            return faults.Fault(exc.HTTPNotFound(explanation=msg))
+            raise exc.HTTPNotFound(explanation=msg)
 
         return network
 
-    def _get_virtual_interfaces(self, context, server_id):
-        try:
-            return db.api.virtual_interface_get_by_instance(context, server_id)
-        except nova.exception.InstanceNotFound:
-            msg = _("Instance does not exist")
-            raise exc.HTTPNotFound(explanation=msg)
-
     def _get_view_builder(self, req):
-        return nova.api.openstack.views.addresses.ViewBuilderV11()
+        return views_addresses.ViewBuilderV11()
+
+
+class IPXMLSerializer(wsgi.XMLDictSerializer):
+
+    NSMAP = {None: xmlutil.XMLNS_V11}
+
+    def __init__(self, xmlns=wsgi.XMLNS_V11):
+        super(IPXMLSerializer, self).__init__(xmlns=xmlns)
+
+    def populate_addresses_node(self, addresses_elem, addresses_dict):
+        for (network_id, ip_dicts) in addresses_dict.items():
+            network_elem = self._create_network_node(network_id, ip_dicts)
+            addresses_elem.append(network_elem)
+
+    def _create_network_node(self, network_id, ip_dicts):
+        network_elem = etree.Element('network', nsmap=self.NSMAP)
+        network_elem.set('id', str(network_id))
+        for ip_dict in ip_dicts:
+            ip_elem = etree.SubElement(network_elem, 'ip')
+            ip_elem.set('version', str(ip_dict['version']))
+            ip_elem.set('addr', ip_dict['addr'])
+        return network_elem
+
+    def show(self, network_dict):
+        (network_id, ip_dicts) = network_dict.items()[0]
+        network = self._create_network_node(network_id, ip_dicts)
+        return self._to_xml(network)
+
+    def index(self, addresses_dict):
+        addresses = etree.Element('addresses', nsmap=self.NSMAP)
+        self.populate_addresses_node(addresses,
+                                     addresses_dict.get('addresses', {}))
+        return self._to_xml(addresses)
 
 
 def create_resource(version):
@@ -107,22 +144,18 @@ def create_resource(version):
         '1.1': ControllerV11,
     }[version]()
 
-    xmlns = {
-        '1.0': wsgi.XMLNS_V10,
-        '1.1': wsgi.XMLNS_V11,
-    }[version]
-
     metadata = {
         'list_collections': {
-            'public':  {'item_name': 'ip', 'item_key': 'addr'},
+            'public': {'item_name': 'ip', 'item_key': 'addr'},
             'private': {'item_name': 'ip', 'item_key': 'addr'},
         },
     }
 
-    body_serializers = {
-        'application/xml': wsgi.XMLDictSerializer(metadata=metadata,
-                                                  xmlns=xmlns),
-    }
-    serializer = wsgi.ResponseSerializer(body_serializers)
+    xml_serializer = {
+        '1.0': wsgi.XMLDictSerializer(metadata=metadata, xmlns=wsgi.XMLNS_V11),
+        '1.1': IPXMLSerializer(),
+    }[version]
+
+    serializer = wsgi.ResponseSerializer({'application/xml': xml_serializer})
 
     return wsgi.Resource(controller, serializer=serializer)

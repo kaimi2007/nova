@@ -15,41 +15,53 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-"""
-Session Handling for SQLAlchemy backend
-"""
 
-from sqlalchemy import create_engine
-from sqlalchemy import pool
-from sqlalchemy.orm import sessionmaker
+"""Session Handling for SQLAlchemy backend."""
 
-from nova import exception
-from nova import flags
+import sqlalchemy.orm
 
-FLAGS = flags.FLAGS
+import nova.exception
+import nova.flags
+
+
+FLAGS = nova.flags.FLAGS
+
 
 _ENGINE = None
 _MAKER = None
 
 
 def get_session(autocommit=True, expire_on_commit=False):
-    """Helper method to grab session"""
-    global _ENGINE
-    global _MAKER
-    if not _MAKER:
-        if not _ENGINE:
-            kwargs = {'pool_recycle': FLAGS.sql_idle_timeout,
-                      'echo': False}
+    """Return a SQLAlchemy session."""
+    global _ENGINE, _MAKER
 
-            if FLAGS.sql_connection.startswith('sqlite'):
-                kwargs['poolclass'] = pool.NullPool
+    if _MAKER is None or _ENGINE is None:
+        _ENGINE = get_engine()
+        _MAKER = get_maker(_ENGINE, autocommit, expire_on_commit)
 
-            _ENGINE = create_engine(FLAGS.sql_connection,
-                                    **kwargs)
-        _MAKER = (sessionmaker(bind=_ENGINE,
-                                autocommit=autocommit,
-                                expire_on_commit=expire_on_commit))
     session = _MAKER()
-    session.query = exception.wrap_db_error(session.query)
-    session.flush = exception.wrap_db_error(session.flush)
+    session.query = nova.exception.wrap_db_error(session.query)
+    session.flush = nova.exception.wrap_db_error(session.flush)
     return session
+
+
+def get_engine():
+    """Return a SQLAlchemy engine."""
+    connection_dict = sqlalchemy.engine.url.make_url(FLAGS.sql_connection)
+
+    engine_args = {
+        "pool_recycle": FLAGS.sql_idle_timeout,
+        "echo": False,
+    }
+
+    if "sqlite" in connection_dict.drivername:
+        engine_args["poolclass"] = sqlalchemy.pool.NullPool
+
+    return sqlalchemy.create_engine(FLAGS.sql_connection, **engine_args)
+
+
+def get_maker(engine, autocommit=True, expire_on_commit=False):
+    """Return a SQLAlchemy sessionmaker using the given engine."""
+    return sqlalchemy.orm.sessionmaker(bind=engine,
+                                       autocommit=autocommit,
+                                       expire_on_commit=expire_on_commit)

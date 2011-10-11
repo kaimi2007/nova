@@ -35,15 +35,18 @@ terminating it.
 
 """
 
+import datetime
+import functools
 import os
 import socket
 import sys
 import tempfile
 import time
-import functools
 
 from eventlet import greenthread
 
+import nova.context
+from nova import block_device
 from nova import exception
 from nova import flags
 import nova.image
@@ -54,6 +57,8 @@ from nova import rpc
 from nova import utils
 from nova import volume
 from nova.compute import power_state
+from nova.compute import task_states
+from nova.compute import vm_states
 from nova.notifier import api as notifier
 from nova.compute.utils import terminate_volumes
 from nova.virt import driver
@@ -64,23 +69,32 @@ flags.DEFINE_string('instances_path', '$state_path/instances',
                     'where instances are stored on disk')
 flags.DEFINE_string('compute_driver', 'nova.virt.connection.get_connection',
                     'Driver to use for controlling virtualization')
-flags.DEFINE_string('stub_network', False,
-                    'Stub network related code')
-flags.DEFINE_integer('password_length', 12,
-                    'Length of generated admin passwords')
 flags.DEFINE_string('console_host', socket.gethostname(),
                     'Console proxy host to use to connect to instances on'
                     'this host.')
 flags.DEFINE_integer('live_migration_retry_count', 30,
-                     "Retry count needed in live_migration."
-                     " sleep 1 sec for each count")
+                    ("Retry count needed in live_migration."
+                     " sleep 1 sec for each count"))
+flags.DEFINE_string('cpu_arch', 'x86_64',
+                    'Architecture the instance runs on')
+flags.DEFINE_string('xpu_arch', '',
+                    'Architecture of the accelerator instance runs on')
+flags.DEFINE_string('xpu_info', '', 'Accelerator info')
+flags.DEFINE_integer('xpus', 0, 'Number of xpus')
+flags.DEFINE_string('net_arch', '',
+                    'Architecture of the network')
+flags.DEFINE_integer('net_mbps', 256, 'Network speed')
+flags.DEFINE_string('net_info', '', 'Network info')
 flags.DEFINE_integer("rescue_timeout", 0,
                      "Automatically unrescue an instance after N seconds."
                      " Set to 0 to disable.")
-flags.DEFINE_bool('auto_assign_floating_ip', False,
-                  'Autoassigning floating ip to VM')
+flags.DEFINE_integer("resize_confirm_window", 0,
+                     "Automatically confirm resizes after N seconds."
+                     " Set to 0 to disable.")
 flags.DEFINE_integer('host_state_interval', 120,
                      'Interval in seconds for querying the host status')
+flags.DEFINE_integer('reclaim_instance_interval', 0,
+                     'Interval in seconds for reclaiming deleted instances')
 
 LOG = logging.getLogger('nova.compute.manager')
 
@@ -93,6 +107,10 @@ def checks_instance_lock(function):
     """Decorator to prevent action against locked instances for non-admins."""
     @functools.wraps(function)
     def decorated_function(self, context, instance_id, *args, **kwargs):
+        #TODO(anyone): this being called instance_id is forcing a slightly
+        # confusing convention of pushing instance_uuids
+        # through an "instance_id" key in the queue args dict when
+        # casting through the compute API
         LOG.info(_("check_instance_lock: decorating: |%s|"), function,
                  context=context)
         LOG.info(_("check_instance_lock: arguments: |%(self)s| |%(context)s|"
@@ -142,36 +160,48 @@ class ComputeManager(manager.SchedulerDependentManager):
         super(ComputeManager, self).__init__(service_name="compute",
                                              *args, **kwargs)
 
+    def _instance_update(self, context, instance_id, **kwargs):
+        """Update an instance in the database using kwargs as value."""
+        return self.db.instance_update(context, instance_id, kwargs)
+
     def init_host(self):
         """Initialization for a standalone compute service."""
         self.driver.init_host(host=self.host)
+        context = nova.context.get_admin_context()
+        instances = self.db.instance_get_all_by_host(context, self.host)
+        for instance in instances:
+            inst_name = instance['name']
+            db_state = instance['power_state']
+            drv_state = self._get_power_state(context, instance)
 
-    def _update_state(self, context, instance_id, state=None):
-        """Update the state of an instance from the driver info."""
-        instance_ref = self.db.instance_get(context, instance_id)
+            expect_running = db_state == power_state.RUNNING \
+                             and drv_state != db_state
 
-        if state is None:
-            try:
-                info = self.driver.get_info(instance_ref['name'])
-            except exception.NotFound:
-                info = None
+            LOG.debug(_('Current state of %(inst_name)s is %(drv_state)s, '
+                        'state in DB is %(db_state)s.'), locals())
 
-            if info is not None:
-                state = info['state']
-            else:
-                state = power_state.FAILED
+            if (expect_running and FLAGS.resume_guests_state_on_host_boot)\
+               or FLAGS.start_guests_on_host_boot:
+                LOG.info(_('Rebooting instance %(inst_name)s after '
+                            'nova-compute restart.'), locals())
+                self.reboot_instance(context, instance['id'])
+            elif drv_state == power_state.RUNNING:
+                # Hyper-V and VMWareAPI drivers will raise an exception
+                try:
+                    net_info = self._get_instance_nw_info(context, instance)
+                    self.driver.ensure_filtering_rules_for_instance(instance,
+                                                                    net_info)
+                except NotImplementedError:
+                    LOG.warning(_('Hypervisor driver does not '
+                            'support firewall rules'))
 
-        self.db.instance_set_state(context, instance_id, state)
-
-    def _update_launched_at(self, context, instance_id, launched_at=None):
-        """Update the launched_at parameter of the given instance."""
-        data = {'launched_at': launched_at or utils.utcnow()}
-        self.db.instance_update(context, instance_id, data)
-
-    def _update_image_ref(self, context, instance_id, image_ref):
-        """Update the image_id for the given instance."""
-        data = {'image_ref': image_ref}
-        self.db.instance_update(context, instance_id, data)
+    def _get_power_state(self, context, instance):
+        """Retrieve the power state for the given instance."""
+        LOG.debug(_('Checking state of %s'), instance['name'])
+        try:
+            return self.driver.get_info(instance['name'])["state"]
+        except exception.NotFound:
+            return power_state.FAILED
 
     def get_console_topic(self, context, **kwargs):
         """Retrieves the console host for a project on this host.
@@ -212,15 +242,21 @@ class ComputeManager(manager.SchedulerDependentManager):
         """This call passes straight through to the virtualization driver."""
         return self.driver.refresh_provider_fw_rules()
 
+    def _get_instance_nw_info(self, context, instance):
+        """Get a list of dictionaries of network data of an instance.
+        Returns an empty list if stub_network flag is set."""
+        network_info = []
+        if not FLAGS.stub_network:
+            network_info = self.network_api.get_instance_nw_info(context,
+                                                                 instance)
+        return network_info
+
     def _setup_block_device_mapping(self, context, instance_id):
         """setup volumes for block device mapping"""
-        self.db.instance_set_state(context,
-                                   instance_id,
-                                   power_state.NOSTATE,
-                                   'block_device_mapping')
-
         volume_api = volume.API()
         block_device_mapping = []
+        swap = None
+        ephemerals = []
         for bdm in self.db.block_device_mapping_get_all_by_instance(
             context, instance_id):
             LOG.debug(_("setting up bdm %s"), bdm)
@@ -228,11 +264,18 @@ class ComputeManager(manager.SchedulerDependentManager):
             if bdm['no_device']:
                 continue
             if bdm['virtual_name']:
-                # TODO(yamahata):
-                # block devices for swap and ephemeralN will be
-                # created by virt driver locally in compute node.
-                assert (bdm['virtual_name'] == 'swap' or
-                        bdm['virtual_name'].startswith('ephemeral'))
+                virtual_name = bdm['virtual_name']
+                device_name = bdm['device_name']
+                assert block_device.is_swap_or_ephemeral(virtual_name)
+                if virtual_name == 'swap':
+                    swap = {'device_name': device_name,
+                            'swap_size': bdm['volume_size']}
+                elif block_device.is_ephemeral(virtual_name):
+                    eph = {'num': block_device.ephemeral_num(virtual_name),
+                           'virtual_name': virtual_name,
+                           'device_name': device_name,
+                           'size': bdm['volume_size']}
+                    ephemerals.append(eph)
                 continue
 
             if ((bdm['snapshot_id'] is not None) and
@@ -268,71 +311,181 @@ class ComputeManager(manager.SchedulerDependentManager):
                                              'mount_device':
                                              bdm['device_name']})
 
-        return block_device_mapping
+        return (swap, ephemerals, block_device_mapping)
 
     def _run_instance(self, context, instance_id, **kwargs):
         """Launch a new instance with specified options."""
-        context = context.elevated()
-        instance = self.db.instance_get(context, instance_id)
-        instance.injected_files = kwargs.get('injected_files', [])
-        instance.admin_pass = kwargs.get('admin_password', None)
-        if instance['name'] in self.driver.list_instances():
-            raise exception.Error(_("Instance has already been created"))
-        LOG.audit(_("instance %s: starting..."), instance_id,
-                  context=context)
-        self.db.instance_update(context,
-                                instance_id,
-                                {'host': self.host, 'launched_on': self.host})
+        def _check_image_size():
+            """Ensure image is smaller than the maximum size allowed by the
+            instance_type.
 
-        self.db.instance_set_state(context,
-                                   instance_id,
-                                   power_state.NOSTATE,
-                                   'networking')
+            The image stored in Glance is potentially compressed, so we use two
+            checks to ensure that the size isn't exceeded:
 
-        is_vpn = instance['image_ref'] == str(FLAGS.vpn_image_id)
-        try:
-            # NOTE(vish): This could be a cast because we don't do anything
-            #             with the address currently, but I'm leaving it as
-            #             a call to ensure that network setup completes.  We
-            #             will eventually also need to save the address here.
-            if not FLAGS.stub_network:
-                network_info = self.network_api.allocate_for_instance(context,
-                                                         instance, vpn=is_vpn)
-                LOG.debug(_("instance network_info: |%s|"), network_info)
-                self.network_manager.setup_compute_network(context,
-                                                           instance_id)
-            else:
+                1) This one - checks compressed size, this a quick check to
+                   eliminate any images which are obviously too large
+
+                2) Check uncompressed size in nova.virt.xenapi.vm_utils. This
+                   is a slower check since it requires uncompressing the entire
+                   image, but is accurate because it reflects the image's
+                   actual size.
+            """
+            # NOTE(jk0): image_ref is defined in the DB model, image_href is
+            # used by the image service. This should be refactored to be
+            # consistent.
+            image_href = instance['image_ref']
+            image_service, image_id = nova.image.get_image_service(context,
+                                                                   image_href)
+            image_meta = image_service.show(context, image_id)
+
+            try:
+                size_bytes = image_meta['size']
+            except KeyError:
+                # Size is not a required field in the image service (yet), so
+                # we are unable to rely on it being there even though it's in
+                # glance.
+
+                # TODO(jk0): Should size be required in the image service?
+                return
+
+            instance_type_id = instance['instance_type_id']
+            instance_type = self.db.instance_type_get(context,
+                    instance_type_id)
+            allowed_size_gb = instance_type['local_gb']
+
+            # NOTE(jk0): Since libvirt uses local_gb as a secondary drive, we
+            # need to handle potential situations where local_gb is 0. This is
+            # the default for m1.tiny.
+            if allowed_size_gb == 0:
+                return
+
+            allowed_size_bytes = allowed_size_gb * 1024 * 1024 * 1024
+
+            LOG.debug(_("image_id=%(image_id)d, image_size_bytes="
+                        "%(size_bytes)d, allowed_size_bytes="
+                        "%(allowed_size_bytes)d") % locals())
+
+            if size_bytes > allowed_size_bytes:
+                LOG.info(_("Image '%(image_id)d' size %(size_bytes)d exceeded"
+                           " instance_type allowed size "
+                           "%(allowed_size_bytes)d")
+                           % locals())
+                raise exception.ImageTooLarge()
+
+        def _make_network_info():
+            if FLAGS.stub_network:
                 # TODO(tr3buchet) not really sure how this should be handled.
                 # virt requires network_info to be passed in but stub_network
                 # is enabled. Setting to [] for now will cause virt to skip
                 # all vif creation and network injection, maybe this is correct
                 network_info = []
+            else:
+                # NOTE(vish): This could be a cast because we don't do
+                # anything with the address currently, but I'm leaving it as a
+                # call to ensure that network setup completes.  We will
+                # eventually also need to save the address here.
+                network_info = self.network_api.allocate_for_instance(context,
+                                    instance, vpn=is_vpn,
+                                    requested_networks=requested_networks)
+                LOG.debug(_("instance network_info: |%s|"), network_info)
+            return network_info
 
-            bd_mapping = self._setup_block_device_mapping(context, instance_id)
+        def _make_block_device_info():
+            (swap, ephemerals,
+             block_device_mapping) = self._setup_block_device_mapping(
+                context, instance_id)
+            block_device_info = {
+                'root_device_name': instance['root_device_name'],
+                'swap': swap,
+                'ephemerals': ephemerals,
+                'block_device_mapping': block_device_mapping}
+            return block_device_info
+
+        def _deallocate_network():
+            if not FLAGS.stub_network:
+                LOG.debug(_("deallocating network for instance: %s"),
+                          instance['id'])
+                self.network_api.deallocate_for_instance(context,
+                                    instance)
+
+        context = context.elevated()
+        instance = self.db.instance_get(context, instance_id)
+
+        requested_networks = kwargs.get('requested_networks', None)
+
+        if instance['name'] in self.driver.list_instances():
+            raise exception.Error(_("Instance has already been created"))
+
+        _check_image_size()
+
+        LOG.audit(_("instance %s: starting..."), instance_id,
+                  context=context)
+        updates = {}
+        updates['host'] = self.host
+        updates['launched_on'] = self.host
+        updates['vm_state'] = vm_states.BUILDING
+        updates['task_state'] = task_states.NETWORKING
+        instance = self.db.instance_update(context, instance_id, updates)
+        instance['injected_files'] = kwargs.get('injected_files', [])
+        instance['admin_pass'] = kwargs.get('admin_password', None)
+
+        is_vpn = instance['image_ref'] == str(FLAGS.vpn_image_id)
+        network_info = _make_network_info()
+        try:
+            self._instance_update(context,
+                                  instance_id,
+                                  vm_state=vm_states.BUILDING,
+                                  task_state=task_states.BLOCK_DEVICE_MAPPING)
+
+            block_device_info = _make_block_device_info()
+
+            self._instance_update(context,
+                                  instance_id,
+                                  vm_state=vm_states.BUILDING,
+                                  task_state=task_states.SPAWNING)
 
             # TODO(vish) check to make sure the availability zone matches
-            self._update_state(context, instance_id, power_state.BUILDING)
-
             try:
-                self.driver.spawn(instance, network_info, bd_mapping)
+                self.driver.spawn(context, instance,
+                                  network_info, block_device_info)
             except Exception as ex:  # pylint: disable=W0702
                 msg = _("Instance '%(instance_id)s' failed to spawn. Is "
                         "virtualization enabled in the BIOS? Details: "
                         "%(ex)s") % locals()
                 LOG.exception(msg)
+                _deallocate_network()
+                return
 
-            self._update_launched_at(context, instance_id)
-            self._update_state(context, instance_id)
+            current_power_state = self._get_power_state(context, instance)
+            self._instance_update(context,
+                                  instance_id,
+                                  power_state=current_power_state,
+                                  vm_state=vm_states.ACTIVE,
+                                  task_state=None,
+                                  launched_at=utils.utcnow())
+
             usage_info = utils.usage_from_instance(instance)
             notifier.notify('compute.%s' % self.host,
                             'compute.instance.create',
                             notifier.INFO, usage_info)
+
         except exception.InstanceNotFound:
             # FIXME(wwolf): We are just ignoring InstanceNotFound
             # exceptions here in case the instance was immediately
             # deleted before it actually got created.  This should
             # be fixed once we have no-db-messaging
             pass
+        except:
+            # NOTE(sirp): 3-arg raise needed since Eventlet clears exceptions
+            # when switching between greenthreads.
+            type_, value, traceback = sys.exc_info()
+            try:
+                _deallocate_network()
+            finally:
+                # FIXME(sirp): when/if
+                # https://github.com/jcrocholl/pep8/pull/27 merges, we can add
+                # a per-line disable flag here for W602
+                raise type_, value, traceback
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     def run_instance(self, context, instance_id, **kwargs):
@@ -354,6 +507,7 @@ class ComputeManager(manager.SchedulerDependentManager):
                   {'action_str': action_str, 'instance_id': instance_id},
                   context=context)
 
+        network_info = self._get_instance_nw_info(context, instance)
         if not FLAGS.stub_network:
             self.network_api.deallocate_for_instance(context, instance)
 
@@ -361,25 +515,27 @@ class ComputeManager(manager.SchedulerDependentManager):
         for volume in volumes:
             self._detach_volume(context, instance_id, volume['id'], False)
 
-        if (instance['state'] == power_state.SHUTOFF and
-            instance['state_description'] != 'stopped'):
+        if instance['power_state'] == power_state.SHUTOFF:
             self.db.instance_destroy(context, instance_id)
             raise exception.Error(_('trying to destroy already destroyed'
                                     ' instance: %s') % instance_id)
-        self.driver.destroy(instance)
+        self.driver.destroy(instance, network_info)
 
         if action_str == 'Terminating':
             terminate_volumes(self.db, context, instance_id)
 
-    @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
-    @checks_instance_lock
-    def terminate_instance(self, context, instance_id):
-        """Terminate an instance on this host."""
+    def _delete_instance(self, context, instance_id):
+        """Delete an instance on this host."""
         self._shutdown_instance(context, instance_id, 'Terminating')
         instance = self.db.instance_get(context.elevated(), instance_id)
+        self._instance_update(context,
+                              instance_id,
+                              vm_state=vm_states.DELETED,
+                              task_state=None,
+                              terminated_at=utils.utcnow())
 
-        # TODO(ja): should we keep it in a terminated state for a bit?
         self.db.instance_destroy(context, instance_id)
+
         usage_info = utils.usage_from_instance(instance)
         notifier.notify('compute.%s' % self.host,
                         'compute.instance.delete',
@@ -387,10 +543,43 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
+    def terminate_instance(self, context, instance_id):
+        """Terminate an instance on this host."""
+        self._delete_instance(context, instance_id)
+
+    @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
+    @checks_instance_lock
     def stop_instance(self, context, instance_id):
         """Stopping an instance on this host."""
         self._shutdown_instance(context, instance_id, 'Stopping')
-        # instance state will be updated to stopped by _poll_instance_states()
+        self._instance_update(context,
+                              instance_id,
+                              vm_state=vm_states.STOPPED,
+                              task_state=None)
+
+    @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
+    @checks_instance_lock
+    def power_off_instance(self, context, instance_id):
+        """Power off an instance on this host."""
+        instance = self.db.instance_get(context, instance_id)
+        self.driver.power_off(instance)
+        current_power_state = self._get_power_state(context, instance)
+        self._instance_update(context,
+                              instance_id,
+                              power_state=current_power_state,
+                              task_state=None)
+
+    @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
+    @checks_instance_lock
+    def power_on_instance(self, context, instance_id):
+        """Power on an instance on this host."""
+        instance = self.db.instance_get(context, instance_id)
+        self.driver.power_on(instance)
+        current_power_state = self._get_power_state(context, instance)
+        self._instance_update(context,
+                              instance_id,
+                              power_state=current_power_state,
+                              task_state=None)
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
@@ -402,26 +591,54 @@ class ComputeManager(manager.SchedulerDependentManager):
 
         :param context: `nova.RequestContext` object
         :param instance_id: Instance identifier (integer)
-        :param image_ref: Image identifier (href or integer)
+        :param injected_files: Files to inject
+        :param new_pass: password to set on rebuilt instance
         """
         context = context.elevated()
 
         instance_ref = self.db.instance_get(context, instance_id)
         LOG.audit(_("Rebuilding instance %s"), instance_id, context=context)
 
-        self._update_state(context, instance_id, power_state.BUILDING)
+        current_power_state = self._get_power_state(context, instance_ref)
+        self._instance_update(context,
+                              instance_id,
+                              power_state=current_power_state,
+                              vm_state=vm_states.REBUILDING,
+                              task_state=None)
 
-        self.driver.destroy(instance_ref)
-        image_ref = kwargs.get('image_ref')
-        instance_ref.image_ref = image_ref
+        network_info = self._get_instance_nw_info(context, instance_ref)
+        self.driver.destroy(instance_ref, network_info)
+
+        self._instance_update(context,
+                              instance_id,
+                              vm_state=vm_states.REBUILDING,
+                              task_state=task_states.BLOCK_DEVICE_MAPPING)
+
         instance_ref.injected_files = kwargs.get('injected_files', [])
-        self.driver.spawn(instance_ref)
+        network_info = self.network_api.get_instance_nw_info(context,
+                                                              instance_ref)
+        bd_mapping = self._setup_block_device_mapping(context, instance_id)
 
-        self._update_image_ref(context, instance_id, image_ref)
-        self._update_launched_at(context, instance_id)
-        self._update_state(context, instance_id)
-        usage_info = utils.usage_from_instance(instance_ref,
-                                               image_ref=image_ref)
+        self._instance_update(context,
+                              instance_id,
+                              vm_state=vm_states.REBUILDING,
+                              task_state=task_states.SPAWNING)
+
+        # pull in new password here since the original password isn't in the db
+        instance_ref.admin_pass = kwargs.get('new_pass',
+                utils.generate_password(FLAGS.password_length))
+
+        self.driver.spawn(context, instance_ref, network_info, bd_mapping)
+
+        current_power_state = self._get_power_state(context, instance_ref)
+        self._instance_update(context,
+                              instance_id,
+                              power_state=current_power_state,
+                              vm_state=vm_states.ACTIVE,
+                              task_state=None,
+                              launched_at=utils.utcnow())
+
+        usage_info = utils.usage_from_instance(instance_ref)
         notifier.notify('compute.%s' % self.host,
                             'compute.instance.rebuild',
                             notifier.INFO,
@@ -429,28 +646,36 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
-    def reboot_instance(self, context, instance_id):
+    def reboot_instance(self, context, instance_id, reboot_type="SOFT"):
         """Reboot an instance on this host."""
-        context = context.elevated()
-        self._update_state(context, instance_id)
-        instance_ref = self.db.instance_get(context, instance_id)
         LOG.audit(_("Rebooting instance %s"), instance_id, context=context)
+        context = context.elevated()
+        instance_ref = self.db.instance_get(context, instance_id)
 
-        if instance_ref['state'] != power_state.RUNNING:
-            state = instance_ref['state']
+        current_power_state = self._get_power_state(context, instance_ref)
+        self._instance_update(context,
+                              instance_id,
+                              power_state=current_power_state,
+                              vm_state=vm_states.ACTIVE,
+                              task_state=task_states.REBOOTING)
+
+        if instance_ref['power_state'] != power_state.RUNNING:
+            state = instance_ref['power_state']
             running = power_state.RUNNING
             LOG.warn(_('trying to reboot a non-running '
                      'instance: %(instance_id)s (state: %(state)s '
                      'expected: %(running)s)') % locals(),
                      context=context)
 
-        self.db.instance_set_state(context,
-                                   instance_id,
-                                   power_state.NOSTATE,
-                                   'rebooting')
-        self.network_manager.setup_compute_network(context, instance_id)
-        self.driver.reboot(instance_ref)
-        self._update_state(context, instance_id)
+        network_info = self._get_instance_nw_info(context, instance_ref)
+        self.driver.reboot(instance_ref, network_info, reboot_type)
+
+        current_power_state = self._get_power_state(context, instance_ref)
+        self._instance_update(context,
+                              instance_id,
+                              power_state=current_power_state,
+                              vm_state=vm_states.ACTIVE,
+                              task_state=None)
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     def snapshot_instance(self, context, instance_id, image_id,
@@ -466,37 +691,45 @@ class ComputeManager(manager.SchedulerDependentManager):
         :param rotation: int representing how many backups to keep around;
             None if rotation shouldn't be used (as in the case of snapshots)
         """
+        if image_type == "snapshot":
+            task_state = task_states.IMAGE_SNAPSHOT
+        elif image_type == "backup":
+            task_state = task_states.IMAGE_BACKUP
+        else:
+            raise Exception(_('Image type not recognized %s') % image_type)
+
         context = context.elevated()
         instance_ref = self.db.instance_get(context, instance_id)
 
-        #NOTE(sirp): update_state currently only refreshes the state field
-        # if we add is_snapshotting, we will need this refreshed too,
-        # potentially?
-        self._update_state(context, instance_id)
+        current_power_state = self._get_power_state(context, instance_ref)
+        self._instance_update(context,
+                              instance_id,
+                              power_state=current_power_state,
+                              vm_state=vm_states.ACTIVE,
+                              task_state=task_state)
 
         LOG.audit(_('instance %s: snapshotting'), instance_id,
                   context=context)
-        if instance_ref['state'] != power_state.RUNNING:
-            state = instance_ref['state']
+
+        if instance_ref['power_state'] != power_state.RUNNING:
+            state = instance_ref['power_state']
             running = power_state.RUNNING
             LOG.warn(_('trying to snapshot a non-running '
                        'instance: %(instance_id)s (state: %(state)s '
                        'expected: %(running)s)') % locals())
 
-        self.driver.snapshot(instance_ref, image_id)
+        self.driver.snapshot(context, instance_ref, image_id)
+        self._instance_update(context, instance_id, task_state=None)
 
-        if image_type == 'snapshot':
-            if rotation:
-                raise exception.ImageRotationNotAllowed()
+        if image_type == 'snapshot' and rotation:
+            raise exception.ImageRotationNotAllowed()
+
+        elif image_type == 'backup' and rotation:
+            instance_uuid = instance_ref['uuid']
+            self.rotate_backups(context, instance_uuid, backup_type, rotation)
+
         elif image_type == 'backup':
-            if rotation:
-                instance_uuid = instance_ref['uuid']
-                self.rotate_backups(context, instance_uuid, backup_type,
-                                    rotation)
-            else:
-                raise exception.RotationRequiredForBackup()
-        else:
-            raise Exception(_('Image type not recognized %s') % image_type)
+            raise exception.RotationRequiredForBackup()
 
     def rotate_backups(self, context, instance_uuid, backup_type, rotation):
         """Delete excess backups associated to an instance.
@@ -564,7 +797,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         for i in xrange(max_tries):
             instance_ref = self.db.instance_get(context, instance_id)
             instance_id = instance_ref["id"]
-            instance_state = instance_ref["state"]
+            instance_state = instance_ref["power_state"]
             expected_state = power_state.RUNNING
 
             if instance_state != expected_state:
@@ -599,7 +832,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         context = context.elevated()
         instance_ref = self.db.instance_get(context, instance_id)
         instance_id = instance_ref['id']
-        instance_state = instance_ref['state']
+        instance_state = instance_ref['power_state']
         expected_state = power_state.RUNNING
         if instance_state != expected_state:
             LOG.warn(_('trying to inject a file into a non-running '
@@ -617,7 +850,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         context = context.elevated()
         instance_ref = self.db.instance_get(context, instance_id)
         instance_id = instance_ref['id']
-        instance_state = instance_ref['state']
+        instance_state = instance_ref['power_state']
         expected_state = power_state.RUNNING
         if instance_state != expected_state:
             LOG.warn(_('trying to update agent on a non-running '
@@ -630,49 +863,62 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
-    def rescue_instance(self, context, instance_id):
-        """Rescue an instance on this host."""
-        context = context.elevated()
-        instance_ref = self.db.instance_get(context, instance_id)
+    def rescue_instance(self, context, instance_id, **kwargs):
+        """
+        Rescue an instance on this host.
+        :param rescue_password: password to set on rescue instance
+        """
+
         LOG.audit(_('instance %s: rescuing'), instance_id, context=context)
-        self.db.instance_set_state(context,
-                                   instance_id,
-                                   power_state.NOSTATE,
-                                   'rescuing')
-        self.network_manager.setup_compute_network(context, instance_id)
-        _update_state = lambda result: self._update_state_callback(
-                self, context, instance_id, result)
-        self.driver.rescue(instance_ref, _update_state)
-        self._update_state(context, instance_id)
+        context = context.elevated()
+
+        instance_ref = self.db.instance_get(context, instance_id)
+        instance_ref.admin_pass = kwargs.get('rescue_password',
+                utils.generate_password(FLAGS.password_length))
+        network_info = self._get_instance_nw_info(context, instance_ref)
+
+        # NOTE(blamar): None of the virt drivers use the 'callback' param
+        self.driver.rescue(context, instance_ref, None, network_info)
+
+        current_power_state = self._get_power_state(context, instance_ref)
+        self._instance_update(context,
+                              instance_id,
+                              vm_state=vm_states.RESCUED,
+                              task_state=None,
+                              power_state=current_power_state)
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
     def unrescue_instance(self, context, instance_id):
         """Rescue an instance on this host."""
-        context = context.elevated()
-        instance_ref = self.db.instance_get(context, instance_id)
         LOG.audit(_('instance %s: unrescuing'), instance_id, context=context)
-        self.db.instance_set_state(context,
-                                   instance_id,
-                                   power_state.NOSTATE,
-                                   'unrescuing')
-        _update_state = lambda result: self._update_state_callback(
-                self, context, instance_id, result)
-        self.driver.unrescue(instance_ref, _update_state)
-        self._update_state(context, instance_id)
+        context = context.elevated()
 
-    @staticmethod
-    def _update_state_callback(self, context, instance_id, result):
-        """Update instance state when async task completes."""
-        self._update_state(context, instance_id)
+        instance_ref = self.db.instance_get(context, instance_id)
+        network_info = self._get_instance_nw_info(context, instance_ref)
+
+        # NOTE(blamar): None of the virt drivers use the 'callback' param
+        self.driver.unrescue(instance_ref, None, network_info)
+
+        current_power_state = self._get_power_state(context, instance_ref)
+        self._instance_update(context,
+                              instance_id,
+                              vm_state=vm_states.ACTIVE,
+                              task_state=None,
+                              power_state=current_power_state)
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
     def confirm_resize(self, context, instance_id, migration_id):
         """Destroys the source instance."""
-        context = context.elevated()
-        instance_ref = self.db.instance_get(context, instance_id)
-        self.driver.destroy(instance_ref)
+        migration_ref = self.db.migration_get(context, migration_id)
+        instance_ref = self.db.instance_get_by_uuid(context,
+                migration_ref.instance_uuid)
+
+        network_info = self._get_instance_nw_info(context, instance_ref)
+        self.driver.confirm_migration(
+                migration_ref, instance_ref, network_info)
+
         usage_info = utils.usage_from_instance(instance_ref)
         notifier.notify('compute.%s' % self.host,
                             'compute.instance.resize.confirm',
@@ -688,17 +934,18 @@ class ComputeManager(manager.SchedulerDependentManager):
         source machine.
 
         """
-        instance_ref = self.db.instance_get(context, instance_id)
         migration_ref = self.db.migration_get(context, migration_id)
+        instance_ref = self.db.instance_get_by_uuid(context,
+                migration_ref.instance_uuid)
 
-        self.driver.destroy(instance_ref)
+        network_info = self._get_instance_nw_info(context, instance_ref)
+        self.driver.destroy(instance_ref, network_info)
         topic = self.db.queue_get_for(context, FLAGS.compute_topic,
                 instance_ref['host'])
         rpc.cast(context, topic,
                 {'method': 'finish_revert_resize',
-                 'args': {
-                       'migration_id': migration_ref['id'],
-                       'instance_id': instance_id, },
+                 'args': {'instance_id': instance_ref['uuid'],
+                          'migration_id': migration_ref['id']},
                 })
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
@@ -710,19 +957,23 @@ class ComputeManager(manager.SchedulerDependentManager):
         in the database.
 
         """
-        instance_ref = self.db.instance_get(context, instance_id)
         migration_ref = self.db.migration_get(context, migration_id)
-        instance_type = self.db.instance_type_get_by_flavor_id(context,
-                migration_ref['old_flavor_id'])
+        instance_ref = self.db.instance_get_by_uuid(context,
+                migration_ref.instance_uuid)
+
+        instance_type = self.db.instance_type_get(context,
+                migration_ref['old_instance_type_id'])
 
         # Just roll back the record. There's no need to resize down since
         # the 'old' VM already has the preferred attributes
-        self.db.instance_update(context, instance_id,
-           dict(memory_mb=instance_type['memory_mb'],
-                vcpus=instance_type['vcpus'],
-                local_gb=instance_type['local_gb']))
+        self._instance_update(context,
+                              instance_ref["uuid"],
+                              memory_mb=instance_type['memory_mb'],
+                              vcpus=instance_type['vcpus'],
+                              local_gb=instance_type['local_gb'],
+                              instance_type_id=instance_type['id'])
 
-        self.driver.revert_resize(instance_ref)
+        self.driver.finish_revert_migration(instance_ref)
         self.db.migration_update(context, migration_id,
                 {'status': 'reverted'})
         usage_info = utils.usage_from_instance(instance_ref)
@@ -733,42 +984,53 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
-    def prep_resize(self, context, instance_id, flavor_id):
+    def prep_resize(self, context, instance_id, instance_type_id):
         """Initiates the process of moving a running instance to another host.
 
         Possibly changes the RAM and disk size in the process.
 
         """
         context = context.elevated()
-        instance_ref = self.db.instance_get(context, instance_id)
-        if instance_ref['host'] == FLAGS.host:
-            raise exception.Error(_(
-                    'Migration error: destination same as source!'))
 
-        instance_type = self.db.instance_type_get_by_flavor_id(context,
-                flavor_id)
+        # Because of checks_instance_lock, this must currently be called
+        # instance_id. However, the compute API is always passing the UUID
+        # of the instance down
+        instance_ref = self.db.instance_get_by_uuid(context, instance_id)
+
+        same_host = instance_ref['host'] == FLAGS.host
+        if same_host and not FLAGS.allow_resize_to_same_host:
+            self._instance_update(context,
+                                  instance_id,
+                                  vm_state=vm_states.ERROR)
+            msg = _('Migration error: destination same as source!')
+            raise exception.Error(msg)
+
+        old_instance_type = self.db.instance_type_get(context,
+                instance_ref['instance_type_id'])
+        new_instance_type = self.db.instance_type_get(context,
+                instance_type_id)
+
         migration_ref = self.db.migration_create(context,
-                {'instance_id': instance_id,
+                {'instance_uuid': instance_ref['uuid'],
                  'source_compute': instance_ref['host'],
                  'dest_compute': FLAGS.host,
-                 'dest_host':   self.driver.get_host_ip_addr(),
-                 'old_flavor_id': instance_type['flavorid'],
-                 'new_flavor_id': flavor_id,
-                 'status':      'pre-migrating'})
+                 'dest_host': self.driver.get_host_ip_addr(),
+                 'old_instance_type_id': old_instance_type['id'],
+                 'new_instance_type_id': instance_type_id,
+                 'status': 'pre-migrating'})
 
-        LOG.audit(_('instance %s: migrating to '), instance_id,
+        LOG.audit(_('instance %s: migrating'), instance_ref['uuid'],
                 context=context)
         topic = self.db.queue_get_for(context, FLAGS.compute_topic,
                 instance_ref['host'])
         rpc.cast(context, topic,
                 {'method': 'resize_instance',
-                 'args': {
-                       'migration_id': migration_ref['id'],
-                       'instance_id': instance_id, },
-                })
+                 'args': {'instance_id': instance_ref['uuid'],
+                          'migration_id': migration_ref['id']}})
+
         usage_info = utils.usage_from_instance(instance_ref,
-                              new_instance_type=instance_type['name'],
-                              new_instance_type_id=instance_type['id'])
+                              new_instance_type=new_instance_type['name'],
+                              new_instance_type_id=new_instance_type['id'])
         notifier.notify('compute.%s' % self.host,
                             'compute.instance.resize.prep',
                             notifier.INFO,
@@ -779,13 +1041,15 @@ class ComputeManager(manager.SchedulerDependentManager):
     def resize_instance(self, context, instance_id, migration_id):
         """Starts the migration of a running instance to another host."""
         migration_ref = self.db.migration_get(context, migration_id)
-        instance_ref = self.db.instance_get(context, instance_id)
+        instance_ref = self.db.instance_get_by_uuid(context,
+                migration_ref.instance_uuid)
+
         self.db.migration_update(context,
                                  migration_id,
                                  {'status': 'migrating'})
 
         disk_info = self.driver.migrate_disk_and_power_off(
-                instance_ref, migration_ref['dest_host'])
+                context, instance_ref, migration_ref['dest_host'])
         self.db.migration_update(context,
                                  migration_id,
                                  {'status': 'post-migrating'})
@@ -795,10 +1059,11 @@ class ComputeManager(manager.SchedulerDependentManager):
         topic = self.db.queue_get_for(context,
                                       FLAGS.compute_topic,
                                       migration_ref['dest_compute'])
+        params = {'migration_id': migration_id,
+                  'disk_info': disk_info,
+                  'instance_id': instance_ref['uuid']}
         rpc.cast(context, topic, {'method': 'finish_resize',
-                                  'args': {'migration_id': migration_id,
-                                           'instance_id': instance_id,
-                                           'disk_info': disk_info}})
+                                  'args': params})
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
@@ -810,24 +1075,32 @@ class ComputeManager(manager.SchedulerDependentManager):
 
         """
         migration_ref = self.db.migration_get(context, migration_id)
-        instance_ref = self.db.instance_get(context,
-                migration_ref['instance_id'])
-        # TODO(mdietz): apply the rest of the instance_type attributes going
-        # after they're supported
-        instance_type = self.db.instance_type_get_by_flavor_id(context,
-                migration_ref['new_flavor_id'])
-        self.db.instance_update(context, instance_id,
-               dict(instance_type_id=instance_type['id'],
-                    memory_mb=instance_type['memory_mb'],
-                    vcpus=instance_type['vcpus'],
-                    local_gb=instance_type['local_gb']))
 
-        # reload the updated instance ref
-        # FIXME(mdietz): is there reload functionality?
-        instance = self.db.instance_get(context, instance_id)
-        network_info = self.network_api.get_instance_nw_info(context,
-                                                             instance)
-        self.driver.finish_resize(instance, disk_info, network_info)
+        resize_instance = False
+        instance_ref = self.db.instance_get_by_uuid(context,
+                migration_ref.instance_uuid)
+        if migration_ref['old_instance_type_id'] != \
+           migration_ref['new_instance_type_id']:
+            instance_type = self.db.instance_type_get(context,
+                    migration_ref['new_instance_type_id'])
+            self.db.instance_update(context, instance_ref.uuid,
+                   dict(instance_type_id=instance_type['id'],
+                        memory_mb=instance_type['memory_mb'],
+                        vcpus=instance_type['vcpus'],
+                        local_gb=instance_type['local_gb']))
+            resize_instance = True
+
+        instance_ref = self.db.instance_get_by_uuid(context,
+                                            instance_ref.uuid)
+
+        network_info = self._get_instance_nw_info(context, instance_ref)
+        self.driver.finish_migration(context, migration_ref, instance_ref,
+                                     disk_info, network_info, resize_instance)
+
+        self._instance_update(context,
+                              instance_id,
+                              vm_state=vm_states.ACTIVE,
+                              task_state=task_states.RESIZE_VERIFY)
 
         self.db.migration_update(context, migration_id,
                 {'status': 'finished', })
@@ -840,7 +1113,7 @@ class ComputeManager(manager.SchedulerDependentManager):
 
         """
         self.network_api.add_fixed_ip_to_instance(context, instance_id,
-                                                           network_id)
+                                                  self.host, network_id)
         self.inject_network_info(context, instance_id)
         self.reset_network(context, instance_id)
 
@@ -860,39 +1133,43 @@ class ComputeManager(manager.SchedulerDependentManager):
     @checks_instance_lock
     def pause_instance(self, context, instance_id):
         """Pause an instance on this host."""
-        context = context.elevated()
-        instance_ref = self.db.instance_get(context, instance_id)
         LOG.audit(_('instance %s: pausing'), instance_id, context=context)
-        self.db.instance_set_state(context,
-                                   instance_id,
-                                   power_state.NOSTATE,
-                                   'pausing')
-        self.driver.pause(instance_ref,
-            lambda result: self._update_state_callback(self,
-                                                       context,
-                                                       instance_id,
-                                                       result))
+        context = context.elevated()
+
+        instance_ref = self.db.instance_get(context, instance_id)
+        self.driver.pause(instance_ref, lambda result: None)
+
+        current_power_state = self._get_power_state(context, instance_ref)
+        self._instance_update(context,
+                              instance_id,
+                              power_state=current_power_state,
+                              vm_state=vm_states.PAUSED,
+                              task_state=None)
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
     def unpause_instance(self, context, instance_id):
         """Unpause a paused instance on this host."""
-        context = context.elevated()
-        instance_ref = self.db.instance_get(context, instance_id)
         LOG.audit(_('instance %s: unpausing'), instance_id, context=context)
-        self.db.instance_set_state(context,
-                                   instance_id,
-                                   power_state.NOSTATE,
-                                   'unpausing')
-        self.driver.unpause(instance_ref,
-            lambda result: self._update_state_callback(self,
-                                                       context,
-                                                       instance_id,
-                                                       result))
+        context = context.elevated()
+
+        instance_ref = self.db.instance_get(context, instance_id)
+        self.driver.unpause(instance_ref, lambda result: None)
+
+        current_power_state = self._get_power_state(context, instance_ref)
+        self._instance_update(context,
+                              instance_id,
+                              power_state=current_power_state,
+                              vm_state=vm_states.ACTIVE,
+                              task_state=None)
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
-    def set_host_enabled(self, context, instance_id=None, host=None,
-            enabled=None):
+    def host_power_action(self, context, host=None, action=None):
+        """Reboots, shuts down or powers up the host."""
+        return self.driver.host_power_action(host, action)
+
+    @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
+    def set_host_enabled(self, context, host=None, enabled=None):
         """Sets the specified host's ability to accept new instances."""
         return self.driver.set_host_enabled(host, enabled)
 
@@ -900,7 +1177,7 @@ class ComputeManager(manager.SchedulerDependentManager):
     def get_diagnostics(self, context, instance_id):
         """Retrieve diagnostics for an instance on this host."""
         instance_ref = self.db.instance_get(context, instance_id)
-        if instance_ref["state"] == power_state.RUNNING:
+        if instance_ref["power_state"] == power_state.RUNNING:
             LOG.audit(_("instance %s: retrieving diagnostics"), instance_id,
                       context=context)
             return self.driver.get_diagnostics(instance_ref)
@@ -909,33 +1186,35 @@ class ComputeManager(manager.SchedulerDependentManager):
     @checks_instance_lock
     def suspend_instance(self, context, instance_id):
         """Suspend the given instance."""
-        context = context.elevated()
-        instance_ref = self.db.instance_get(context, instance_id)
         LOG.audit(_('instance %s: suspending'), instance_id, context=context)
-        self.db.instance_set_state(context, instance_id,
-                                            power_state.NOSTATE,
-                                            'suspending')
-        self.driver.suspend(instance_ref,
-            lambda result: self._update_state_callback(self,
-                                                       context,
-                                                       instance_id,
-                                                       result))
+        context = context.elevated()
+
+        instance_ref = self.db.instance_get(context, instance_id)
+        self.driver.suspend(instance_ref, lambda result: None)
+
+        current_power_state = self._get_power_state(context, instance_ref)
+        self._instance_update(context,
+                              instance_id,
+                              power_state=current_power_state,
+                              vm_state=vm_states.SUSPENDED,
+                              task_state=None)
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
     def resume_instance(self, context, instance_id):
         """Resume the given suspended instance."""
-        context = context.elevated()
-        instance_ref = self.db.instance_get(context, instance_id)
         LOG.audit(_('instance %s: resuming'), instance_id, context=context)
-        self.db.instance_set_state(context, instance_id,
-                                            power_state.NOSTATE,
-                                            'resuming')
-        self.driver.resume(instance_ref,
-            lambda result: self._update_state_callback(self,
-                                                       context,
-                                                       instance_id,
-                                                       result))
+        context = context.elevated()
+
+        instance_ref = self.db.instance_get(context, instance_id)
+        self.driver.resume(instance_ref, lambda result: None)
+
+        current_power_state = self._get_power_state(context, instance_ref)
+        self._instance_update(context,
+                              instance_id,
+                              power_state=current_power_state,
+                              vm_state=vm_states.ACTIVE,
+                              task_state=None)
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     def lock_instance(self, context, instance_id):
@@ -959,7 +1238,11 @@ class ComputeManager(manager.SchedulerDependentManager):
         context = context.elevated()
         LOG.debug(_('instance %s: getting locked state'), instance_id,
                   context=context)
-        instance_ref = self.db.instance_get(context, instance_id)
+        if utils.is_uuid_like(instance_id):
+            uuid = instance_id
+            instance_ref = self.db.instance_get_by_uuid(context, uuid)
+        else:
+            instance_ref = self.db.instance_get(context, instance_id)
         return instance_ref['locked']
 
     @checks_instance_lock
@@ -976,8 +1259,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         LOG.debug(_('instance %s: inject network info'), instance_id,
                                                          context=context)
         instance = self.db.instance_get(context, instance_id)
-        network_info = self.network_api.get_instance_nw_info(context,
-                                                             instance)
+        network_info = self._get_instance_nw_info(context, instance)
         LOG.debug(_("network_info to inject: |%s|"), network_info)
 
         self.driver.inject_network_info(instance, network_info)
@@ -1132,6 +1414,7 @@ class ComputeManager(manager.SchedulerDependentManager):
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     def check_shared_storage_test_file(self, context, filename):
         """Confirms existence of the tmpfile under FLAGS.instances_path.
+           Cannot confirm tmpfile return False.
 
         :param context: security context
         :param filename: confirm existence of FLAGS.instances_path/thisfile
@@ -1139,7 +1422,9 @@ class ComputeManager(manager.SchedulerDependentManager):
         """
         tmp_file = os.path.join(FLAGS.instances_path, filename)
         if not os.path.exists(tmp_file):
-            raise exception.FileNotFound(file_path=tmp_file)
+            return False
+        else:
+            return True
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     def cleanup_shared_storage_test_file(self, context, filename):
@@ -1162,11 +1447,13 @@ class ComputeManager(manager.SchedulerDependentManager):
         """
         return self.driver.update_available_resource(context, self.host)
 
-    def pre_live_migration(self, context, instance_id, time=None):
+    def pre_live_migration(self, context, instance_id, time=None,
+                           block_migration=False, disk=None):
         """Preparations for live migration at dest host.
 
         :param context: security context
         :param instance_id: nova.db.sqlalchemy.models.Instance.Id
+        :param block_migration: if true, prepare for block migration
 
         """
         if not time:
@@ -1175,11 +1462,6 @@ class ComputeManager(manager.SchedulerDependentManager):
         # Getting instance info
         instance_ref = self.db.instance_get(context, instance_id)
         hostname = instance_ref['hostname']
-
-        # Getting fixed ips
-        fixed_ips = self.db.instance_get_fixed_addresses(context, instance_id)
-        if not fixed_ips:
-            raise exception.FixedIpNotFoundForInstance(instance_id=instance_id)
 
         # If any volume is mounted, prepare here.
         if not instance_ref['volumes']:
@@ -1195,17 +1477,22 @@ class ComputeManager(manager.SchedulerDependentManager):
         #
         # Retry operation is necessary because continuously request comes,
         # concorrent request occurs to iptables, then it complains.
+        network_info = self._get_instance_nw_info(context, instance_ref)
+
+        fixed_ips = [nw_info[1]['ips'] for nw_info in network_info]
+        if not fixed_ips:
+            raise exception.FixedIpNotFoundForInstance(instance_id=instance_id)
+
         max_retry = FLAGS.live_migration_retry_count
         for cnt in range(max_retry):
             try:
-                self.network_manager.setup_compute_network(context,
-                                                           instance_id)
+                self.driver.plug_vifs(instance_ref, network_info)
                 break
             except exception.ProcessExecutionError:
                 if cnt == max_retry - 1:
                     raise
                 else:
-                    LOG.warn(_("setup_compute_network() failed %(cnt)d."
+                    LOG.warn(_("plug_vifs() failed %(cnt)d."
                                "Retry up to %(max_retry)d for %(hostname)s.")
                                % locals())
                     time.sleep(1)
@@ -1216,19 +1503,27 @@ class ComputeManager(manager.SchedulerDependentManager):
         # This nwfilter is necessary on the destination host.
         # In addition, this method is creating filtering rule
         # onto destination host.
-        self.driver.ensure_filtering_rules_for_instance(instance_ref)
+        self.driver.ensure_filtering_rules_for_instance(instance_ref,
+                network_info)
 
-    def live_migration(self, context, instance_id, dest):
+        # Preparation for block migration
+        if block_migration:
+            self.driver.pre_block_migration(context,
+                                            instance_ref,
+                                            disk)
+
+    def live_migration(self, context, instance_id,
+                       dest, block_migration=False):
         """Executing live migration.
 
         :param context: security context
         :param instance_id: nova.db.sqlalchemy.models.Instance.Id
         :param dest: destination host
+        :param block_migration: if true, do block migration
 
         """
         # Get instance for error handling.
         instance_ref = self.db.instance_get(context, instance_id)
-        i_name = instance_ref.name
 
         try:
             # Checking volume node is working correctly when any volumes
@@ -1239,16 +1534,25 @@ class ComputeManager(manager.SchedulerDependentManager):
                           {"method": "check_for_export",
                            "args": {'instance_id': instance_id}})
 
-            # Asking dest host to preparing live migration.
+            if block_migration:
+                disk = self.driver.get_instance_disk_info(context,
+                                                          instance_ref)
+            else:
+                disk = None
+
             rpc.call(context,
                      self.db.queue_get_for(context, FLAGS.compute_topic, dest),
                      {"method": "pre_live_migration",
-                      "args": {'instance_id': instance_id}})
+                      "args": {'instance_id': instance_id,
+                               'block_migration': block_migration,
+                               'disk': disk}})
 
         except Exception:
+            i_name = instance_ref.name
             msg = _("Pre live migration for %(i_name)s failed at %(dest)s")
             LOG.error(msg % locals())
-            self.recover_live_migration(context, instance_ref)
+            self.rollback_live_migration(context, instance_ref,
+                                         dest, block_migration)
             raise
 
         # Executing live migration
@@ -1256,9 +1560,11 @@ class ComputeManager(manager.SchedulerDependentManager):
         # nothing must be recovered in this version.
         self.driver.live_migration(context, instance_ref, dest,
                                    self.post_live_migration,
-                                   self.recover_live_migration)
+                                   self.rollback_live_migration,
+                                   block_migration)
 
-    def post_live_migration(self, ctxt, instance_ref, dest):
+    def post_live_migration(self, ctxt, instance_ref,
+                            dest, block_migration=False):
         """Post operations for live migration.
 
         This method is called from live_migration
@@ -1267,6 +1573,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         :param ctxt: security context
         :param instance_id: nova.db.sqlalchemy.models.Instance.Id
         :param dest: destination host
+        :param block_migration: if true, do block migration
 
         """
 
@@ -1283,8 +1590,9 @@ class ComputeManager(manager.SchedulerDependentManager):
         # Releasing vlan.
         # (not necessary in current implementation?)
 
+        network_info = self._get_instance_nw_info(ctxt, instance_ref)
         # Releasing security group ingress rule.
-        self.driver.unfilter_instance(instance_ref)
+        self.driver.unfilter_instance(instance_ref, network_info)
 
         # Database updating.
         i_name = instance_ref.name
@@ -1308,8 +1616,32 @@ class ComputeManager(manager.SchedulerDependentManager):
                         "%(i_name)s cannot inherit floating "
                         "ip.\n%(e)s") % (locals()))
 
-        # Restore instance/volume state
-        self.recover_live_migration(ctxt, instance_ref, dest)
+        # Define domain at destination host, without doing it,
+        # pause/suspend/terminate do not work.
+        rpc.call(ctxt,
+                 self.db.queue_get_for(ctxt, FLAGS.compute_topic, dest),
+                     {"method": "post_live_migration_at_destination",
+                      "args": {'instance_id': instance_ref.id,
+                               'block_migration': block_migration}})
+
+        # Restore instance state
+        current_power_state = self._get_power_state(ctxt, instance_ref)
+        self._instance_update(ctxt,
+                              instance_ref["id"],
+                              host=dest,
+                              power_state=current_power_state,
+                              vm_state=vm_states.ACTIVE,
+                              task_state=None)
+
+        # Restore volume state
+        for volume_ref in instance_ref['volumes']:
+            volume_id = volume_ref['id']
+            self.db.volume_update(ctxt, volume_id, {'status': 'in-use'})
+
+        # No instance booting at source host, but instance dir
+        # must be deleted for preparing next block migration
+        if block_migration:
+            self.driver.destroy(instance_ref, network_info)
 
         LOG.info(_('Migrating %(i_name)s to %(dest)s finished successfully.')
                  % locals())
@@ -1317,31 +1649,64 @@ class ComputeManager(manager.SchedulerDependentManager):
                    "Domain not found: no domain with matching name.\" "
                    "This error can be safely ignored."))
 
-    def recover_live_migration(self, ctxt, instance_ref, host=None, dest=None):
-        """Recovers Instance/volume state from migrating -> running.
+    def post_live_migration_at_destination(self, context,
+                                instance_id, block_migration=False):
+        """Post operations for live migration .
 
-        :param ctxt: security context
+        :param context: security context
         :param instance_id: nova.db.sqlalchemy.models.Instance.Id
-        :param host: DB column value is updated by this hostname.
-                     If none, the host instance currently running is selected.
+        :param block_migration: block_migration
 
         """
-        if not host:
-            host = instance_ref['host']
+        instance_ref = self.db.instance_get(context, instance_id)
+        LOG.info(_('Post operation of migraton started for %s .')
+                 % instance_ref.name)
+        network_info = self._get_instance_nw_info(context, instance_ref)
+        self.driver.post_live_migration_at_destination(context,
+                                                       instance_ref,
+                                                       network_info,
+                                                       block_migration)
 
-        self.db.instance_update(ctxt,
-                                instance_ref['id'],
-                                {'state_description': 'running',
-                                 'state': power_state.RUNNING,
-                                 'host': host})
+    def rollback_live_migration(self, context, instance_ref,
+                                dest, block_migration):
+        """Recovers Instance/volume state from migrating -> running.
 
-        if dest:
-            volume_api = volume.API()
+        :param context: security context
+        :param instance_id: nova.db.sqlalchemy.models.Instance.Id
+        :param dest:
+            This method is called from live migration src host.
+            This param specifies destination host.
+        """
+        host = instance_ref['host']
+        self._instance_update(context,
+                              instance_ref['id'],
+                              host=host,
+                              vm_state=vm_states.ACTIVE,
+                              task_state=None)
+
         for volume_ref in instance_ref['volumes']:
             volume_id = volume_ref['id']
-            self.db.volume_update(ctxt, volume_id, {'status': 'in-use'})
-            if dest:
-                volume_api.remove_from_compute(ctxt, volume_id, dest)
+            self.db.volume_update(context, volume_id, {'status': 'in-use'})
+            volume.API().remove_from_compute(context, volume_id, dest)
+
+        # Block migration needs empty image at destination host
+        # before migration starts, so if any failure occurs,
+        # any empty images has to be deleted.
+        if block_migration:
+            rpc.cast(context,
+                     self.db.queue_get_for(context, FLAGS.compute_topic, dest),
+                     {"method": "rollback_live_migration_at_destination",
+                      "args": {'instance_id': instance_ref['id']}})
+
+    def rollback_live_migration_at_destination(self, context, instance_id):
+        """ Cleaning up image directory that is created pre_live_migration.
+
+        :param context: security context
+        :param instance_id: nova.db.sqlalchemy.models.Instance.Id
+        """
+        instances_ref = self.db.instance_get(context, instance_id)
+        network_info = self._get_instance_nw_info(context, instances_ref)
+        self.driver.destroy(instances_ref, network_info)
 
     def periodic_tasks(self, context=None):
         """Tasks to be run at a periodic interval."""
@@ -1354,20 +1719,35 @@ class ComputeManager(manager.SchedulerDependentManager):
                 self.driver.poll_rescued_instances(FLAGS.rescue_timeout)
         except Exception as ex:
             LOG.warning(_("Error during poll_rescued_instances: %s"),
-                        unicode(ex))
+                    unicode(ex))
+            error_list.append(ex)
+
+        try:
+            if FLAGS.resize_confirm_window > 0:
+                self.driver.poll_unconfirmed_resizes(
+                        FLAGS.resize_confirm_window)
+        except Exception as ex:
+            LOG.warning(_("Error during poll_unconfirmed_resizes: %s"),
+                    unicode(ex))
             error_list.append(ex)
 
         try:
             self._report_driver_status()
         except Exception as ex:
             LOG.warning(_("Error during report_driver_status(): %s"),
-                        unicode(ex))
+                    unicode(ex))
             error_list.append(ex)
 
         try:
-            self._poll_instance_states(context)
+            self._sync_power_states(context)
         except Exception as ex:
-            LOG.warning(_("Error during instance poll: %s"),
+            LOG.warning(_("Error during power_state sync: %s"), unicode(ex))
+            error_list.append(ex)
+
+        try:
+            self._reclaim_queued_deletes(context)
+        except Exception as ex:
+            LOG.warning(_("Error during reclamation of queued deletes: %s"),
                         unicode(ex))
             error_list.append(ex)
 
@@ -1383,68 +1763,54 @@ class ComputeManager(manager.SchedulerDependentManager):
             self.update_service_capabilities(
                 self.driver.get_host_stats(refresh=True))
 
-    def _poll_instance_states(self, context):
+    def _sync_power_states(self, context):
+        """Align power states between the database and the hypervisor.
+
+        The hypervisor is authoritative for the power_state data, so we
+        simply loop over all known instances for this host and update the
+        power_state according to the hypervisor. If the instance is not found
+        then it will be set to power_state.NOSTATE, because it doesn't exist
+        on the hypervisor.
+
+        """
         vm_instances = self.driver.list_instances_detail()
         vm_instances = dict((vm.name, vm) for vm in vm_instances)
-
-        # Keep a list of VMs not in the DB, cross them off as we find them
-        vms_not_found_in_db = list(vm_instances.keys())
-
         db_instances = self.db.instance_get_all_by_host(context, self.host)
 
+        num_vm_instances = len(vm_instances)
+        num_db_instances = len(db_instances)
+
+        if num_vm_instances != num_db_instances:
+            LOG.info(_("Found %(num_db_instances)s in the database and "
+                       "%(num_vm_instances)s on the hypervisor.") % locals())
+
         for db_instance in db_instances:
-            name = db_instance['name']
-            db_state = db_instance['state']
+            name = db_instance["name"]
+            db_power_state = db_instance['power_state']
             vm_instance = vm_instances.get(name)
 
             if vm_instance is None:
-                # NOTE(justinsb): We have to be very careful here, because a
-                # concurrent operation could be in progress (e.g. a spawn)
-                if db_state == power_state.BUILDING:
-                    # TODO(justinsb): This does mean that if we crash during a
-                    # spawn, the machine will never leave the spawning state,
-                    # but this is just the way nova is; this function isn't
-                    # trying to correct that problem.
-                    # We could have a separate task to correct this error.
-                    # TODO(justinsb): What happens during a live migration?
-                    LOG.info(_("Found instance '%(name)s' in DB but no VM. "
-                               "State=%(db_state)s, so assuming spawn is in "
-                               "progress.") % locals())
-                    vm_state = db_state
-                else:
-                    LOG.info(_("Found instance '%(name)s' in DB but no VM. "
-                               "State=%(db_state)s, so setting state to "
-                               "shutoff.") % locals())
-                    vm_state = power_state.SHUTOFF
-                    if db_instance['state_description'] == 'stopping':
-                        self.db.instance_stop(context, db_instance['id'])
-                        continue
+                vm_power_state = power_state.NOSTATE
             else:
-                vm_state = vm_instance.state
-                vms_not_found_in_db.remove(name)
+                vm_power_state = vm_instance.state
 
-            if (db_instance['state_description'] in ['migrating', 'stopping']):
-                # A situation which db record exists, but no instance"
-                # sometimes occurs while live-migration at src compute,
-                # this case should be ignored.
-                LOG.debug(_("Ignoring %(name)s, as it's currently being "
-                           "migrated.") % locals())
+            if vm_power_state == db_power_state:
                 continue
 
-            if vm_state != db_state:
-                LOG.info(_("DB/VM state mismatch. Changing state from "
-                           "'%(db_state)s' to '%(vm_state)s'") % locals())
-                self._update_state(context, db_instance['id'], vm_state)
+            self._instance_update(context,
+                                  db_instance["id"],
+                                  power_state=vm_power_state)
 
-            # NOTE(justinsb): We no longer auto-remove SHUTOFF instances
-            # It's quite hard to get them back when we do.
+    def _reclaim_queued_deletes(self, context):
+        """Reclaim instances that are queued for deletion."""
 
-        # Are there VMs not in the DB?
-        for vm_not_found_in_db in vms_not_found_in_db:
-            name = vm_not_found_in_db
+        instances = self.db.instance_get_all_by_host(context, self.host)
 
-            # We only care about instances that compute *should* know about
-            if name.startswith("instance-"):
-                # TODO(justinsb): What to do here?  Adopt it?  Shut it down?
-                LOG.warning(_("Found VM not in DB: '%(name)s'.  Ignoring")
-                            % locals())
+        queue_time = datetime.timedelta(
+                         seconds=FLAGS.reclaim_instance_interval)
+        curtime = utils.utcnow()
+        for instance in instances:
+            if instance['vm_state'] == vm_states.SOFT_DELETE and \
+               (curtime - instance['deleted_at']) >= queue_time:
+                LOG.info('Deleting %s' % instance['name'])
+                self._delete_instance(context, instance['id'])

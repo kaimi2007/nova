@@ -18,12 +18,12 @@
 
 """Handles all requests relating to instances (guest vms)."""
 
-from nova import db
+from nova.db import base
 from nova import exception
 from nova import flags
 from nova import log as logging
 from nova import rpc
-from nova.db import base
+from nova.rpc import common as rpc_common
 
 
 FLAGS = flags.FLAGS
@@ -46,6 +46,17 @@ class API(base.Base):
                                                      context.project_id)
         return ips
 
+    def get_floating_ips_by_fixed_address(self, context, fixed_address):
+        return rpc.call(context,
+                        FLAGS.network_topic,
+                        {'method': 'get_floating_ips_by_fixed_address',
+                         'args': {'fixed_address': fixed_address}})
+
+    def get_vifs_by_instance(self, context, instance_id):
+        return rpc.call(context, FLAGS.network_topic,
+                        {'method': 'get_vifs_by_instance',
+                         'args': {'instance_id': instance_id}})
+
     def allocate_floating_ip(self, context):
         """Adds a floating ip to a project."""
         # NOTE(vish): We don't know which network host should get the ip
@@ -61,6 +72,9 @@ class API(base.Base):
                             affect_auto_assigned=False):
         """Removes floating ip with address from a project."""
         floating_ip = self.db.floating_ip_get_by_address(context, address)
+        if floating_ip['fixed_ip']:
+            raise exception.ApiError(_('Floating ip is in use.  '
+                             'Disassociate it before releasing.'))
         if not affect_auto_assigned and floating_ip.get('auto_assigned'):
             return
         # NOTE(vish): We don't know which network host should get the ip
@@ -105,7 +119,17 @@ class API(base.Base):
                                        '(%(project)s)') %
                                         {'address': floating_ip['address'],
                                         'project': context.project_id})
-        host = fixed_ip['network']['host']
+
+        # If this address has been previously associated to a
+        # different instance, disassociate the floating_ip
+        if floating_ip['fixed_ip'] and floating_ip['fixed_ip'] is not fixed_ip:
+            self.disassociate_floating_ip(context, floating_ip['address'])
+
+        # NOTE(vish): if we are multi_host, send to the instances host
+        if fixed_ip['network']['multi_host']:
+            host = fixed_ip['instance']['host']
+        else:
+            host = fixed_ip['network']['host']
         rpc.cast(context,
                  self.db.queue_get_for(context, FLAGS.network_topic, host),
                  {'method': 'associate_floating_ip',
@@ -120,7 +144,11 @@ class API(base.Base):
             return
         if not floating_ip.get('fixed_ip'):
             raise exception.ApiError('Address is not associated.')
-        host = floating_ip['fixed_ip']['network']['host']
+        # NOTE(vish): if we are multi_host, send to the instances host
+        if floating_ip['fixed_ip']['network']['multi_host']:
+            host = floating_ip['fixed_ip']['instance']['host']
+        else:
+            host = floating_ip['fixed_ip']['network']['host']
         rpc.call(context,
                  self.db.queue_get_for(context, FLAGS.network_topic, host),
                  {'method': 'disassociate_floating_ip',
@@ -134,7 +162,9 @@ class API(base.Base):
         args = kwargs
         args['instance_id'] = instance['id']
         args['project_id'] = instance['project_id']
+        args['host'] = instance['host']
         args['instance_type_id'] = instance['instance_type_id']
+
         return rpc.call(context, FLAGS.network_topic,
                         {'method': 'allocate_for_instance',
                          'args': args})
@@ -148,9 +178,10 @@ class API(base.Base):
                  {'method': 'deallocate_for_instance',
                   'args': args})
 
-    def add_fixed_ip_to_instance(self, context, instance_id, network_id):
+    def add_fixed_ip_to_instance(self, context, instance_id, host, network_id):
         """Adds a fixed ip to instance from specified network."""
         args = {'instance_id': instance_id,
+                'host': host,
                 'network_id': network_id}
         rpc.cast(context, FLAGS.network_topic,
                  {'method': 'add_fixed_ip_to_instance',
@@ -173,7 +204,42 @@ class API(base.Base):
     def get_instance_nw_info(self, context, instance):
         """Returns all network info related to an instance."""
         args = {'instance_id': instance['id'],
-                'instance_type_id': instance['instance_type_id']}
+                'instance_type_id': instance['instance_type_id'],
+                'host': instance['host']}
+        try:
+            return rpc.call(context, FLAGS.network_topic,
+                    {'method': 'get_instance_nw_info',
+                    'args': args})
+        # FIXME(comstud) rpc calls raise RemoteError if the remote raises
+        # an exception.  In the case here, because of a race condition,
+        # it's possible the remote will raise a InstanceNotFound when
+        # someone deletes the instance while this call is in progress.
+        #
+        # Unfortunately, we don't have access to the original exception
+        # class now.. but we do have the exception class's name.  So,
+        # we're checking it here and raising a new exception.
+        #
+        # Ultimately we need RPC to be able to serialize more things like
+        # classes.
+        except rpc_common.RemoteError as err:
+            if err.exc_type == 'InstanceNotFound':
+                raise exception.InstanceNotFound(instance_id=instance['id'])
+            raise
+
+    def validate_networks(self, context, requested_networks):
+        """validate the networks passed at the time of creating
+        the server
+        """
+        args = {'networks': requested_networks}
         return rpc.call(context, FLAGS.network_topic,
-                        {'method': 'get_instance_nw_info',
+                        {'method': 'validate_networks',
+                         'args': args})
+
+    def get_instance_uuids_by_ip_filter(self, context, filters):
+        """Returns a list of dicts in the form of
+        {'instance_uuid': uuid, 'ip': ip} that matched the ip_filter
+        """
+        args = {'filters': filters}
+        return rpc.call(context, FLAGS.network_topic,
+                        {'method': 'get_instance_uuids_by_ip_filter',
                          'args': args})

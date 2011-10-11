@@ -16,35 +16,59 @@
 #    under the License.
 
 import json
-import stubout
 import webob
+from lxml import etree
 
+from nova.api.openstack import flavors
 import nova.db.api
-from nova import context
 from nova import exception
 from nova import test
+from nova.api.openstack import xmlutil
 from nova.tests.api.openstack import fakes
+from nova import wsgi
 
 
-def stub_flavor(flavorid, name, memory_mb="256", local_gb="10"):
-    return {
-        "flavorid": str(flavorid),
-        "name": name,
-        "memory_mb": memory_mb,
-        "local_gb": local_gb,
-    }
+NS = "{http://docs.openstack.org/compute/api/v1.1}"
+ATOMNS = "{http://www.w3.org/2005/Atom}"
 
 
-def return_instance_type_by_flavor_id(context, flavorid):
-    return stub_flavor(flavorid, "flavor %s" % (flavorid,))
+FAKE_FLAVORS = {
+    'flavor 1': {
+        "flavorid": '1',
+        "name": 'flavor 1',
+        "memory_mb": '256',
+        "local_gb": '10'
+    },
+    'flavor 2': {
+        "flavorid": '2',
+        "name": 'flavor 2',
+        "memory_mb": '512',
+        "local_gb": '20'
+    },
+}
 
 
-def return_instance_types(context, num=2):
-    instance_types = {}
-    for i in xrange(1, num + 1):
-        name = "flavor %s" % (i,)
-        instance_types[name] = stub_flavor(i, name)
-    return instance_types
+def fake_instance_type_get_by_flavor_id(context, flavorid):
+    return FAKE_FLAVORS['flavor %s' % flavorid]
+
+
+def fake_instance_type_get_all(context, inactive=False, filters=None):
+    def reject_min(db_attr, filter_attr):
+        return filter_attr in filters and\
+               int(flavor[db_attr]) < int(filters[filter_attr])
+
+    filters = filters or {}
+    for flavor in FAKE_FLAVORS.values():
+        if reject_min('memory_mb', 'min_memory_mb'):
+            continue
+        elif reject_min('local_gb', 'min_local_gb'):
+            continue
+
+        yield flavor
+
+
+def empty_instance_type_get_all(context, inactive=False, filters=None):
+    return {}
 
 
 def return_instance_type_not_found(context, flavor_id):
@@ -54,17 +78,12 @@ def return_instance_type_not_found(context, flavor_id):
 class FlavorsTest(test.TestCase):
     def setUp(self):
         super(FlavorsTest, self).setUp()
-        self.stubs = stubout.StubOutForTesting()
-        fakes.FakeAuthManager.reset_fake_data()
-        fakes.FakeAuthDatabase.data = {}
         fakes.stub_out_networking(self.stubs)
         fakes.stub_out_rate_limiting(self.stubs)
-        fakes.stub_out_auth(self.stubs)
         self.stubs.Set(nova.db.api, "instance_type_get_all",
-                       return_instance_types)
+                       fake_instance_type_get_all)
         self.stubs.Set(nova.db.api, "instance_type_get_by_flavor_id",
-                       return_instance_type_by_flavor_id)
-        self.context = context.get_admin_context()
+                       fake_instance_type_get_by_flavor_id)
 
     def tearDown(self):
         self.stubs.UnsetAll()
@@ -88,10 +107,8 @@ class FlavorsTest(test.TestCase):
         self.assertEqual(flavors, expected)
 
     def test_get_empty_flavor_list_v1_0(self):
-        def _return_empty(self):
-            return {}
         self.stubs.Set(nova.db.api, "instance_type_get_all",
-                       _return_empty)
+                       empty_instance_type_get_all)
 
         req = webob.Request.blank('/v1.0/flavors')
         res = req.get_response(fakes.wsgi_app())
@@ -111,26 +128,38 @@ class FlavorsTest(test.TestCase):
                 "name": "flavor 1",
                 "ram": "256",
                 "disk": "10",
+                "rxtx_cap": "",
+                "rxtx_quota": "",
+                "swap": "",
+                "vcpus": "",
             },
             {
                 "id": "2",
                 "name": "flavor 2",
-                "ram": "256",
-                "disk": "10",
+                "ram": "512",
+                "disk": "20",
+                "rxtx_cap": "",
+                "rxtx_quota": "",
+                "swap": "",
+                "vcpus": "",
             },
         ]
         self.assertEqual(flavors, expected)
 
     def test_get_flavor_by_id_v1_0(self):
-        req = webob.Request.blank('/v1.0/flavors/12')
+        req = webob.Request.blank('/v1.0/flavors/1')
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 200)
         flavor = json.loads(res.body)["flavor"]
         expected = {
-            "id": "12",
-            "name": "flavor 12",
+            "id": "1",
+            "name": "flavor 1",
             "ram": "256",
             "disk": "10",
+            "rxtx_cap": "",
+            "rxtx_quota": "",
+            "swap": "",
+            "vcpus": "",
         }
         self.assertEqual(flavor, expected)
 
@@ -142,118 +171,594 @@ class FlavorsTest(test.TestCase):
         self.assertEqual(res.status_int, 404)
 
     def test_get_flavor_by_id_v1_1(self):
-        req = webob.Request.blank('/v1.1/flavors/12')
+        req = webob.Request.blank('/v1.1/fake/flavors/1')
         req.environ['api.version'] = '1.1'
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 200)
-        flavor = json.loads(res.body)["flavor"]
+        flavor = json.loads(res.body)
         expected = {
-            "id": "12",
-            "name": "flavor 12",
-            "ram": "256",
-            "disk": "10",
-            "links": [
+            "flavor": {
+                "id": "1",
+                "name": "flavor 1",
+                "ram": "256",
+                "disk": "10",
+                "rxtx_cap": "",
+                "rxtx_quota": "",
+                "swap": "",
+                "vcpus": "",
+                "links": [
+                    {
+                        "rel": "self",
+                        "href": "http://localhost/v1.1/fake/flavors/1",
+                    },
+                    {
+                        "rel": "bookmark",
+                        "href": "http://localhost/fake/flavors/1",
+                    },
+                ],
+            },
+        }
+        self.assertEqual(flavor, expected)
+
+    def test_get_flavor_list_v1_1(self):
+        req = webob.Request.blank('/v1.1/fake/flavors')
+        req.environ['api.version'] = '1.1'
+        res = req.get_response(fakes.wsgi_app())
+        self.assertEqual(res.status_int, 200)
+        flavor = json.loads(res.body)
+        expected = {
+            "flavors": [
                 {
-                    "rel": "self",
-                    "href": "http://localhost/v1.1/flavors/12",
+                    "id": "1",
+                    "name": "flavor 1",
+                    "links": [
+                        {
+                            "rel": "self",
+                            "href": "http://localhost/v1.1/fake/flavors/1",
+                        },
+                        {
+                            "rel": "bookmark",
+                            "href": "http://localhost/fake/flavors/1",
+                        },
+                    ],
                 },
                 {
-                    "rel": "bookmark",
-                    "href": "http://localhost/flavors/12",
+                    "id": "2",
+                    "name": "flavor 2",
+                    "links": [
+                        {
+                            "rel": "self",
+                            "href": "http://localhost/v1.1/fake/flavors/2",
+                        },
+                        {
+                            "rel": "bookmark",
+                            "href": "http://localhost/fake/flavors/2",
+                        },
+                    ],
                 },
             ],
         }
         self.assertEqual(flavor, expected)
 
-    def test_get_flavor_list_v1_1(self):
-        req = webob.Request.blank('/v1.1/flavors')
-        req.environ['api.version'] = '1.1'
-        res = req.get_response(fakes.wsgi_app())
-        self.assertEqual(res.status_int, 200)
-        flavor = json.loads(res.body)["flavors"]
-        expected = [
-            {
-                "id": "1",
-                "name": "flavor 1",
-                "links": [
-                    {
-                        "rel": "self",
-                        "href": "http://localhost/v1.1/flavors/1",
-                    },
-                    {
-                        "rel": "bookmark",
-                        "href": "http://localhost/flavors/1",
-                    },
-                ],
-            },
-            {
-                "id": "2",
-                "name": "flavor 2",
-                "links": [
-                    {
-                        "rel": "self",
-                        "href": "http://localhost/v1.1/flavors/2",
-                    },
-                    {
-                        "rel": "bookmark",
-                        "href": "http://localhost/flavors/2",
-                    },
-                ],
-            },
-        ]
-        self.assertEqual(flavor, expected)
-
     def test_get_flavor_list_detail_v1_1(self):
-        req = webob.Request.blank('/v1.1/flavors/detail')
+        req = webob.Request.blank('/v1.1/fake/flavors/detail')
         req.environ['api.version'] = '1.1'
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 200)
-        flavor = json.loads(res.body)["flavors"]
-        expected = [
-            {
-                "id": "1",
-                "name": "flavor 1",
-                "ram": "256",
-                "disk": "10",
-                "links": [
-                    {
-                        "rel": "self",
-                        "href": "http://localhost/v1.1/flavors/1",
-                    },
-                    {
-                        "rel": "bookmark",
-                        "href": "http://localhost/flavors/1",
-                    },
-                ],
-            },
-            {
-                "id": "2",
-                "name": "flavor 2",
-                "ram": "256",
-                "disk": "10",
-                "links": [
-                    {
-                        "rel": "self",
-                        "href": "http://localhost/v1.1/flavors/2",
-                    },
-                    {
-                        "rel": "bookmark",
-                        "href": "http://localhost/flavors/2",
-                    },
-                ],
-            },
-        ]
+        flavor = json.loads(res.body)
+        expected = {
+            "flavors": [
+                {
+                    "id": "1",
+                    "name": "flavor 1",
+                    "ram": "256",
+                    "disk": "10",
+                    "rxtx_cap": "",
+                    "rxtx_quota": "",
+                    "swap": "",
+                    "vcpus": "",
+                    "links": [
+                        {
+                            "rel": "self",
+                            "href": "http://localhost/v1.1/fake/flavors/1",
+                        },
+                        {
+                            "rel": "bookmark",
+                            "href": "http://localhost/fake/flavors/1",
+                        },
+                    ],
+                },
+                {
+                    "id": "2",
+                    "name": "flavor 2",
+                    "ram": "512",
+                    "disk": "20",
+                    "rxtx_cap": "",
+                    "rxtx_quota": "",
+                    "swap": "",
+                    "vcpus": "",
+                    "links": [
+                        {
+                            "rel": "self",
+                            "href": "http://localhost/v1.1/fake/flavors/2",
+                        },
+                        {
+                            "rel": "bookmark",
+                            "href": "http://localhost/fake/flavors/2",
+                        },
+                    ],
+                },
+            ],
+        }
         self.assertEqual(flavor, expected)
 
     def test_get_empty_flavor_list_v1_1(self):
-        def _return_empty(self):
-            return {}
         self.stubs.Set(nova.db.api, "instance_type_get_all",
-                       _return_empty)
+                       empty_instance_type_get_all)
 
-        req = webob.Request.blank('/v1.1/flavors')
+        req = webob.Request.blank('/v1.1/fake/flavors')
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 200)
         flavors = json.loads(res.body)["flavors"]
         expected = []
         self.assertEqual(flavors, expected)
+
+    def test_get_flavor_list_filter_min_ram_v1_1(self):
+        """Flavor lists may be filtered by minRam"""
+        req = webob.Request.blank('/v1.1/fake/flavors?minRam=512')
+        req.environ['api.version'] = '1.1'
+        res = req.get_response(fakes.wsgi_app())
+        self.assertEqual(res.status_int, 200)
+        flavor = json.loads(res.body)
+        expected = {
+            "flavors": [
+                {
+                    "id": "2",
+                    "name": "flavor 2",
+                    "links": [
+                        {
+                            "rel": "self",
+                            "href": "http://localhost/v1.1/fake/flavors/2",
+                        },
+                        {
+                            "rel": "bookmark",
+                            "href": "http://localhost/fake/flavors/2",
+                        },
+                    ],
+                },
+            ],
+        }
+        self.assertEqual(flavor, expected)
+
+    def test_get_flavor_list_filter_min_disk(self):
+        """Flavor lists may be filtered by minRam"""
+        req = webob.Request.blank('/v1.1/fake/flavors?minDisk=20')
+        req.environ['api.version'] = '1.1'
+        res = req.get_response(fakes.wsgi_app())
+        self.assertEqual(res.status_int, 200)
+        flavor = json.loads(res.body)
+        expected = {
+            "flavors": [
+                {
+                    "id": "2",
+                    "name": "flavor 2",
+                    "links": [
+                        {
+                            "rel": "self",
+                            "href": "http://localhost/v1.1/fake/flavors/2",
+                        },
+                        {
+                            "rel": "bookmark",
+                            "href": "http://localhost/fake/flavors/2",
+                        },
+                    ],
+                },
+            ],
+        }
+        self.assertEqual(flavor, expected)
+
+    def test_get_flavor_list_detail_min_ram_and_min_disk_v1_1(self):
+        """Tests that filtering work on flavor details and that minRam and
+        minDisk filters can be combined
+        """
+        req = webob.Request.blank(
+            '/v1.1/fake/flavors/detail?minRam=256&minDisk=20')
+        req.environ['api.version'] = '1.1'
+        res = req.get_response(fakes.wsgi_app())
+        self.assertEqual(res.status_int, 200)
+        flavor = json.loads(res.body)
+        expected = {
+            "flavors": [
+                {
+                    "id": "2",
+                    "name": "flavor 2",
+                    "ram": "512",
+                    "disk": "20",
+                    "rxtx_cap": "",
+                    "rxtx_quota": "",
+                    "swap": "",
+                    "vcpus": "",
+                    "links": [
+                        {
+                            "rel": "self",
+                            "href": "http://localhost/v1.1/fake/flavors/2",
+                        },
+                        {
+                            "rel": "bookmark",
+                            "href": "http://localhost/fake/flavors/2",
+                        },
+                    ],
+                },
+            ],
+        }
+        self.assertEqual(flavor, expected)
+
+    def test_get_flavor_list_detail_bogus_min_ram_v1_1(self):
+        """Tests that bogus minRam filtering values are ignored"""
+        req = webob.Request.blank(
+            '/v1.1/fake/flavors/detail?minRam=16GB')
+        req.environ['api.version'] = '1.1'
+        res = req.get_response(fakes.wsgi_app())
+        self.assertEqual(res.status_int, 200)
+        flavor = json.loads(res.body)
+        expected = {
+            "flavors": [
+                {
+                    "id": "1",
+                    "name": "flavor 1",
+                    "ram": "256",
+                    "disk": "10",
+                    "rxtx_cap": "",
+                    "rxtx_quota": "",
+                    "swap": "",
+                    "vcpus": "",
+                    "links": [
+                        {
+                            "rel": "self",
+                            "href": "http://localhost/v1.1/fake/flavors/1",
+                        },
+                        {
+                            "rel": "bookmark",
+                            "href": "http://localhost/fake/flavors/1",
+                        },
+                    ],
+                },
+                {
+                    "id": "2",
+                    "name": "flavor 2",
+                    "ram": "512",
+                    "disk": "20",
+                    "rxtx_cap": "",
+                    "rxtx_quota": "",
+                    "swap": "",
+                    "vcpus": "",
+                    "links": [
+                        {
+                            "rel": "self",
+                            "href": "http://localhost/v1.1/fake/flavors/2",
+                        },
+                        {
+                            "rel": "bookmark",
+                            "href": "http://localhost/fake/flavors/2",
+                        },
+                    ],
+                },
+            ],
+        }
+        self.assertEqual(flavor, expected)
+
+    def test_get_flavor_list_detail_bogus_min_disk_v1_1(self):
+        """Tests that bogus minDisk filtering values are ignored"""
+        req = webob.Request.blank(
+            '/v1.1/fake/flavors/detail?minDisk=16GB')
+        req.environ['api.version'] = '1.1'
+        res = req.get_response(fakes.wsgi_app())
+        self.assertEqual(res.status_int, 200)
+        flavor = json.loads(res.body)
+        expected = {
+            "flavors": [
+                {
+                    "id": "1",
+                    "name": "flavor 1",
+                    "ram": "256",
+                    "disk": "10",
+                    "rxtx_cap": "",
+                    "rxtx_quota": "",
+                    "swap": "",
+                    "vcpus": "",
+                    "links": [
+                        {
+                            "rel": "self",
+                            "href": "http://localhost/v1.1/fake/flavors/1",
+                        },
+                        {
+                            "rel": "bookmark",
+                            "href": "http://localhost/fake/flavors/1",
+                        },
+                    ],
+                },
+                {
+                    "id": "2",
+                    "name": "flavor 2",
+                    "ram": "512",
+                    "disk": "20",
+                    "rxtx_cap": "",
+                    "rxtx_quota": "",
+                    "swap": "",
+                    "vcpus": "",
+                    "links": [
+                        {
+                            "rel": "self",
+                            "href": "http://localhost/v1.1/fake/flavors/2",
+                        },
+                        {
+                            "rel": "bookmark",
+                            "href": "http://localhost/fake/flavors/2",
+                        },
+                    ],
+                },
+            ],
+        }
+        self.assertEqual(flavor, expected)
+
+
+class FlavorsXMLSerializationTest(test.TestCase):
+
+    def test_xml_declaration(self):
+        serializer = flavors.FlavorXMLSerializer()
+
+        fixture = {
+            "flavor": {
+                "id": "12",
+                "name": "asdf",
+                "ram": "256",
+                "disk": "10",
+                "rxtx_cap": "",
+                "rxtx_quota": "",
+                "swap": "",
+                "vcpus": "",
+                "links": [
+                    {
+                        "rel": "self",
+                        "href": "http://localhost/v1.1/fake/flavors/12",
+                    },
+                    {
+                        "rel": "bookmark",
+                        "href": "http://localhost/fake/flavors/12",
+                    },
+                ],
+            },
+        }
+
+        output = serializer.serialize(fixture, 'show')
+        print output
+        has_dec = output.startswith("<?xml version='1.0' encoding='UTF-8'?>")
+        self.assertTrue(has_dec)
+
+    def test_show(self):
+        serializer = flavors.FlavorXMLSerializer()
+
+        fixture = {
+            "flavor": {
+                "id": "12",
+                "name": "asdf",
+                "ram": "256",
+                "disk": "10",
+                "rxtx_cap": "",
+                "rxtx_quota": "",
+                "swap": "",
+                "vcpus": "",
+                "links": [
+                    {
+                        "rel": "self",
+                        "href": "http://localhost/v1.1/fake/flavors/12",
+                    },
+                    {
+                        "rel": "bookmark",
+                        "href": "http://localhost/fake/flavors/12",
+                    },
+                ],
+            },
+        }
+
+        output = serializer.serialize(fixture, 'show')
+        print output
+        root = etree.XML(output)
+        xmlutil.validate_schema(root, 'flavor')
+        flavor_dict = fixture['flavor']
+
+        for key in ['name', 'id', 'ram', 'disk']:
+            self.assertEqual(root.get(key), str(flavor_dict[key]))
+
+        link_nodes = root.findall('{0}link'.format(ATOMNS))
+        self.assertEqual(len(link_nodes), 2)
+        for i, link in enumerate(flavor_dict['links']):
+            for key, value in link.items():
+                self.assertEqual(link_nodes[i].get(key), value)
+
+    def test_show_handles_integers(self):
+        serializer = flavors.FlavorXMLSerializer()
+
+        fixture = {
+            "flavor": {
+                "id": 12,
+                "name": "asdf",
+                "ram": 256,
+                "disk": 10,
+                "rxtx_cap": "",
+                "rxtx_quota": "",
+                "swap": "",
+                "vcpus": "",
+                "links": [
+                    {
+                        "rel": "self",
+                        "href": "http://localhost/v1.1/fake/flavors/12",
+                    },
+                    {
+                        "rel": "bookmark",
+                        "href": "http://localhost/fake/flavors/12",
+                    },
+                ],
+            },
+        }
+
+        output = serializer.serialize(fixture, 'show')
+        print output
+        root = etree.XML(output)
+        xmlutil.validate_schema(root, 'flavor')
+        flavor_dict = fixture['flavor']
+
+        for key in ['name', 'id', 'ram', 'disk']:
+            self.assertEqual(root.get(key), str(flavor_dict[key]))
+
+        link_nodes = root.findall('{0}link'.format(ATOMNS))
+        self.assertEqual(len(link_nodes), 2)
+        for i, link in enumerate(flavor_dict['links']):
+            for key, value in link.items():
+                self.assertEqual(link_nodes[i].get(key), value)
+
+    def test_detail(self):
+        serializer = flavors.FlavorXMLSerializer()
+
+        fixture = {
+            "flavors": [
+                {
+                    "id": "23",
+                    "name": "flavor 23",
+                    "ram": "512",
+                    "disk": "20",
+                    "rxtx_cap": "",
+                    "rxtx_quota": "",
+                    "swap": "",
+                    "vcpus": "",
+                    "links": [
+                        {
+                            "rel": "self",
+                            "href": "http://localhost/v1.1/fake/flavors/23",
+                        },
+                        {
+                            "rel": "bookmark",
+                            "href": "http://localhost/fake/flavors/23",
+                        },
+                    ],
+                },
+                {
+                    "id": "13",
+                    "name": "flavor 13",
+                    "ram": "256",
+                    "disk": "10",
+                    "rxtx_cap": "",
+                    "rxtx_quota": "",
+                    "swap": "",
+                    "vcpus": "",
+                    "links": [
+                        {
+                            "rel": "self",
+                            "href": "http://localhost/v1.1/fake/flavors/13",
+                        },
+                        {
+                            "rel": "bookmark",
+                            "href": "http://localhost/fake/flavors/13",
+                        },
+                    ],
+                },
+            ],
+        }
+
+        output = serializer.serialize(fixture, 'detail')
+        print output
+        root = etree.XML(output)
+        xmlutil.validate_schema(root, 'flavors')
+        flavor_elems = root.findall('{0}flavor'.format(NS))
+        self.assertEqual(len(flavor_elems), 2)
+        for i, flavor_elem in enumerate(flavor_elems):
+            flavor_dict = fixture['flavors'][i]
+
+            for key in ['name', 'id', 'ram', 'disk']:
+                self.assertEqual(flavor_elem.get(key), str(flavor_dict[key]))
+
+            link_nodes = flavor_elem.findall('{0}link'.format(ATOMNS))
+            self.assertEqual(len(link_nodes), 2)
+            for i, link in enumerate(flavor_dict['links']):
+                for key, value in link.items():
+                    self.assertEqual(link_nodes[i].get(key), value)
+
+    def test_index(self):
+        serializer = flavors.FlavorXMLSerializer()
+
+        fixture = {
+            "flavors": [
+                {
+                    "id": "23",
+                    "name": "flavor 23",
+                    "ram": "512",
+                    "disk": "20",
+                    "rxtx_cap": "",
+                    "rxtx_quota": "",
+                    "swap": "",
+                    "vcpus": "",
+                    "links": [
+                        {
+                            "rel": "self",
+                            "href": "http://localhost/v1.1/fake/flavors/23",
+                        },
+                        {
+                            "rel": "bookmark",
+                            "href": "http://localhost/fake/flavors/23",
+                        },
+                    ],
+                },
+                {
+                    "id": "13",
+                    "name": "flavor 13",
+                    "ram": "256",
+                    "disk": "10",
+                    "rxtx_cap": "",
+                    "rxtx_quota": "",
+                    "swap": "",
+                    "vcpus": "",
+                    "links": [
+                        {
+                            "rel": "self",
+                            "href": "http://localhost/v1.1/fake/flavors/13",
+                        },
+                        {
+                            "rel": "bookmark",
+                            "href": "http://localhost/fake/flavors/13",
+                        },
+                    ],
+                },
+            ],
+        }
+
+        output = serializer.serialize(fixture, 'index')
+        print output
+        root = etree.XML(output)
+        xmlutil.validate_schema(root, 'flavors_index')
+        flavor_elems = root.findall('{0}flavor'.format(NS))
+        self.assertEqual(len(flavor_elems), 2)
+        for i, flavor_elem in enumerate(flavor_elems):
+            flavor_dict = fixture['flavors'][i]
+
+            for key in ['name', 'id']:
+                self.assertEqual(flavor_elem.get(key), str(flavor_dict[key]))
+
+            link_nodes = flavor_elem.findall('{0}link'.format(ATOMNS))
+            self.assertEqual(len(link_nodes), 2)
+            for i, link in enumerate(flavor_dict['links']):
+                for key, value in link.items():
+                    self.assertEqual(link_nodes[i].get(key), value)
+
+    def test_index_empty(self):
+        serializer = flavors.FlavorXMLSerializer()
+
+        fixture = {
+            "flavors": [],
+        }
+
+        output = serializer.serialize(fixture, 'index')
+        print output
+        root = etree.XML(output)
+        xmlutil.validate_schema(root, 'flavors_index')
+        flavor_elems = root.findall('{0}flavor'.format(NS))
+        self.assertEqual(len(flavor_elems), 0)

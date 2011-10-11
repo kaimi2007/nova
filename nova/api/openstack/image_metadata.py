@@ -16,13 +16,12 @@
 #    under the License.
 
 from webob import exc
-from xml.dom import minidom
 
+from nova import exception
 from nova import flags
 from nova import image
-from nova import quota
 from nova import utils
-from nova.api.openstack import faults
+from nova.api.openstack import common
 from nova.api.openstack import wsgi
 
 
@@ -35,46 +34,36 @@ class Controller(object):
     def __init__(self):
         self.image_service = image.get_default_image_service()
 
-    def _get_metadata(self, context, image_id, image=None):
-        if not image:
-            image = self.image_service.show(context, image_id)
-        metadata = image.get('properties', {})
-        return metadata
-
-    def _check_quota_limit(self, context, metadata):
-        if metadata is None:
-            return
-        num_metadata = len(metadata)
-        quota_metadata = quota.allowed_metadata_items(context, num_metadata)
-        if quota_metadata < num_metadata:
-            expl = _("Image metadata limit exceeded")
-            raise exc.HTTPBadRequest(explanation=expl)
+    def _get_image(self, context, image_id):
+        try:
+            return self.image_service.show(context, image_id)
+        except exception.NotFound:
+            msg = _("Image not found.")
+            raise exc.HTTPNotFound(explanation=msg)
 
     def index(self, req, image_id):
         """Returns the list of metadata for a given instance"""
         context = req.environ['nova.context']
-        metadata = self._get_metadata(context, image_id)
+        metadata = self._get_image(context, image_id)['properties']
         return dict(metadata=metadata)
 
     def show(self, req, image_id, id):
         context = req.environ['nova.context']
-        metadata = self._get_metadata(context, image_id)
+        metadata = self._get_image(context, image_id)['properties']
         if id in metadata:
             return {'meta': {id: metadata[id]}}
         else:
-            return faults.Fault(exc.HTTPNotFound())
+            raise exc.HTTPNotFound()
 
     def create(self, req, image_id, body):
         context = req.environ['nova.context']
-        img = self.image_service.show(context, image_id)
-        metadata = self._get_metadata(context, image_id, img)
+        image = self._get_image(context, image_id)
         if 'metadata' in body:
             for key, value in body['metadata'].iteritems():
-                metadata[key] = value
-        self._check_quota_limit(context, metadata)
-        img['properties'] = metadata
-        self.image_service.update(context, image_id, img, None)
-        return dict(metadata=metadata)
+                image['properties'][key] = value
+        common.check_img_metadata_quota_limit(context, image['properties'])
+        self.image_service.update(context, image_id, image, None)
+        return dict(metadata=image['properties'])
 
     def update(self, req, image_id, id, body):
         context = req.environ['nova.context']
@@ -91,78 +80,43 @@ class Controller(object):
         if len(meta) > 1:
             expl = _('Request body contains too many items')
             raise exc.HTTPBadRequest(explanation=expl)
-        img = self.image_service.show(context, image_id)
-        metadata = self._get_metadata(context, image_id, img)
-        metadata[id] = meta[id]
-        self._check_quota_limit(context, metadata)
-        img['properties'] = metadata
-        self.image_service.update(context, image_id, img, None)
 
-        return req.body
+        image = self._get_image(context, image_id)
+        image['properties'][id] = meta[id]
+        common.check_img_metadata_quota_limit(context, image['properties'])
+        self.image_service.update(context, image_id, image, None)
+        return dict(meta=meta)
+
+    def update_all(self, req, image_id, body):
+        context = req.environ['nova.context']
+        image = self._get_image(context, image_id)
+        metadata = body.get('metadata', {})
+        common.check_img_metadata_quota_limit(context, metadata)
+        image['properties'] = metadata
+        self.image_service.update(context, image_id, image, None)
+        return dict(metadata=metadata)
 
     def delete(self, req, image_id, id):
         context = req.environ['nova.context']
-        img = self.image_service.show(context, image_id)
-        metadata = self._get_metadata(context, image_id)
-        if not id in metadata:
-            return faults.Fault(exc.HTTPNotFound())
-        metadata.pop(id)
-        img['properties'] = metadata
-        self.image_service.update(context, image_id, img, None)
-
-
-class ImageMetadataXMLSerializer(wsgi.XMLDictSerializer):
-    def __init__(self, xmlns=wsgi.XMLNS_V11):
-        super(ImageMetadataXMLSerializer, self).__init__(xmlns=xmlns)
-
-    def _meta_item_to_xml(self, doc, key, value):
-        node = doc.createElement('meta')
-        doc.appendChild(node)
-        node.setAttribute('key', '%s' % key)
-        text = doc.createTextNode('%s' % value)
-        node.appendChild(text)
-        return node
-
-    def meta_list_to_xml(self, xml_doc, meta_items):
-        container_node = xml_doc.createElement('metadata')
-        for (key, value) in meta_items:
-            item_node = self._meta_item_to_xml(xml_doc, key, value)
-            container_node.appendChild(item_node)
-        return container_node
-
-    def _meta_list_to_xml_string(self, metadata_dict):
-        xml_doc = minidom.Document()
-        items = metadata_dict['metadata'].items()
-        container_node = self.meta_list_to_xml(xml_doc, items)
-        xml_doc.appendChild(container_node)
-        self._add_xmlns(container_node)
-        return xml_doc.toprettyxml(indent='    ', encoding='UTF-8')
-
-    def index(self, metadata_dict):
-        return self._meta_list_to_xml_string(metadata_dict)
-
-    def create(self, metadata_dict):
-        return self._meta_list_to_xml_string(metadata_dict)
-
-    def _meta_item_to_xml_string(self, meta_item_dict):
-        xml_doc = minidom.Document()
-        item_key, item_value = meta_item_dict.items()[0]
-        item_node = self._meta_item_to_xml(xml_doc, item_key, item_value)
-        xml_doc.appendChild(item_node)
-        self._add_xmlns(item_node)
-        return xml_doc.toprettyxml(indent='    ', encoding='UTF-8')
-
-    def show(self, meta_item_dict):
-        return self._meta_item_to_xml_string(meta_item_dict['meta'])
-
-    def update(self, meta_item_dict):
-        return self._meta_item_to_xml_string(meta_item_dict['meta'])
+        image = self._get_image(context, image_id)
+        if not id in image['properties']:
+            msg = _("Invalid metadata key")
+            raise exc.HTTPNotFound(explanation=msg)
+        image['properties'].pop(id)
+        self.image_service.update(context, image_id, image, None)
 
 
 def create_resource():
-    body_serializers = {
-        'application/xml': ImageMetadataXMLSerializer(),
-    }
-    serializer = wsgi.ResponseSerializer(body_serializers)
+    headers_serializer = common.MetadataHeadersSerializer()
 
-    return wsgi.Resource(Controller(), serializer=serializer)
+    body_deserializers = {
+        'application/xml': common.MetadataXMLDeserializer(),
+    }
+
+    body_serializers = {
+        'application/xml': common.MetadataXMLSerializer(),
+    }
+    serializer = wsgi.ResponseSerializer(body_serializers, headers_serializer)
+    deserializer = wsgi.RequestDeserializer(body_deserializers)
+
+    return wsgi.Resource(Controller(), deserializer, serializer)

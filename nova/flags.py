@@ -267,12 +267,14 @@ DEFINE_string('my_ip', _get_my_ip(), 'host ip address')
 DEFINE_list('region_list',
             [],
             'list of region=fqdn pairs separated by commas')
-DEFINE_string('connection_type', 'libvirt', 'libvirt, xenapi or fake')
+DEFINE_string('connection_type', 'libvirt', 'libvirt, xenapi, fake, or gpu')
 DEFINE_string('aws_access_key_id', 'admin', 'AWS Access ID')
 DEFINE_string('aws_secret_access_key', 'admin', 'AWS Access Key')
 # NOTE(sirp): my_ip interpolation doesn't work within nested structures
+DEFINE_string('glance_host', _get_my_ip(), 'default glance host')
+DEFINE_integer('glance_port', 9292, 'default glance port')
 DEFINE_list('glance_api_servers',
-            ['%s:9292' % _get_my_ip()],
+            ['%s:%d' % (FLAGS.glance_host, FLAGS.glance_port)],
             'list of glance api servers available to nova (host:port)')
 DEFINE_integer('s3_port', 3333, 's3 port')
 DEFINE_string('s3_host', '$my_ip', 's3 host (for infrastructure)')
@@ -292,6 +294,7 @@ DEFINE_string('ajax_console_proxy_url',
                in the form "http://127.0.0.1:8000"')
 DEFINE_string('ajax_console_proxy_port',
                8000, 'port that ajax_console_proxy binds')
+DEFINE_string('vsa_topic', 'vsa', 'the topic that nova-vsa service listens on')
 DEFINE_bool('verbose', False, 'show debug output')
 DEFINE_boolean('fake_rabbit', False, 'use a fake rabbit')
 DEFINE_bool('fake_network', False,
@@ -302,9 +305,14 @@ DEFINE_bool('rabbit_use_ssl', False, 'connect over SSL')
 DEFINE_string('rabbit_userid', 'guest', 'rabbit userid')
 DEFINE_string('rabbit_password', 'guest', 'rabbit password')
 DEFINE_string('rabbit_virtual_host', '/', 'rabbit virtual host')
-DEFINE_integer('rabbit_retry_interval', 10, 'rabbit connection retry interval')
-DEFINE_integer('rabbit_max_retries', 12, 'rabbit connection attempts')
+DEFINE_integer('rabbit_retry_interval', 1,
+        'rabbit connection retry interval to start')
+DEFINE_integer('rabbit_retry_backoff', 2,
+        'rabbit connection retry backoff in seconds')
+DEFINE_integer('rabbit_max_retries', 0,
+        'maximum rabbit connection attempts (0=try forever)')
 DEFINE_string('control_exchange', 'nova', 'the main exchange to connect to')
+DEFINE_boolean('rabbit_durable_queues', False, 'use durable queues')
 DEFINE_list('enabled_apis', ['ec2', 'osapi'],
             'list of APIs to enable by default')
 DEFINE_string('ec2_host', '$my_ip', 'ip of api server')
@@ -317,7 +325,7 @@ DEFINE_string('osapi_extensions_path', '/var/lib/nova/extensions',
 DEFINE_string('osapi_host', '$my_ip', 'ip of api server')
 DEFINE_string('osapi_scheme', 'http', 'prefix for openstack')
 DEFINE_integer('osapi_port', 8774, 'OpenStack API port')
-DEFINE_string('osapi_path', '/v1.0/', 'suffix for openstack')
+DEFINE_string('osapi_path', '/v1.1/', 'suffix for openstack')
 DEFINE_integer('osapi_max_limit', 1000,
                'max number of items returned in a collection response')
 
@@ -343,7 +351,7 @@ DEFINE_string('lock_path', os.path.join(os.path.dirname(__file__), '../'),
               'Directory for lock files')
 DEFINE_string('logdir', None, 'output to a per-service log file in named '
                               'directory')
-
+DEFINE_integer('logfile_mode', 0644, 'Default file mode of the logs.')
 DEFINE_string('sqlite_db', 'nova.sqlite', 'file name for sqlite')
 DEFINE_string('sql_connection',
               'sqlite:///$state_path/$sqlite_db',
@@ -364,6 +372,17 @@ DEFINE_string('volume_manager', 'nova.volume.manager.VolumeManager',
               'Manager for volume')
 DEFINE_string('scheduler_manager', 'nova.scheduler.manager.SchedulerManager',
               'Manager for scheduler')
+DEFINE_string('vsa_manager', 'nova.vsa.manager.VsaManager',
+              'Manager for vsa')
+DEFINE_string('vc_image_name', 'vc_image',
+              'the VC image ID (for a VC image that exists in DB Glance)')
+# VSA constants and enums
+DEFINE_string('default_vsa_instance_type', 'm1.small',
+              'default instance type for VSA instances')
+DEFINE_integer('max_vcs_in_vsa', 32,
+               'maxinum VCs in a VSA')
+DEFINE_integer('vsa_part_size_gb', 100,
+               'default partition size for shared capacity')
 
 # The service to use for image search and retrieval
 DEFINE_string('image_service', 'nova.image.glance.GlanceImageService',
@@ -382,8 +401,38 @@ DEFINE_list('memcached_servers', None,
             'Memcached servers or None for in process cache.')
 
 DEFINE_string('zone_name', 'nova', 'name of this zone')
+
 DEFINE_list('zone_capabilities',
                 ['hypervisor=xenserver;kvm', 'os=linux;windows'],
                  'Key/Multi-value list representng capabilities of this zone')
 DEFINE_string('build_plan_encryption_key', None,
         '128bit (hex) encryption key for scheduler build plans.')
+
+DEFINE_bool('start_guests_on_host_boot', False,
+            'Whether to restart guests when the host reboots')
+DEFINE_bool('resume_guests_state_on_host_boot', False,
+            'Whether to start guests, that was running before the host reboot')
+
+DEFINE_string('root_helper', 'sudo',
+              'Command prefix to use for running commands as root')
+
+DEFINE_bool('use_ipv6', False, 'use ipv6')
+
+DEFINE_integer('password_length', 12,
+                    'Length of generated instance admin passwords')
+
+DEFINE_bool('monkey_patch', False,
+              'Whether to log monkey patching')
+
+DEFINE_list('monkey_patch_modules',
+        ['nova.api.ec2.cloud:nova.notifier.api.notify_decorator',
+        'nova.compute.api:nova.notifier.api.notify_decorator'],
+        'Module list representing monkey '
+        'patched module and decorator')
+
+DEFINE_bool('allow_resize_to_same_host', False,
+            'Allow destination machine to match source for resize. Useful'
+            ' when testing in environments with only one host machine.')
+
+DEFINE_string('stub_network', False,
+              'Stub network related code')

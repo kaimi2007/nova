@@ -125,10 +125,11 @@ def stub_out_db_network_api(stubs):
             if ips[0]['fixed_ip']:
                 fixed_ip_address = ips[0]['fixed_ip']['address']
             ips[0]['fixed_ip'] = None
+            ips[0]['host'] = None
             return fixed_ip_address
 
     def fake_floating_ip_fixed_ip_associate(context, floating_address,
-                                            fixed_address):
+                                            fixed_address, host):
         float = filter(lambda i: i['address'] == floating_address,
                        floating_ips)
         fixed = filter(lambda i: i['address'] == fixed_address,
@@ -136,6 +137,7 @@ def stub_out_db_network_api(stubs):
         if float and fixed:
             float[0]['fixed_ip'] = fixed[0]
             float[0]['fixed_ip_id'] = fixed[0]['id']
+            float[0]['host'] = host
 
     def fake_floating_ip_get_all_by_host(context, host):
         # TODO(jkoelker): Once we get the patches that remove host from
@@ -230,7 +232,7 @@ def stub_out_db_network_api(stubs):
                         continue
                     fixed_ip_fields['virtual_interface'] = FakeModel(vif[0])
 
-    def fake_instance_type_get_by_id(context, id):
+    def fake_instance_type_get(context, id):
         if flavor_fields['id'] == id:
             return FakeModel(flavor_fields)
 
@@ -323,7 +325,7 @@ def stub_out_db_network_api(stubs):
              fake_fixed_ip_get_by_address,
              fake_fixed_ip_get_network,
              fake_fixed_ip_update,
-             fake_instance_type_get_by_id,
+             fake_instance_type_get,
              fake_virtual_interface_create,
              fake_virtual_interface_delete_by_instance,
              fake_virtual_interface_get_by_instance,
@@ -409,13 +411,13 @@ def stub_out_db_instance_api(stubs, injected=True):
                        'address_v6': 'fe80::a00:3',
                        'network_id': 'fake_flat'}
 
-    def fake_instance_type_get_all(context, inactive=0):
-        return INSTANCE_TYPES
+    def fake_instance_type_get_all(context, inactive=0, filters=None):
+        return INSTANCE_TYPES.values()
 
     def fake_instance_type_get_by_name(context, name):
         return INSTANCE_TYPES[name]
 
-    def fake_instance_type_get_by_id(context, id):
+    def fake_instance_type_get(context, id):
         for name, inst_type in INSTANCE_TYPES.iteritems():
             if str(inst_type['id']) == str(id):
                 return inst_type
@@ -448,7 +450,7 @@ def stub_out_db_instance_api(stubs, injected=True):
              fake_network_get_all_by_instance,
              fake_instance_type_get_all,
              fake_instance_type_get_by_name,
-             fake_instance_type_get_by_id,
+             fake_instance_type_get,
              fake_instance_get_fixed_addresses,
              fake_instance_get_fixed_addresses_v6,
              fake_network_get_all_by_instance,

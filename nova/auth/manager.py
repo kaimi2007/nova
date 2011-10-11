@@ -17,6 +17,9 @@
 #    under the License.
 
 """
+WARNING: This code is deprecated and will be removed.
+Keystone is the recommended solution for auth management.
+
 Nova authentication management
 """
 
@@ -38,10 +41,13 @@ from nova.auth import signer
 
 
 FLAGS = flags.FLAGS
+flags.DEFINE_bool('use_deprecated_auth',
+                  False,
+                  'This flag must be set to use old style auth')
+
 flags.DEFINE_list('allowed_roles',
                   ['cloudadmin', 'itsec', 'sysadmin', 'netadmin', 'developer'],
                   'Allowed roles for project')
-
 # NOTE(vish): a user with one of these roles will be a superuser and
 #             have access to all api commands
 flags.DEFINE_list('superuser_roles', ['cloudadmin'],
@@ -518,6 +524,14 @@ class AuthManager(object):
             return drv.get_user_roles(User.safe_id(user),
                                       Project.safe_id(project))
 
+    def get_active_roles(self, user, project=None):
+        """Get all active roles for context"""
+        if project:
+            roles = FLAGS.allowed_roles + ['projectmanager']
+        else:
+            roles = FLAGS.global_roles
+        return [role for role in roles if self.has_role(user, role, project)]
+
     def get_project(self, pid):
         """Get project object by id"""
         with self.driver() as drv:
@@ -730,10 +744,6 @@ class AuthManager(object):
         with self.driver() as drv:
             drv.modify_user(uid, access_key, secret_key, admin)
 
-    @staticmethod
-    def get_key_pairs(context):
-        return db.key_pair_get_all_by_user(context.elevated(), context.user_id)
-
     def get_credentials(self, user, project=None, use_dmz=True):
         """Get credential zip for user in project"""
         if not isinstance(user, User):
@@ -785,7 +795,7 @@ class AuthManager(object):
         return read_buffer
 
     def get_environment_rc(self, user, project=None, use_dmz=True):
-        """Get credential zip for user in project"""
+        """Get environment rc for user in project"""
         if not isinstance(user, User):
             user = self.get_user(user)
         if project is None:
@@ -807,7 +817,13 @@ class AuthManager(object):
             s3_host = host
             ec2_host = host
         rc = open(FLAGS.credentials_template).read()
-        rc = rc % {'access': user.access,
+        # NOTE(vish): Deprecated auth uses an access key, no auth uses a
+        #             the user_id in place of it.
+        if FLAGS.use_deprecated_auth:
+            access = user.access
+        else:
+            access = user.id
+        rc = rc % {'access': access,
                    'project': pid,
                    'secret': user.secret,
                    'ec2': '%s://%s:%s%s' % (FLAGS.ec2_scheme,

@@ -16,11 +16,13 @@
 #    under the License.
 
 import webob
+from lxml import etree
 
 from nova import db
 from nova import exception
 from nova.api.openstack import views
 from nova.api.openstack import wsgi
+from nova.api.openstack import xmlutil
 
 
 class Controller(object):
@@ -41,11 +43,24 @@ class Controller(object):
 
     def _get_flavors(self, req, is_detail=True):
         """Helper function that returns a list of flavor dicts."""
+        filters = {}
+        if 'minRam' in req.params:
+            try:
+                filters['min_memory_mb'] = int(req.params['minRam'])
+            except ValueError:
+                pass  # ignore bogus values per spec
+
+        if 'minDisk' in req.params:
+            try:
+                filters['min_local_gb'] = int(req.params['minDisk'])
+            except ValueError:
+                pass  # ignore bogus values per spec
+
         ctxt = req.environ['nova.context']
-        flavors = db.api.instance_type_get_all(ctxt)
+        inst_types = db.api.instance_type_get_all(ctxt, filters=filters)
         builder = self._get_view_builder(req)
-        items = [builder.build(flavor, is_detail=is_detail)
-                 for flavor in flavors.values()]
+        items = [builder.build(inst_type, is_detail=is_detail)
+                 for inst_type in inst_types]
         return items
 
     def show(self, req, id):
@@ -71,7 +86,54 @@ class ControllerV11(Controller):
 
     def _get_view_builder(self, req):
         base_url = req.application_url
-        return views.flavors.ViewBuilderV11(base_url)
+        project_id = getattr(req.environ['nova.context'], 'project_id', '')
+        return views.flavors.ViewBuilderV11(base_url, project_id)
+
+
+class FlavorXMLSerializer(wsgi.XMLDictSerializer):
+
+    NSMAP = {None: xmlutil.XMLNS_V11, 'atom': xmlutil.XMLNS_ATOM}
+
+    def __init__(self):
+        super(FlavorXMLSerializer, self).__init__(xmlns=wsgi.XMLNS_V11)
+
+    def _populate_flavor(self, flavor_elem, flavor_dict, detailed=False):
+        """Populate a flavor xml element from a dict."""
+
+        flavor_elem.set('name', flavor_dict['name'])
+        flavor_elem.set('id', str(flavor_dict['id']))
+        if detailed:
+            flavor_elem.set('ram', str(flavor_dict['ram']))
+            flavor_elem.set('disk', str(flavor_dict['disk']))
+
+            for attr in ("vcpus", "swap", "rxtx_quota", "rxtx_cap"):
+                flavor_elem.set(attr, str(flavor_dict.get(attr, "")))
+
+        for link in flavor_dict.get('links', []):
+            elem = etree.SubElement(flavor_elem,
+                                    '{%s}link' % xmlutil.XMLNS_ATOM)
+            elem.set('rel', link['rel'])
+            elem.set('href', link['href'])
+        return flavor_elem
+
+    def show(self, flavor_container):
+        flavor = etree.Element('flavor', nsmap=self.NSMAP)
+        self._populate_flavor(flavor, flavor_container['flavor'], True)
+        return self._to_xml(flavor)
+
+    def detail(self, flavors_dict):
+        flavors = etree.Element('flavors', nsmap=self.NSMAP)
+        for flavor_dict in flavors_dict['flavors']:
+            flavor = etree.SubElement(flavors, 'flavor')
+            self._populate_flavor(flavor, flavor_dict, True)
+        return self._to_xml(flavors)
+
+    def index(self, flavors_dict):
+        flavors = etree.Element('flavors', nsmap=self.NSMAP)
+        for flavor_dict in flavors_dict['flavors']:
+            flavor = etree.SubElement(flavors, 'flavor')
+            self._populate_flavor(flavor, flavor_dict, False)
+        return self._to_xml(flavors)
 
 
 def create_resource(version='1.0'):
@@ -80,13 +142,13 @@ def create_resource(version='1.0'):
         '1.1': ControllerV11,
     }[version]()
 
-    xmlns = {
-        '1.0': wsgi.XMLNS_V10,
-        '1.1': wsgi.XMLNS_V11,
+    xml_serializer = {
+        '1.0': wsgi.XMLDictSerializer(xmlns=wsgi.XMLNS_V10),
+        '1.1': FlavorXMLSerializer(),
     }[version]
 
     body_serializers = {
-        'application/xml': wsgi.XMLDictSerializer(xmlns=xmlns),
+        'application/xml': xml_serializer,
     }
 
     serializer = wsgi.ResponseSerializer(body_serializers)

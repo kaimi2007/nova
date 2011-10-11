@@ -15,26 +15,29 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-"""
-Implementation of SQLAlchemy backend.
-"""
-import traceback
+
+"""Implementation of SQLAlchemy backend."""
+
+import datetime
+import re
 import warnings
 
+from nova import block_device
 from nova import db
 from nova import exception
 from nova import flags
 from nova import ipv6
 from nova import utils
 from nova import log as logging
+from nova.compute import vm_states
 from nova.db.sqlalchemy import models
 from nova.db.sqlalchemy.session import get_session
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm import joinedload_all
-from sqlalchemy.sql import exists
 from sqlalchemy.sql import func
+from sqlalchemy.sql.expression import desc
 from sqlalchemy.sql.expression import literal_column
 
 FLAGS = flags.FLAGS
@@ -64,7 +67,7 @@ def is_user_context(context):
 def authorize_project_context(context, project_id):
     """Ensures a request has permission to access the given project."""
     if is_user_context(context):
-        if not context.project:
+        if not context.project_id:
             raise exception.NotAuthorized()
         elif context.project_id != project_id:
             raise exception.NotAuthorized()
@@ -73,7 +76,7 @@ def authorize_project_context(context, project_id):
 def authorize_user_context(context, user_id):
     """Ensures a request has permission to access the given user."""
     if is_user_context(context):
-        if not context.user:
+        if not context.user_id:
             raise exception.NotAuthorized()
         elif context.user_id != user_id:
             raise exception.NotAuthorized()
@@ -128,6 +131,20 @@ def require_instance_exists(f):
     def wrapper(context, instance_id, *args, **kwargs):
         db.api.instance_get(context, instance_id)
         return f(context, instance_id, *args, **kwargs)
+    wrapper.__name__ = f.__name__
+    return wrapper
+
+
+def require_volume_exists(f):
+    """Decorator to require the specified volume to exist.
+
+    Requres the wrapped function to use context and volume_id as
+    their first two arguments.
+    """
+
+    def wrapper(context, volume_id, *args, **kwargs):
+        db.api.volume_get(context, volume_id)
+        return f(context, volume_id, *args, **kwargs)
     wrapper.__name__ = f.__name__
     return wrapper
 
@@ -350,6 +367,67 @@ def compute_node_get(context, compute_id, session=None):
 
 
 @require_admin_context
+def compute_node_get_all(context, disabled=False):
+    session = get_session()
+    return session.query(models.ComputeNode).\
+                   filter_by(deleted=can_read_deleted(context)).\
+                   all()
+
+
+@require_admin_context
+def compute_node_get_all_by_arch(context, cpu_arch, xpu_arch, session=None):
+    if not session:
+        session = get_session()
+
+                     #add if available=True?
+    result = session.query(models.ComputeNode).\
+                     filter_by(cpu_arch=cpu_arch).\
+                     filter_by(xpu_arch=xpu_arch).\
+                     filter_by(deleted=can_read_deleted(context)).\
+                     all()
+
+    if not result:
+        raise exception.NotFound(_('No computeNode for cpu_arch %s') %
+                cpu_arch)
+
+    return result
+
+
+@require_admin_context
+def compute_node_get_by_cpu_arch(context, cpu_arch, session=None):
+    if not session:
+        session = get_session()
+
+    result = session.query(models.ComputeNode).\
+                     filter_by(cpu_arch=cpu_arch).\
+                     filter_by(deleted=can_read_deleted(context)).\
+                     first()
+
+    if not result:
+        raise exception.NotFound(_('No computeNode for cpu_arch %s') %
+                cpu_arch)
+
+    return result
+
+
+@require_admin_context
+def compute_node_get_by_xpu_arch(context, xpu_arch, session=None):
+    if not session:
+        session = get_session()
+
+    result = session.query(models.ComputeNode).\
+                     filter_by(xpu_arch=xpu_arch).\
+                     filter_by(deleted=can_read_deleted(context)).\
+                     first()
+
+    if not result:
+        raise exception.NotFound(_('No computeNode for xpu_arch %s') %
+                xpu_arch)
+
+    return result
+
+
+@require_admin_context
 def compute_node_create(context, values):
     compute_node_ref = models.ComputeNode()
     compute_node_ref.update(values)
@@ -445,6 +523,29 @@ def certificate_update(context, certificate_id, values):
 
 
 ###################
+@require_context
+def floating_ip_get(context, id):
+    session = get_session()
+    result = None
+    if is_admin_context(context):
+        result = session.query(models.FloatingIp).\
+                         options(joinedload('fixed_ip')).\
+                         options(joinedload_all('fixed_ip.instance')).\
+                         filter_by(id=id).\
+                         filter_by(deleted=can_read_deleted(context)).\
+                         first()
+    elif is_user_context(context):
+        result = session.query(models.FloatingIp).\
+                         options(joinedload('fixed_ip')).\
+                         options(joinedload_all('fixed_ip.instance')).\
+                         filter_by(project_id=context.project_id).\
+                         filter_by(id=id).\
+                         filter_by(deleted=False).\
+                         first()
+    if not result:
+        raise exception.FloatingIpNotFoundForFixedAddress()
+
+    return result
 
 
 @require_context
@@ -513,10 +614,10 @@ def floating_ip_count_by_project(context, project_id):
 
 
 @require_context
-def floating_ip_fixed_ip_associate(context, floating_address, fixed_address):
+def floating_ip_fixed_ip_associate(context, floating_address,
+                                   fixed_address, host):
     session = get_session()
     with session.begin():
-        # TODO(devcamcar): How to ensure floating_id belongs to user?
         floating_ip_ref = floating_ip_get_by_address(context,
                                                      floating_address,
                                                      session=session)
@@ -524,6 +625,7 @@ def floating_ip_fixed_ip_associate(context, floating_address, fixed_address):
                                                fixed_address,
                                                session=session)
         floating_ip_ref.fixed_ip = fixed_ip_ref
+        floating_ip_ref.host = host
         floating_ip_ref.save(session=session)
 
 
@@ -531,7 +633,6 @@ def floating_ip_fixed_ip_associate(context, floating_address, fixed_address):
 def floating_ip_deallocate(context, address):
     session = get_session()
     with session.begin():
-        # TODO(devcamcar): How to ensure floating id belongs to user?
         floating_ip_ref = floating_ip_get_by_address(context,
                                                      address,
                                                      session=session)
@@ -545,7 +646,6 @@ def floating_ip_deallocate(context, address):
 def floating_ip_destroy(context, address):
     session = get_session()
     with session.begin():
-        # TODO(devcamcar): Ensure address belongs to user.
         floating_ip_ref = floating_ip_get_by_address(context,
                                                      address,
                                                      session=session)
@@ -556,8 +656,6 @@ def floating_ip_destroy(context, address):
 def floating_ip_disassociate(context, address):
     session = get_session()
     with session.begin():
-        # TODO(devcamcar): Ensure address belongs to user.
-        #                  Does get_floating_ip_by_address handle this?
         floating_ip_ref = floating_ip_get_by_address(context,
                                                      address,
                                                      session=session)
@@ -567,6 +665,7 @@ def floating_ip_disassociate(context, address):
         else:
             fixed_ip_address = None
         floating_ip_ref.fixed_ip = None
+        floating_ip_ref.host = None
         floating_ip_ref.save(session=session)
     return fixed_ip_address
 
@@ -625,18 +724,41 @@ def floating_ip_get_all_by_project(context, project_id):
 
 @require_context
 def floating_ip_get_by_address(context, address, session=None):
-    # TODO(devcamcar): Ensure the address belongs to user.
     if not session:
         session = get_session()
 
     result = session.query(models.FloatingIp).\
-                     options(joinedload_all('fixed_ip.network')).\
-                     filter_by(address=address).\
-                     filter_by(deleted=can_read_deleted(context)).\
-                     first()
+                options(joinedload_all('fixed_ip.network')).\
+                filter_by(address=address).\
+                filter_by(deleted=can_read_deleted(context)).\
+                first()
+
     if not result:
         raise exception.FloatingIpNotFoundForAddress(address=address)
+
+    # If the floating IP has a project ID set, check to make sure
+    # the non-admin user has access.
+    if result.project_id and is_user_context(context):
+        authorize_project_context(context, result.project_id)
+
     return result
+
+
+@require_context
+def floating_ip_get_by_fixed_address(context, fixed_address, session=None):
+    if not session:
+        session = get_session()
+
+    fixed_ip = fixed_ip_get_by_address(context, fixed_address, session)
+    fixed_ip_id = fixed_ip['id']
+
+    return session.query(models.FloatingIp).\
+                   options(joinedload_all('fixed_ip.network')).\
+                   filter_by(fixed_ip_id=fixed_ip_id).\
+                   filter_by(deleted=can_read_deleted(context)).\
+                   all()
+
+    # NOTE(tr3buchet) please don't invent an exception here, empty list is fine
 
 
 @require_context
@@ -652,27 +774,45 @@ def floating_ip_update(context, address, values):
 ###################
 
 
-@require_context
-def fixed_ip_associate(context, address, instance_id):
+@require_admin_context
+def fixed_ip_associate(context, address, instance_id, network_id=None,
+                       reserved=False):
+    """Keyword arguments:
+    reserved -- should be a boolean value(True or False), exact value will be
+    used to filter on the fixed ip address
+    """
     session = get_session()
     with session.begin():
-        instance = instance_get(context, instance_id, session=session)
+        network_or_none = or_(models.FixedIp.network_id == network_id,
+                              models.FixedIp.network_id == None)
         fixed_ip_ref = session.query(models.FixedIp).\
-                               filter_by(address=address).\
+                               filter(network_or_none).\
+                               filter_by(reserved=reserved).\
                                filter_by(deleted=False).\
-                               filter_by(instance=None).\
+                               filter_by(address=address).\
                                with_lockmode('update').\
                                first()
         # NOTE(vish): if with_lockmode isn't supported, as in sqlite,
         #             then this has concurrency issues
-        if not fixed_ip_ref:
-            raise exception.NoMoreFixedIps()
-        fixed_ip_ref.instance = instance
+        if fixed_ip_ref is None:
+            raise exception.FixedIpNotFoundForNetwork(address=address,
+                                            network_id=network_id)
+        if fixed_ip_ref.instance is not None:
+            raise exception.FixedIpAlreadyInUse(address=address)
+
+        if not fixed_ip_ref.network:
+            fixed_ip_ref.network = network_get(context,
+                                           network_id,
+                                           session=session)
+        fixed_ip_ref.instance = instance_get(context,
+                                             instance_id,
+                                             session=session)
         session.add(fixed_ip_ref)
+    return fixed_ip_ref['address']
 
 
 @require_admin_context
-def fixed_ip_associate_pool(context, network_id, instance_id):
+def fixed_ip_associate_pool(context, network_id, instance_id=None, host=None):
     session = get_session()
     with session.begin():
         network_or_none = or_(models.FixedIp.network_id == network_id,
@@ -682,6 +822,7 @@ def fixed_ip_associate_pool(context, network_id, instance_id):
                                filter_by(reserved=False).\
                                filter_by(deleted=False).\
                                filter_by(instance=None).\
+                               filter_by(host=None).\
                                with_lockmode('update').\
                                first()
         # NOTE(vish): if with_lockmode isn't supported, as in sqlite,
@@ -692,9 +833,12 @@ def fixed_ip_associate_pool(context, network_id, instance_id):
             fixed_ip_ref.network = network_get(context,
                                            network_id,
                                            session=session)
-        fixed_ip_ref.instance = instance_get(context,
-                                             instance_id,
-                                             session=session)
+        if instance_id:
+            fixed_ip_ref.instance = instance_get(context,
+                                                 instance_id,
+                                                 session=session)
+        if host:
+            fixed_ip_ref.host = host
         session.add(fixed_ip_ref)
     return fixed_ip_ref['address']
 
@@ -750,7 +894,7 @@ def fixed_ip_get_all(context, session=None):
 
 
 @require_admin_context
-def fixed_ip_get_all_by_host(context, host=None):
+def fixed_ip_get_all_by_instance_host(context, host=None):
     session = get_session()
 
     result = session.query(models.FixedIp).\
@@ -800,6 +944,20 @@ def fixed_ip_get_by_instance(context, instance_id):
 
 
 @require_context
+def fixed_ip_get_by_network_host(context, network_id, host):
+    session = get_session()
+    rv = session.query(models.FixedIp).\
+                 filter_by(network_id=network_id).\
+                 filter_by(host=host).\
+                 filter_by(deleted=False).\
+                 first()
+    if not rv:
+        raise exception.FixedIpNotFoundForNetworkHost(network_id=network_id,
+                                                      host=host)
+    return rv
+
+
+@require_context
 def fixed_ip_get_by_virtual_interface(context, vif_id):
     session = get_session()
     rv = session.query(models.FixedIp).\
@@ -810,28 +968,6 @@ def fixed_ip_get_by_virtual_interface(context, vif_id):
     if not rv:
         raise exception.FixedIpNotFoundForVirtualInterface(vif_id=vif_id)
     return rv
-
-
-@require_context
-def fixed_ip_get_instance(context, address):
-    fixed_ip_ref = fixed_ip_get_by_address(context, address)
-    return fixed_ip_ref.instance
-
-
-@require_context
-def fixed_ip_get_instance_v6(context, address):
-    session = get_session()
-
-    # convert IPv6 address to mac
-    mac = ipv6.to_mac(address)
-
-    # get virtual interface
-    vif_ref = virtual_interface_get_by_address(context, mac)
-
-    # look up instance based on instance_id from vif row
-    result = session.query(models.Instance).\
-                     filter_by(id=vif_ref['instance_id'])
-    return result
 
 
 @require_admin_context
@@ -897,7 +1033,6 @@ def virtual_interface_get(context, vif_id, session=None):
     vif_ref = session.query(models.VirtualInterface).\
                       filter_by(id=vif_id).\
                       options(joinedload('network')).\
-                      options(joinedload('instance')).\
                       options(joinedload('fixed_ips')).\
                       first()
     return vif_ref
@@ -913,7 +1048,21 @@ def virtual_interface_get_by_address(context, address):
     vif_ref = session.query(models.VirtualInterface).\
                       filter_by(address=address).\
                       options(joinedload('network')).\
-                      options(joinedload('instance')).\
+                      options(joinedload('fixed_ips')).\
+                      first()
+    return vif_ref
+
+
+@require_context
+def virtual_interface_get_by_uuid(context, vif_uuid):
+    """Gets a virtual interface from the table.
+
+    :param vif_uuid: the uuid of the interface you're looking to get
+    """
+    session = get_session()
+    vif_ref = session.query(models.VirtualInterface).\
+                      filter_by(uuid=vif_uuid).\
+                      options(joinedload('network')).\
                       options(joinedload('fixed_ips')).\
                       first()
     return vif_ref
@@ -929,7 +1078,6 @@ def virtual_interface_get_by_fixed_ip(context, fixed_ip_id):
     vif_ref = session.query(models.VirtualInterface).\
                       filter_by(fixed_ip_id=fixed_ip_id).\
                       options(joinedload('network')).\
-                      options(joinedload('instance')).\
                       options(joinedload('fixed_ips')).\
                       first()
     return vif_ref
@@ -946,7 +1094,6 @@ def virtual_interface_get_by_instance(context, instance_id):
     vif_refs = session.query(models.VirtualInterface).\
                        filter_by(instance_id=instance_id).\
                        options(joinedload('network')).\
-                       options(joinedload('instance')).\
                        options(joinedload('fixed_ips')).\
                        all()
     return vif_refs
@@ -961,7 +1108,6 @@ def virtual_interface_get_by_instance_and_network(context, instance_id,
                       filter_by(instance_id=instance_id).\
                       filter_by(network_id=network_id).\
                       options(joinedload('network')).\
-                      options(joinedload('instance')).\
                       options(joinedload('fixed_ips')).\
                       first()
     return vif_ref
@@ -977,7 +1123,6 @@ def virtual_interface_get_by_network(context, network_id):
     vif_refs = session.query(models.VirtualInterface).\
                        filter_by(network_id=network_id).\
                        options(joinedload('network')).\
-                       options(joinedload('instance')).\
                        options(joinedload('fixed_ips')).\
                        all()
     return vif_refs
@@ -1007,14 +1152,25 @@ def virtual_interface_delete_by_instance(context, instance_id):
         virtual_interface_delete(context, vif_ref['id'])
 
 
+@require_context
+def virtual_interface_get_all(context):
+    """Get all vifs"""
+    session = get_session()
+    vif_refs = session.query(models.VirtualInterface).\
+                       options(joinedload('network')).\
+                       options(joinedload('fixed_ips')).\
+                       all()
+    return vif_refs
+
+
 ###################
 
 
-def _metadata_refs(metadata_dict):
+def _metadata_refs(metadata_dict, meta_class):
     metadata_refs = []
     if metadata_dict:
         for k, v in metadata_dict.iteritems():
-            metadata_ref = models.InstanceMetadata()
+            metadata_ref = meta_class()
             metadata_ref['key'] = k
             metadata_ref['value'] = v
             metadata_refs.append(metadata_ref)
@@ -1028,8 +1184,8 @@ def instance_create(context, values):
     context - request context object
     values - dict containing column values.
     """
-    values['metadata'] = _metadata_refs(values.get('metadata'))
-
+    values['metadata'] = _metadata_refs(values.get('metadata'),
+                                        models.InstanceMetadata)
     instance_ref = models.Instance()
     instance_ref['uuid'] = str(utils.gen_uuid())
 
@@ -1079,12 +1235,11 @@ def instance_destroy(context, instance_id):
 def instance_stop(context, instance_id):
     session = get_session()
     with session.begin():
-        from nova.compute import power_state
         session.query(models.Instance).\
                 filter_by(id=instance_id).\
                 update({'host': None,
-                        'state': power_state.SHUTOFF,
-                        'state_description': 'stopped',
+                        'vm_state': vm_states.STOPPED,
+                        'task_state': None,
                         'updated_at': literal_column('updated_at')})
         session.query(models.SecurityGroupInstanceAssociation).\
                 filter_by(instance_id=instance_id).\
@@ -1124,7 +1279,6 @@ def _build_instance_get(context, session=None):
     partial = session.query(models.Instance).\
                      options(joinedload_all('fixed_ips.floating_ips')).\
                      options(joinedload_all('fixed_ips.network')).\
-                     options(joinedload('virtual_interfaces')).\
                      options(joinedload_all('security_groups.rules')).\
                      options(joinedload('volumes')).\
                      options(joinedload('metadata')).\
@@ -1143,7 +1297,6 @@ def instance_get_all(context):
     session = get_session()
     return session.query(models.Instance).\
                    options(joinedload_all('fixed_ips.floating_ips')).\
-                   options(joinedload('virtual_interfaces')).\
                    options(joinedload('security_groups')).\
                    options(joinedload_all('fixed_ips.network')).\
                    options(joinedload('metadata')).\
@@ -1152,21 +1305,156 @@ def instance_get_all(context):
                    all()
 
 
-@require_admin_context
-def instance_get_active_by_window(context, begin, end=None):
-    """Return instances that were continuously active over the given window"""
+@require_context
+def instance_get_all_by_filters(context, filters):
+    """Return instances that match all filters.  Deleted instances
+    will be returned by default, unless there's a filter that says
+    otherwise"""
+
+    def _regexp_filter_by_metadata(instance, meta):
+        inst_metadata = [{node['key']: node['value']} \
+                         for node in instance['metadata']]
+        if isinstance(meta, list):
+            for node in meta:
+                if node not in inst_metadata:
+                    return False
+        elif isinstance(meta, dict):
+            for k, v in meta.iteritems():
+                if {k: v} not in inst_metadata:
+                    return False
+        return True
+
+    def _regexp_filter_by_column(instance, filter_name, filter_re):
+        try:
+            v = getattr(instance, filter_name)
+        except AttributeError:
+            return True
+        if v and filter_re.match(str(v)):
+            return True
+        return False
+
+    def _exact_match_filter(query, column, value):
+        """Do exact match against a column.  value to match can be a list
+        so you can match any value in the list.
+        """
+        if isinstance(value, list) or isinstance(value, set):
+            column_attr = getattr(models.Instance, column)
+            return query.filter(column_attr.in_(value))
+        else:
+            filter_dict = {}
+            filter_dict[column] = value
+            return query.filter_by(**filter_dict)
+
+    session = get_session()
+    query_prefix = session.query(models.Instance).\
+                   options(joinedload('security_groups')).\
+                   options(joinedload('metadata')).\
+                   options(joinedload('instance_type')).\
+                   order_by(desc(models.Instance.created_at))
+
+    # Make a copy of the filters dictionary to use going forward, as we'll
+    # be modifying it and we shouldn't affect the caller's use of it.
+    filters = filters.copy()
+
+    if 'changes-since' in filters:
+        changes_since = filters['changes-since']
+        query_prefix = query_prefix.\
+                            filter(models.Instance.updated_at > changes_since)
+
+    if 'deleted' in filters:
+        # Instances can be soft or hard deleted and the query needs to
+        # include or exclude both
+        if filters.pop('deleted'):
+            deleted = or_(models.Instance.deleted == True,
+                          models.Instance.vm_state == vm_states.SOFT_DELETE)
+            query_prefix = query_prefix.filter(deleted)
+        else:
+            query_prefix = query_prefix.\
+                    filter_by(deleted=False).\
+                    filter(models.Instance.vm_state != vm_states.SOFT_DELETE)
+
+    if not context.is_admin:
+        # If we're not admin context, add appropriate filter..
+        if context.project_id:
+            filters['project_id'] = context.project_id
+        else:
+            filters['user_id'] = context.user_id
+
+    # Filters for exact matches that we can do along with the SQL query...
+    # For other filters that don't match this, we will do regexp matching
+    exact_match_filter_names = ['project_id', 'user_id', 'image_ref',
+            'vm_state', 'instance_type_id', 'uuid']
+
+    query_filters = [key for key in filters.iterkeys()
+            if key in exact_match_filter_names]
+
+    for filter_name in query_filters:
+        # Do the matching and remove the filter from the dictionary
+        # so we don't try it again below..
+        query_prefix = _exact_match_filter(query_prefix, filter_name,
+                filters.pop(filter_name))
+
+    instances = query_prefix.all()
+    if not instances:
+        return []
+
+    # Now filter on everything else for regexp matching..
+    # For filters not in the list, we'll attempt to use the filter_name
+    # as a column name in Instance..
+    regexp_filter_funcs = {}
+
+    for filter_name in filters.iterkeys():
+        filter_func = regexp_filter_funcs.get(filter_name, None)
+        filter_re = re.compile(str(filters[filter_name]))
+        if filter_func:
+            filter_l = lambda instance: filter_func(instance, filter_re)
+        elif filter_name == 'metadata':
+            filter_l = lambda instance: _regexp_filter_by_metadata(instance,
+                    filters[filter_name])
+        else:
+            filter_l = lambda instance: _regexp_filter_by_column(instance,
+                    filter_name, filter_re)
+        instances = filter(filter_l, instances)
+        if not instances:
+            break
+
+    return instances
+
+
+@require_context
+def instance_get_active_by_window(context, begin, end=None, project_id=None):
+    """Return instances that were continuously active over window."""
     session = get_session()
     query = session.query(models.Instance).\
-                   options(joinedload_all('fixed_ip.floating_ips')).\
-                   options(joinedload('security_groups')).\
-                   options(joinedload_all('fixed_ip.network')).\
-                   options(joinedload('instance_type')).\
-                   filter(models.Instance.launched_at < begin)
+                    filter(models.Instance.launched_at < begin)
     if end:
         query = query.filter(or_(models.Instance.terminated_at == None,
                                  models.Instance.terminated_at > end))
     else:
         query = query.filter(models.Instance.terminated_at == None)
+    if project_id:
+        query = query.filter_by(project_id=project_id)
+    return query.all()
+
+
+@require_admin_context
+def instance_get_active_by_window_joined(context, begin, end=None,
+                                         project_id=None):
+    """Return instances and joins that were continuously active over window."""
+    session = get_session()
+    query = session.query(models.Instance).\
+                    options(joinedload_all('fixed_ips.floating_ips')).\
+                    options(joinedload('security_groups')).\
+                    options(joinedload_all('fixed_ips.network')).\
+                    options(joinedload('instance_type')).\
+                    filter(models.Instance.launched_at < begin)
+    if end:
+        query = query.filter(or_(models.Instance.terminated_at == None,
+                                 models.Instance.terminated_at > end))
+    else:
+        query = query.filter(models.Instance.terminated_at == None)
+    if project_id:
+        query = query.filter_by(project_id=project_id)
     return query.all()
 
 
@@ -1175,7 +1463,6 @@ def instance_get_all_by_user(context, user_id):
     session = get_session()
     return session.query(models.Instance).\
                    options(joinedload_all('fixed_ips.floating_ips')).\
-                   options(joinedload('virtual_interfaces')).\
                    options(joinedload('security_groups')).\
                    options(joinedload_all('fixed_ips.network')).\
                    options(joinedload('metadata')).\
@@ -1190,7 +1477,6 @@ def instance_get_all_by_host(context, host):
     session = get_session()
     return session.query(models.Instance).\
                    options(joinedload_all('fixed_ips.floating_ips')).\
-                   options(joinedload('virtual_interfaces')).\
                    options(joinedload('security_groups')).\
                    options(joinedload_all('fixed_ips.network')).\
                    options(joinedload('metadata')).\
@@ -1207,7 +1493,6 @@ def instance_get_all_by_project(context, project_id):
     session = get_session()
     return session.query(models.Instance).\
                    options(joinedload_all('fixed_ips.floating_ips')).\
-                   options(joinedload('virtual_interfaces')).\
                    options(joinedload('security_groups')).\
                    options(joinedload_all('fixed_ips.network')).\
                    options(joinedload('metadata')).\
@@ -1220,30 +1505,23 @@ def instance_get_all_by_project(context, project_id):
 @require_context
 def instance_get_all_by_reservation(context, reservation_id):
     session = get_session()
+    query = session.query(models.Instance).\
+                    filter_by(reservation_id=reservation_id).\
+                    options(joinedload_all('fixed_ips.floating_ips')).\
+                    options(joinedload('security_groups')).\
+                    options(joinedload_all('fixed_ips.network')).\
+                    options(joinedload('metadata')).\
+                    options(joinedload('instance_type'))
 
     if is_admin_context(context):
-        return session.query(models.Instance).\
-                       options(joinedload_all('fixed_ips.floating_ips')).\
-                       options(joinedload('virtual_interfaces')).\
-                       options(joinedload('security_groups')).\
-                       options(joinedload_all('fixed_ips.network')).\
-                       options(joinedload('metadata')).\
-                       options(joinedload('instance_type')).\
-                       filter_by(reservation_id=reservation_id).\
-                       filter_by(deleted=can_read_deleted(context)).\
-                       all()
+        return query.\
+                filter_by(deleted=can_read_deleted(context)).\
+                all()
     elif is_user_context(context):
-        return session.query(models.Instance).\
-                       options(joinedload_all('fixed_ips.floating_ips')).\
-                       options(joinedload('virtual_interfaces')).\
-                       options(joinedload('security_groups')).\
-                       options(joinedload_all('fixed_ips.network')).\
-                       options(joinedload('metadata')).\
-                       options(joinedload('instance_type')).\
-                       filter_by(project_id=context.project_id).\
-                       filter_by(reservation_id=reservation_id).\
-                       filter_by(deleted=False).\
-                       all()
+        return query.\
+                filter_by(project_id=context.project_id).\
+                filter_by(deleted=False).\
+                all()
 
 
 @require_admin_context
@@ -1251,9 +1529,8 @@ def instance_get_project_vpn(context, project_id):
     session = get_session()
     return session.query(models.Instance).\
                    options(joinedload_all('fixed_ips.floating_ips')).\
-                   options(joinedload('virtual_interfaces')).\
                    options(joinedload('security_groups')).\
-                   options(joinedload_all('fixed_ip.network')).\
+                   options(joinedload_all('fixed_ips.network')).\
                    options(joinedload('metadata')).\
                    options(joinedload('instance_type')).\
                    filter_by(project_id=project_id).\
@@ -1285,7 +1562,7 @@ def instance_get_fixed_addresses_v6(context, instance_id):
         network_refs = network_get_all_by_instance(context, instance_id)
         # compile a list of cidr_v6 prefixes sorted by network id
         prefixes = [ref.cidr_v6 for ref in
-                    sorted(network_refs, key=lambda ref: ref.id)]
+                sorted(network_refs, key=lambda ref: ref.id)]
         # get vifs associated with instance
         vif_refs = virtual_interface_get_by_instance(context, instance_ref.id)
         # compile list of the mac_addresses for vifs sorted by network id
@@ -1296,7 +1573,7 @@ def instance_get_fixed_addresses_v6(context, instance_id):
         # combine prefixes, macs, and project_id into (prefix,mac,p_id) tuples
         prefix_mac_tuples = zip(prefixes, macs, [project_id for m in macs])
         # return list containing ipv6 address for each tuple
-        return [ipv6.to_global_ipv6(*t) for t in prefix_mac_tuples]
+        return [ipv6.to_global(*t) for t in prefix_mac_tuples]
 
 
 @require_context
@@ -1312,28 +1589,21 @@ def instance_get_floating_address(context, instance_id):
     return fixed_ip_refs[0].floating_ips[0]['address']
 
 
-@require_admin_context
-def instance_set_state(context, instance_id, state, description=None):
-    # TODO(devcamcar): Move this out of models and into driver
-    from nova.compute import power_state
-    if not description:
-        description = power_state.name(state)
-    db.instance_update(context,
-                       instance_id,
-                       {'state': state,
-                        'state_description': description})
-
-
 @require_context
 def instance_update(context, instance_id, values):
     session = get_session()
     metadata = values.get('metadata')
     if metadata is not None:
-        instance_metadata_delete_all(context, instance_id)
-        instance_metadata_update_or_create(context, instance_id,
-                                           values.pop('metadata'))
+        instance_metadata_update(context,
+                                 instance_id,
+                                 values.pop('metadata'),
+                                 delete=True)
     with session.begin():
-        instance_ref = instance_get(context, instance_id, session=session)
+        if utils.is_uuid_like(instance_id):
+            instance_ref = instance_get_by_uuid(context, instance_id,
+                                                session=session)
+        else:
+            instance_ref = instance_get(context, instance_id, session=session)
         instance_ref.update(values)
         instance_ref.save(session=session)
         return instance_ref
@@ -1352,42 +1622,16 @@ def instance_add_security_group(context, instance_id, security_group_id):
 
 
 @require_context
-def instance_get_vcpu_sum_by_host_and_project(context, hostname, proj_id):
+def instance_remove_security_group(context, instance_id, security_group_id):
+    """Disassociate the given security group from the given instance"""
     session = get_session()
-    result = session.query(models.Instance).\
-                      filter_by(host=hostname).\
-                      filter_by(project_id=proj_id).\
-                      filter_by(deleted=False).\
-                      value(func.sum(models.Instance.vcpus))
-    if not result:
-        return 0
-    return result
 
-
-@require_context
-def instance_get_memory_sum_by_host_and_project(context, hostname, proj_id):
-    session = get_session()
-    result = session.query(models.Instance).\
-                      filter_by(host=hostname).\
-                      filter_by(project_id=proj_id).\
-                      filter_by(deleted=False).\
-                      value(func.sum(models.Instance.memory_mb))
-    if not result:
-        return 0
-    return result
-
-
-@require_context
-def instance_get_disk_sum_by_host_and_project(context, hostname, proj_id):
-    session = get_session()
-    result = session.query(models.Instance).\
-                      filter_by(host=hostname).\
-                      filter_by(project_id=proj_id).\
-                      filter_by(deleted=False).\
-                      value(func.sum(models.Instance.local_gb))
-    if not result:
-        return 0
-    return result
+    session.query(models.SecurityGroupInstanceAssociation).\
+                filter_by(instance_id=instance_id).\
+                filter_by(security_group_id=security_group_id).\
+                update({'deleted': True,
+                        'deleted_at': utils.utcnow(),
+                        'updated_at': literal_column('updated_at')})
 
 
 @require_context
@@ -1406,9 +1650,26 @@ def instance_action_create(context, values):
 def instance_get_actions(context, instance_id):
     """Return the actions associated to the given instance id"""
     session = get_session()
+
+    if utils.is_uuid_like(instance_id):
+        instance = instance_get_by_uuid(context, instance_id, session)
+        instance_id = instance.id
+
     return session.query(models.InstanceActions).\
         filter_by(instance_id=instance_id).\
-        all()
+       all()
+
+
+@require_context
+def instance_get_id_to_uuid_mapping(context, ids):
+    session = get_session()
+    instances = session.query(models.Instance).\
+                        filter(models.Instance.id.in_(ids)).\
+                        all()
+    mapping = {}
+    for instance in instances:
+        mapping[instance['id']] = instance['uuid']
+    return mapping
 
 
 ###################
@@ -1480,8 +1741,6 @@ def network_associate(context, project_id, force=False):
     called by project_get_networks under certain conditions
     and network manager add_network_to_project()
 
-    only associates projects with networks that have configured hosts
-
     only associate if the project doesn't already have a network
     or if force is True
 
@@ -1497,7 +1756,6 @@ def network_associate(context, project_id, force=False):
         def network_query(project_filter):
             return session.query(models.Network).\
                            filter_by(deleted=False).\
-                           filter(models.Network.host != None).\
                            filter_by(project_id=project_filter).\
                            with_lockmode('update').\
                            first()
@@ -1629,6 +1887,40 @@ def network_get_all(context):
     return result
 
 
+@require_admin_context
+def network_get_all_by_uuids(context, network_uuids, project_id=None):
+    session = get_session()
+    project_or_none = or_(models.Network.project_id == project_id,
+                              models.Network.project_id == None)
+    result = session.query(models.Network).\
+                 filter(models.Network.uuid.in_(network_uuids)).\
+                 filter(project_or_none).\
+                 filter_by(deleted=False).all()
+    if not result:
+        raise exception.NoNetworksFound()
+
+    #check if host is set to all of the networks
+    # returned in the result
+    for network in result:
+            if network['host'] is None:
+                raise exception.NetworkHostNotSet(network_id=network['id'])
+
+    #check if the result contains all the networks
+    #we are looking for
+    for network_uuid in network_uuids:
+        found = False
+        for network in result:
+            if network['uuid'] == network_uuid:
+                found = True
+                break
+        if not found:
+            if project_id:
+                raise exception.NetworkNotFoundForProject(network_uuid=uuid,
+                                              project_id=context.project_id)
+            raise exception.NetworkNotFound(network_id=network_uuid)
+
+    return result
+
 # NOTE(vish): pylint complains because of the long method name, but
 #             it fits with the names of the rest of the methods
 # pylint: disable=C0103
@@ -1660,10 +1952,26 @@ def network_get_by_bridge(context, bridge):
 
 
 @require_admin_context
+def network_get_by_uuid(context, uuid):
+    session = get_session()
+    result = session.query(models.Network).\
+                 filter_by(uuid=uuid).\
+                 filter_by(deleted=False).\
+                 first()
+
+    if not result:
+        raise exception.NetworkNotFoundForUUID(uuid=uuid)
+    return result
+
+
+@require_admin_context
 def network_get_by_cidr(context, cidr):
     session = get_session()
     result = session.query(models.Network).\
-                filter_by(cidr=cidr).first()
+                filter(or_(models.Network.cidr == cidr,
+                           models.Network.cidr_v6 == cidr)).\
+                filter_by(deleted=False).\
+                first()
 
     if not result:
         raise exception.NetworkNotFoundForCidr(cidr=cidr)
@@ -1704,9 +2012,16 @@ def network_get_all_by_instance(_context, instance_id):
 def network_get_all_by_host(context, host):
     session = get_session()
     with session.begin():
+        # NOTE(vish): return networks that have host set
+        #             or that have a fixed ip with host set
+        host_filter = or_(models.Network.host == host,
+                          models.FixedIp.host == host)
+
         return session.query(models.Network).\
                        filter_by(deleted=False).\
-                       filter_by(host=host).\
+                       join(models.Network.fixed_ips).\
+                       filter(host_filter).\
+                       filter_by(deleted=False).\
                        all()
 
 
@@ -1738,6 +2053,7 @@ def network_update(context, network_id, values):
         network_ref = network_get(context, network_id, session=session)
         network_ref.update(values)
         network_ref.save(session=session)
+        return network_ref
 
 
 ###################
@@ -1854,6 +2170,7 @@ def quota_get(context, project_id, resource, session=None):
 
 @require_context
 def quota_get_all_by_project(context, project_id):
+    authorize_project_context(context, project_id)
     session = get_session()
     result = {'project_id': project_id}
     rows = session.query(models.Quota).\
@@ -1959,6 +2276,8 @@ def volume_attached(context, volume_id, instance_id, mountpoint):
 
 @require_context
 def volume_create(context, values):
+    values['volume_metadata'] = _metadata_refs(values.get('metadata'),
+                                               models.VolumeMetadata)
     volume_ref = models.Volume()
     volume_ref.update(values)
 
@@ -1995,6 +2314,11 @@ def volume_destroy(context, volume_id):
         session.query(models.IscsiTarget).\
                 filter_by(volume_id=volume_id).\
                 update({'volume_id': None})
+        session.query(models.VolumeMetadata).\
+                filter_by(volume_id=volume_id).\
+                update({'deleted': True,
+                        'deleted_at': utils.utcnow(),
+                        'updated_at': literal_column('updated_at')})
 
 
 @require_admin_context
@@ -2018,12 +2342,16 @@ def volume_get(context, volume_id, session=None):
     if is_admin_context(context):
         result = session.query(models.Volume).\
                          options(joinedload('instance')).\
+                         options(joinedload('volume_metadata')).\
+                         options(joinedload('volume_type')).\
                          filter_by(id=volume_id).\
                          filter_by(deleted=can_read_deleted(context)).\
                          first()
     elif is_user_context(context):
         result = session.query(models.Volume).\
                          options(joinedload('instance')).\
+                         options(joinedload('volume_metadata')).\
+                         options(joinedload('volume_type')).\
                          filter_by(project_id=context.project_id).\
                          filter_by(id=volume_id).\
                          filter_by(deleted=False).\
@@ -2039,6 +2367,8 @@ def volume_get_all(context):
     session = get_session()
     return session.query(models.Volume).\
                    options(joinedload('instance')).\
+                   options(joinedload('volume_metadata')).\
+                   options(joinedload('volume_type')).\
                    filter_by(deleted=can_read_deleted(context)).\
                    all()
 
@@ -2048,6 +2378,8 @@ def volume_get_all_by_host(context, host):
     session = get_session()
     return session.query(models.Volume).\
                    options(joinedload('instance')).\
+                   options(joinedload('volume_metadata')).\
+                   options(joinedload('volume_type')).\
                    filter_by(host=host).\
                    filter_by(deleted=can_read_deleted(context)).\
                    all()
@@ -2057,6 +2389,8 @@ def volume_get_all_by_host(context, host):
 def volume_get_all_by_instance(context, instance_id):
     session = get_session()
     result = session.query(models.Volume).\
+                     options(joinedload('volume_metadata')).\
+                     options(joinedload('volume_type')).\
                      filter_by(instance_id=instance_id).\
                      filter_by(deleted=False).\
                      all()
@@ -2072,6 +2406,8 @@ def volume_get_all_by_project(context, project_id):
     session = get_session()
     return session.query(models.Volume).\
                    options(joinedload('instance')).\
+                   options(joinedload('volume_metadata')).\
+                   options(joinedload('volume_type')).\
                    filter_by(project_id=project_id).\
                    filter_by(deleted=can_read_deleted(context)).\
                    all()
@@ -2084,6 +2420,8 @@ def volume_get_instance(context, volume_id):
                      filter_by(id=volume_id).\
                      filter_by(deleted=can_read_deleted(context)).\
                      options(joinedload('instance')).\
+                     options(joinedload('volume_metadata')).\
+                     options(joinedload('volume_type')).\
                      first()
     if not result:
         raise exception.VolumeNotFound(volume_id=volume_id)
@@ -2118,10 +2456,114 @@ def volume_get_iscsi_target_num(context, volume_id):
 @require_context
 def volume_update(context, volume_id, values):
     session = get_session()
+    metadata = values.get('metadata')
+    if metadata is not None:
+        volume_metadata_update(context,
+                                volume_id,
+                                values.pop('metadata'),
+                                delete=True)
     with session.begin():
         volume_ref = volume_get(context, volume_id, session=session)
         volume_ref.update(values)
         volume_ref.save(session=session)
+
+
+####################
+
+
+@require_context
+@require_volume_exists
+def volume_metadata_get(context, volume_id):
+    session = get_session()
+
+    meta_results = session.query(models.VolumeMetadata).\
+                    filter_by(volume_id=volume_id).\
+                    filter_by(deleted=False).\
+                    all()
+
+    meta_dict = {}
+    for i in meta_results:
+        meta_dict[i['key']] = i['value']
+    return meta_dict
+
+
+@require_context
+@require_volume_exists
+def volume_metadata_delete(context, volume_id, key):
+    session = get_session()
+    session.query(models.VolumeMetadata).\
+        filter_by(volume_id=volume_id).\
+        filter_by(key=key).\
+        filter_by(deleted=False).\
+        update({'deleted': True,
+                'deleted_at': utils.utcnow(),
+                'updated_at': literal_column('updated_at')})
+
+
+@require_context
+@require_volume_exists
+def volume_metadata_delete_all(context, volume_id):
+    session = get_session()
+    session.query(models.VolumeMetadata).\
+        filter_by(volume_id=volume_id).\
+        filter_by(deleted=False).\
+        update({'deleted': True,
+                'deleted_at': utils.utcnow(),
+                'updated_at': literal_column('updated_at')})
+
+
+@require_context
+@require_volume_exists
+def volume_metadata_get_item(context, volume_id, key, session=None):
+    if not session:
+        session = get_session()
+
+    meta_result = session.query(models.VolumeMetadata).\
+                    filter_by(volume_id=volume_id).\
+                    filter_by(key=key).\
+                    filter_by(deleted=False).\
+                    first()
+
+    if not meta_result:
+        raise exception.VolumeMetadataNotFound(metadata_key=key,
+                                               volume_id=volume_id)
+    return meta_result
+
+
+@require_context
+@require_volume_exists
+def volume_metadata_update(context, volume_id, metadata, delete):
+    session = get_session()
+
+    # Set existing metadata to deleted if delete argument is True
+    if delete:
+        original_metadata = volume_metadata_get(context, volume_id)
+        for meta_key, meta_value in original_metadata.iteritems():
+            if meta_key not in metadata:
+                meta_ref = volume_metadata_get_item(context, volume_id,
+                                                    meta_key, session)
+                meta_ref.update({'deleted': True})
+                meta_ref.save(session=session)
+
+    meta_ref = None
+
+    # Now update all existing items with new values, or create new meta objects
+    for meta_key, meta_value in metadata.iteritems():
+
+        # update the value whether it exists or not
+        item = {"value": meta_value}
+
+        try:
+            meta_ref = volume_metadata_get_item(context, volume_id,
+                                                  meta_key, session)
+        except exception.VolumeMetadataNotFound, e:
+            meta_ref = models.VolumeMetadata()
+            item.update({"key": meta_key, "volume_id": volume_id})
+
+        meta_ref.update(item)
+        meta_ref.save(session=session)
+
+    return metadata
 
 
 ###################
@@ -2239,6 +2681,20 @@ def block_device_mapping_update_or_create(context, values):
         else:
             result.update(values)
 
+        # NOTE(yamahata): same virtual device name can be specified multiple
+        #                 times. So delete the existing ones.
+        virtual_name = values['virtual_name']
+        if (virtual_name is not None and
+            block_device.is_swap_or_ephemeral(virtual_name)):
+            session.query(models.BlockDeviceMapping).\
+            filter_by(instance_id=values['instance_id']).\
+            filter_by(virtual_name=virtual_name).\
+            filter(models.BlockDeviceMapping.device_name !=
+                   values['device_name']).\
+            update({'deleted': True,
+                    'deleted_at': utils.utcnow(),
+                    'updated_at': literal_column('updated_at')})
+
 
 @require_context
 def block_device_mapping_get_all_by_instance(context, instance_id):
@@ -2298,6 +2754,7 @@ def security_group_get(context, security_group_id, session=None):
                          filter_by(deleted=can_read_deleted(context),).\
                          filter_by(id=security_group_id).\
                          options(joinedload_all('rules')).\
+                         options(joinedload_all('instances')).\
                          first()
     else:
         result = session.query(models.SecurityGroup).\
@@ -2305,6 +2762,7 @@ def security_group_get(context, security_group_id, session=None):
                          filter_by(id=security_group_id).\
                          filter_by(project_id=context.project_id).\
                          options(joinedload_all('rules')).\
+                         options(joinedload_all('instances')).\
                          first()
     if not result:
         raise exception.SecurityGroupNotFound(
@@ -2439,12 +2897,14 @@ def security_group_rule_get_by_security_group(context, security_group_id,
         result = session.query(models.SecurityGroupIngressRule).\
                          filter_by(deleted=can_read_deleted(context)).\
                          filter_by(parent_group_id=security_group_id).\
+                         options(joinedload_all('grantee_group')).\
                          all()
     else:
         # TODO(vish): Join to group and check for project_id
         result = session.query(models.SecurityGroupIngressRule).\
                          filter_by(deleted=False).\
                          filter_by(parent_group_id=security_group_id).\
+                         options(joinedload_all('grantee_group')).\
                          all()
     return result
 
@@ -2798,15 +3258,30 @@ def migration_get(context, id, session=None):
 
 
 @require_admin_context
-def migration_get_by_instance_and_status(context, instance_id, status):
+def migration_get_by_instance_and_status(context, instance_uuid, status):
     session = get_session()
     result = session.query(models.Migration).\
-                     filter_by(instance_id=instance_id).\
+                     filter_by(instance_uuid=instance_uuid).\
                      filter_by(status=status).first()
     if not result:
-        raise exception.MigrationNotFoundByStatus(instance_id=instance_id,
+        raise exception.MigrationNotFoundByStatus(instance_id=instance_uuid,
                                                   status=status)
     return result
+
+
+@require_admin_context
+def migration_get_all_unconfirmed(context, confirm_window, session=None):
+    confirm_window = datetime.datetime.utcnow() - datetime.timedelta(
+            seconds=confirm_window)
+
+    if not session:
+        session = get_session()
+
+    results = session.query(models.Migration).\
+            filter(models.Migration.updated_at <= confirm_window).\
+            filter_by(status="FINISHED").all()
+
+    return results
 
 
 ##################
@@ -2942,7 +3417,7 @@ def instance_type_create(_context, values):
 
 
 def _dict_with_extra_specs(inst_type_query):
-    """Takes an instance type query returned by sqlalchemy
+    """Takes an instance OR volume type query returned by sqlalchemy
     and returns it as a dictionary, converting the extra_specs
     entry from a list of dicts:
 
@@ -2961,31 +3436,31 @@ def _dict_with_extra_specs(inst_type_query):
 
 
 @require_context
-def instance_type_get_all(context, inactive=False):
+def instance_type_get_all(context, inactive=False, filters=None):
     """
-    Returns a dict describing all instance_types with name as key.
+    Returns all instance types.
     """
+    filters = filters or {}
     session = get_session()
-    if inactive:
-        inst_types = session.query(models.InstanceTypes).\
-                        options(joinedload('extra_specs')).\
-                        order_by("name").\
-                        all()
-    else:
-        inst_types = session.query(models.InstanceTypes).\
-                        options(joinedload('extra_specs')).\
-                        filter_by(deleted=False).\
-                        order_by("name").\
-                        all()
-    inst_dict = {}
-    if inst_types:
-        for i in inst_types:
-            inst_dict[i['name']] = _dict_with_extra_specs(i)
-    return inst_dict
+    partial = session.query(models.InstanceTypes)\
+                     .options(joinedload('extra_specs'))
+    if not inactive:
+        partial = partial.filter_by(deleted=False)
+
+    if 'min_memory_mb' in filters:
+        partial = partial.filter(
+                models.InstanceTypes.memory_mb >= filters['min_memory_mb'])
+    if 'min_local_gb' in filters:
+        partial = partial.filter(
+                models.InstanceTypes.local_gb >= filters['min_local_gb'])
+
+    inst_types = partial.order_by("name").all()
+
+    return [_dict_with_extra_specs(i) for i in inst_types]
 
 
 @require_context
-def instance_type_get_by_id(context, id):
+def instance_type_get(context, id):
     """Returns a dict describing specific instance_type"""
     session = get_session()
     inst_type = session.query(models.InstanceTypes).\
@@ -3016,13 +3491,18 @@ def instance_type_get_by_name(context, name):
 @require_context
 def instance_type_get_by_flavor_id(context, id):
     """Returns a dict describing specific flavor_id"""
+    try:
+        flavor_id = int(id)
+    except ValueError:
+        raise exception.FlavorNotFound(flavor_id=id)
+
     session = get_session()
     inst_type = session.query(models.InstanceTypes).\
                                     options(joinedload('extra_specs')).\
-                                    filter_by(flavorid=int(id)).\
+                                    filter_by(flavorid=flavor_id).\
                                     first()
     if not inst_type:
-        raise exception.FlavorNotFound(flavor_id=id)
+        raise exception.FlavorNotFound(flavor_id=flavor_id)
     else:
         return _dict_with_extra_specs(inst_type)
 
@@ -3147,8 +3627,9 @@ def instance_metadata_delete_all(context, instance_id):
 
 @require_context
 @require_instance_exists
-def instance_metadata_get_item(context, instance_id, key):
-    session = get_session()
+def instance_metadata_get_item(context, instance_id, key, session=None):
+    if not session:
+        session = get_session()
 
     meta_result = session.query(models.InstanceMetadata).\
                     filter_by(instance_id=instance_id).\
@@ -3164,21 +3645,35 @@ def instance_metadata_get_item(context, instance_id, key):
 
 @require_context
 @require_instance_exists
-def instance_metadata_update_or_create(context, instance_id, metadata):
+def instance_metadata_update(context, instance_id, metadata, delete):
     session = get_session()
 
-    original_metadata = instance_metadata_get(context, instance_id)
+    # Set existing metadata to deleted if delete argument is True
+    if delete:
+        original_metadata = instance_metadata_get(context, instance_id)
+        for meta_key, meta_value in original_metadata.iteritems():
+            if meta_key not in metadata:
+                meta_ref = instance_metadata_get_item(context, instance_id,
+                                                      meta_key, session)
+                meta_ref.update({'deleted': True})
+                meta_ref.save(session=session)
 
     meta_ref = None
-    for key, value in metadata.iteritems():
+
+    # Now update all existing items with new values, or create new meta objects
+    for meta_key, meta_value in metadata.iteritems():
+
+        # update the value whether it exists or not
+        item = {"value": meta_value}
+
         try:
-            meta_ref = instance_metadata_get_item(context, instance_id, key,
-                                                        session)
-        except:
+            meta_ref = instance_metadata_get_item(context, instance_id,
+                                                  meta_key, session)
+        except exception.InstanceMetadataNotFound, e:
             meta_ref = models.InstanceMetadata()
-        meta_ref.update({"key": key, "value": value,
-                            "instance_id": instance_id,
-                            "deleted": False})
+            item.update({"key": meta_key, "instance_id": instance_id})
+
+        meta_ref.update(item)
         meta_ref.save(session=session)
 
     return metadata
@@ -3222,8 +3717,8 @@ def agent_build_destroy(context, agent_build_id):
     with session.begin():
         session.query(models.AgentBuild).\
                 filter_by(id=agent_build_id).\
-                update({'deleted': 1,
-                        'deleted_at': datetime.datetime.utcnow(),
+                update({'deleted': True,
+                        'deleted_at': utils.utcnow(),
                         'updated_at': literal_column('updated_at')})
 
 
@@ -3269,10 +3764,13 @@ def instance_type_extra_specs_delete(context, instance_type_id, key):
 
 
 @require_context
-def instance_type_extra_specs_get_item(context, instance_type_id, key):
-    session = get_session()
+def instance_type_extra_specs_get_item(context, instance_type_id, key,
+                                       session=None):
 
-    sppec_result = session.query(models.InstanceTypeExtraSpecs).\
+    if not session:
+        session = get_session()
+
+    spec_result = session.query(models.InstanceTypeExtraSpecs).\
                     filter_by(instance_type_id=instance_type_id).\
                     filter_by(key=key).\
                     filter_by(deleted=False).\
@@ -3292,14 +3790,287 @@ def instance_type_extra_specs_update_or_create(context, instance_type_id,
     spec_ref = None
     for key, value in specs.iteritems():
         try:
-            spec_ref = instance_type_extra_specs_get_item(context,
-                                                          instance_type_id,
-                                                          key,
-                                                          session)
-        except:
+            spec_ref = instance_type_extra_specs_get_item(
+                context, instance_type_id, key, session)
+        except exception.InstanceTypeExtraSpecsNotFound, e:
             spec_ref = models.InstanceTypeExtraSpecs()
         spec_ref.update({"key": key, "value": value,
                          "instance_type_id": instance_type_id,
                          "deleted": 0})
         spec_ref.save(session=session)
     return specs
+
+
+##################
+
+
+@require_admin_context
+def volume_type_create(_context, values):
+    """Create a new instance type. In order to pass in extra specs,
+    the values dict should contain a 'extra_specs' key/value pair:
+
+    {'extra_specs' : {'k1': 'v1', 'k2': 'v2', ...}}
+
+    """
+    try:
+        specs = values.get('extra_specs')
+
+        values['extra_specs'] = _metadata_refs(values.get('extra_specs'),
+                                                models.VolumeTypeExtraSpecs)
+        volume_type_ref = models.VolumeTypes()
+        volume_type_ref.update(values)
+        volume_type_ref.save()
+    except Exception, e:
+        raise exception.DBError(e)
+    return volume_type_ref
+
+
+@require_context
+def volume_type_get_all(context, inactive=False, filters={}):
+    """
+    Returns a dict describing all volume_types with name as key.
+    """
+    session = get_session()
+    if inactive:
+        vol_types = session.query(models.VolumeTypes).\
+                        options(joinedload('extra_specs')).\
+                        order_by("name").\
+                        all()
+    else:
+        vol_types = session.query(models.VolumeTypes).\
+                        options(joinedload('extra_specs')).\
+                        filter_by(deleted=False).\
+                        order_by("name").\
+                        all()
+    vol_dict = {}
+    if vol_types:
+        for i in vol_types:
+            vol_dict[i['name']] = _dict_with_extra_specs(i)
+    return vol_dict
+
+
+@require_context
+def volume_type_get(context, id):
+    """Returns a dict describing specific volume_type"""
+    session = get_session()
+    vol_type = session.query(models.VolumeTypes).\
+                    options(joinedload('extra_specs')).\
+                    filter_by(id=id).\
+                    first()
+
+    if not vol_type:
+        raise exception.VolumeTypeNotFound(volume_type=id)
+    else:
+        return _dict_with_extra_specs(vol_type)
+
+
+@require_context
+def volume_type_get_by_name(context, name):
+    """Returns a dict describing specific volume_type"""
+    session = get_session()
+    vol_type = session.query(models.VolumeTypes).\
+                    options(joinedload('extra_specs')).\
+                    filter_by(name=name).\
+                    first()
+    if not vol_type:
+        raise exception.VolumeTypeNotFoundByName(volume_type_name=name)
+    else:
+        return _dict_with_extra_specs(vol_type)
+
+
+@require_admin_context
+def volume_type_destroy(context, name):
+    """ Marks specific volume_type as deleted"""
+    session = get_session()
+    volume_type_ref = session.query(models.VolumeTypes).\
+                                      filter_by(name=name)
+    records = volume_type_ref.update(dict(deleted=True))
+    if records == 0:
+        raise exception.VolumeTypeNotFoundByName(volume_type_name=name)
+    else:
+        return volume_type_ref
+
+
+@require_admin_context
+def volume_type_purge(context, name):
+    """ Removes specific volume_type from DB
+        Usually volume_type_destroy should be used
+    """
+    session = get_session()
+    volume_type_ref = session.query(models.VolumeTypes).\
+                                      filter_by(name=name)
+    records = volume_type_ref.delete()
+    if records == 0:
+        raise exception.VolumeTypeNotFoundByName(volume_type_name=name)
+    else:
+        return volume_type_ref
+
+
+####################
+
+
+@require_context
+def volume_type_extra_specs_get(context, volume_type_id):
+    session = get_session()
+
+    spec_results = session.query(models.VolumeTypeExtraSpecs).\
+                    filter_by(volume_type_id=volume_type_id).\
+                    filter_by(deleted=False).\
+                    all()
+
+    spec_dict = {}
+    for i in spec_results:
+        spec_dict[i['key']] = i['value']
+    return spec_dict
+
+
+@require_context
+def volume_type_extra_specs_delete(context, volume_type_id, key):
+    session = get_session()
+    session.query(models.VolumeTypeExtraSpecs).\
+        filter_by(volume_type_id=volume_type_id).\
+        filter_by(key=key).\
+        filter_by(deleted=False).\
+        update({'deleted': True,
+                'deleted_at': utils.utcnow(),
+                'updated_at': literal_column('updated_at')})
+
+
+@require_context
+def volume_type_extra_specs_get_item(context, volume_type_id, key,
+                                       session=None):
+
+    if not session:
+        session = get_session()
+
+    spec_result = session.query(models.VolumeTypeExtraSpecs).\
+                    filter_by(volume_type_id=volume_type_id).\
+                    filter_by(key=key).\
+                    filter_by(deleted=False).\
+                    first()
+
+    if not spec_result:
+        raise exception.\
+           VolumeTypeExtraSpecsNotFound(extra_specs_key=key,
+                                        volume_type_id=volume_type_id)
+    return spec_result
+
+
+@require_context
+def volume_type_extra_specs_update_or_create(context, volume_type_id,
+                                             specs):
+    session = get_session()
+    spec_ref = None
+    for key, value in specs.iteritems():
+        try:
+            spec_ref = volume_type_extra_specs_get_item(
+                context, volume_type_id, key, session)
+        except exception.VolumeTypeExtraSpecsNotFound, e:
+            spec_ref = models.VolumeTypeExtraSpecs()
+        spec_ref.update({"key": key, "value": value,
+                         "volume_type_id": volume_type_id,
+                         "deleted": 0})
+        spec_ref.save(session=session)
+    return specs
+
+
+    ####################
+
+
+@require_admin_context
+def vsa_create(context, values):
+    """
+    Creates Virtual Storage Array record.
+    """
+    try:
+        vsa_ref = models.VirtualStorageArray()
+        vsa_ref.update(values)
+        vsa_ref.save()
+    except Exception, e:
+        raise exception.DBError(e)
+    return vsa_ref
+
+
+@require_admin_context
+def vsa_update(context, vsa_id, values):
+    """
+    Updates Virtual Storage Array record.
+    """
+    session = get_session()
+    with session.begin():
+        vsa_ref = vsa_get(context, vsa_id, session=session)
+        vsa_ref.update(values)
+        vsa_ref.save(session=session)
+    return vsa_ref
+
+
+@require_admin_context
+def vsa_destroy(context, vsa_id):
+    """
+    Deletes Virtual Storage Array record.
+    """
+    session = get_session()
+    with session.begin():
+        session.query(models.VirtualStorageArray).\
+                filter_by(id=vsa_id).\
+                update({'deleted': True,
+                        'deleted_at': utils.utcnow(),
+                        'updated_at': literal_column('updated_at')})
+
+
+@require_context
+def vsa_get(context, vsa_id, session=None):
+    """
+    Get Virtual Storage Array record by ID.
+    """
+    if not session:
+        session = get_session()
+    result = None
+
+    if is_admin_context(context):
+        result = session.query(models.VirtualStorageArray).\
+                         options(joinedload('vsa_instance_type')).\
+                         filter_by(id=vsa_id).\
+                         filter_by(deleted=can_read_deleted(context)).\
+                         first()
+    elif is_user_context(context):
+        result = session.query(models.VirtualStorageArray).\
+                         options(joinedload('vsa_instance_type')).\
+                         filter_by(project_id=context.project_id).\
+                         filter_by(id=vsa_id).\
+                         filter_by(deleted=False).\
+                         first()
+    if not result:
+        raise exception.VirtualStorageArrayNotFound(id=vsa_id)
+
+    return result
+
+
+@require_admin_context
+def vsa_get_all(context):
+    """
+    Get all Virtual Storage Array records.
+    """
+    session = get_session()
+    return session.query(models.VirtualStorageArray).\
+                   options(joinedload('vsa_instance_type')).\
+                   filter_by(deleted=can_read_deleted(context)).\
+                   all()
+
+
+@require_context
+def vsa_get_all_by_project(context, project_id):
+    """
+    Get all Virtual Storage Array records by project ID.
+    """
+    authorize_project_context(context, project_id)
+
+    session = get_session()
+    return session.query(models.VirtualStorageArray).\
+                   options(joinedload('vsa_instance_type')).\
+                   filter_by(project_id=project_id).\
+                   filter_by(deleted=can_read_deleted(context)).\
+                   all()
+
+
+    ####################

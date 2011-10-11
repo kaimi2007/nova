@@ -34,8 +34,6 @@ from nova import flags
 from nova import image
 from nova import log as logging
 from nova import utils
-from nova.auth import manager
-from nova.image import service
 from nova.api.ec2 import ec2utils
 
 
@@ -43,9 +41,13 @@ LOG = logging.getLogger("nova.image.s3")
 FLAGS = flags.FLAGS
 flags.DEFINE_string('image_decryption_dir', '/tmp',
                     'parent dir for tempdir used for image decryption')
+flags.DEFINE_string('s3_access_key', 'notchecked',
+                    'access key to use for s3 server for images')
+flags.DEFINE_string('s3_secret_key', 'notchecked',
+                    'secret key to use for s3 server for images')
 
 
-class S3ImageService(service.BaseImageService):
+class S3ImageService(object):
     """Wraps an existing image service to support s3 based register."""
 
     def __init__(self, service=None, *args, **kwargs):
@@ -82,11 +84,10 @@ class S3ImageService(service.BaseImageService):
 
     @staticmethod
     def _conn(context):
-        # TODO(vish): is there a better way to get creds to sign
-        #             for the user?
-        access = manager.AuthManager().get_access_key(context.user,
-                                                      context.project)
-        secret = str(context.user.secret)
+        # NOTE(vish): access and secret keys for s3 server are not
+        #             checked in nova-objectstore
+        access = FLAGS.s3_access_key
+        secret = FLAGS.s3_secret_key
         calling = boto.s3.connection.OrdinaryCallingFormat()
         return boto.s3.connection.S3Connection(aws_access_key_id=access,
                                                aws_secret_access_key=secret,
@@ -168,7 +169,7 @@ class S3ImageService(service.BaseImageService):
         metadata.update({'disk_format': image_format,
                          'container_format': image_format,
                          'status': 'queued',
-                         'is_public': True,
+                         'is_public': False,
                          'properties': properties})
         metadata['properties']['image_state'] = 'pending'
         image = self.service.create(context, metadata)
@@ -191,6 +192,8 @@ class S3ImageService(service.BaseImageService):
 
         def delayed_create():
             """This handles the fetching and decrypting of the part files."""
+            log_vars = {'image_location': image_location,
+                        'image_path': image_path}
             metadata['properties']['image_state'] = 'downloading'
             self.service.update(context, image_id, metadata)
 
@@ -211,11 +214,11 @@ class S3ImageService(service.BaseImageService):
                             shutil.copyfileobj(part, combined)
 
             except Exception:
-                LOG.error(_("Failed to download %(image_location)s "
-                            "to %(image_path)s"), locals())
+                LOG.exception(_("Failed to download %(image_location)s "
+                                "to %(image_path)s"), log_vars)
                 metadata['properties']['image_state'] = 'failed_download'
                 self.service.update(context, image_id, metadata)
-                raise
+                return
 
             metadata['properties']['image_state'] = 'decrypting'
             self.service.update(context, image_id, metadata)
@@ -235,11 +238,11 @@ class S3ImageService(service.BaseImageService):
                                     encrypted_iv, cloud_pk,
                                     dec_filename)
             except Exception:
-                LOG.error(_("Failed to decrypt %(image_location)s "
-                            "to %(image_path)s"), locals())
+                LOG.exception(_("Failed to decrypt %(image_location)s "
+                                "to %(image_path)s"), log_vars)
                 metadata['properties']['image_state'] = 'failed_decrypt'
                 self.service.update(context, image_id, metadata)
-                raise
+                return
 
             metadata['properties']['image_state'] = 'untarring'
             self.service.update(context, image_id, metadata)
@@ -247,11 +250,11 @@ class S3ImageService(service.BaseImageService):
             try:
                 unz_filename = self._untarzip_image(image_path, dec_filename)
             except Exception:
-                LOG.error(_("Failed to untar %(image_location)s "
-                            "to %(image_path)s"), locals())
+                LOG.exception(_("Failed to untar %(image_location)s "
+                                "to %(image_path)s"), log_vars)
                 metadata['properties']['image_state'] = 'failed_untar'
                 self.service.update(context, image_id, metadata)
-                raise
+                return
 
             metadata['properties']['image_state'] = 'uploading'
             self.service.update(context, image_id, metadata)
@@ -260,11 +263,11 @@ class S3ImageService(service.BaseImageService):
                     self.service.update(context, image_id,
                                         metadata, image_file)
             except Exception:
-                LOG.error(_("Failed to upload %(image_location)s "
-                            "to %(image_path)s"), locals())
+                LOG.exception(_("Failed to upload %(image_location)s "
+                                "to %(image_path)s"), log_vars)
                 metadata['properties']['image_state'] = 'failed_upload'
                 self.service.update(context, image_id, metadata)
-                raise
+                return
 
             metadata['properties']['image_state'] = 'available'
             metadata['status'] = 'active'

@@ -34,12 +34,13 @@ from nova.scheduler import zone_manager
 LOG = logging.getLogger('nova.scheduler.manager')
 FLAGS = flags.FLAGS
 flags.DEFINE_string('scheduler_driver',
-                    'nova.scheduler.chance.ChanceScheduler',
-                    'Driver to use for the scheduler')
+                    'nova.scheduler.multi.MultiScheduler',
+                    'Default driver to use for the scheduler')
 
 
 class SchedulerManager(manager.Manager):
     """Chooses a host to run instances on."""
+
     def __init__(self, scheduler_driver=None, *args, **kwargs):
         self.zone_manager = zone_manager.ZoneManager()
         if not scheduler_driver:
@@ -69,8 +70,10 @@ class SchedulerManager(manager.Manager):
         return self.zone_manager.get_zone_capabilities(context)
 
     def update_service_capabilities(self, context=None, service_name=None,
-                                                host=None, capabilities={}):
+                                                host=None, capabilities=None):
         """Process a capability update from a service node."""
+        if not capabilities:
+            capabilities = {}
         self.zone_manager.update_service_capabilities(service_name,
                             host, capabilities)
 
@@ -78,40 +81,27 @@ class SchedulerManager(manager.Manager):
         """Select a list of hosts best matching the provided specs."""
         return self.driver.select(context, *args, **kwargs)
 
-    def get_scheduler_rules(self, context=None, *args, **kwargs):
-        """Ask the driver how requests should be made of it."""
-        return self.driver.get_scheduler_rules(context, *args, **kwargs)
-
     def _schedule(self, method, context, topic, *args, **kwargs):
         """Tries to call schedule_* method on the driver to retrieve host.
-
         Falls back to schedule(context, topic) if method doesn't exist.
         """
         driver_method = 'schedule_%s' % method
-        elevated = context.elevated()
         try:
-            host = getattr(self.driver, driver_method)(elevated, *args,
-                                                       **kwargs)
+            real_meth = getattr(self.driver, driver_method)
+            args = (context,) + args
         except AttributeError, e:
             LOG.warning(_("Driver Method %(driver_method)s missing: %(e)s."
-                            "Reverting to schedule()") % locals())
-            host = self.driver.schedule(elevated, topic, *args, **kwargs)
+                          "Reverting to schedule()") % locals())
+            real_meth = self.driver.schedule
+            args = (context, topic, method) + args
 
-        if not host:
-            LOG.debug(_("%(topic)s %(method)s handled in Scheduler")
-                        % locals())
-            return
-
-        rpc.cast(context,
-                 db.queue_get_for(context, topic, host),
-                 {"method": method,
-                  "args": kwargs})
-        LOG.debug(_("Casted to %(topic)s %(host)s for %(method)s") % locals())
+        # Scheduler methods are responsible for casting.
+        return real_meth(*args, **kwargs)
 
     # NOTE (masumotok) : This method should be moved to nova.api.ec2.admin.
     #                    Based on bexar design summit discussion,
     #                    just put this here for bexar release.
-    def show_host_resources(self, context, host, *args):
+    def show_host_resources(self, context, host):
         """Shows the physical/usage resource given by hosts.
 
         :param context: security context
@@ -119,43 +109,45 @@ class SchedulerManager(manager.Manager):
         :returns:
             example format is below.
             {'resource':D, 'usage':{proj_id1:D, proj_id2:D}}
-            D: {'vcpus':3, 'memory_mb':2048, 'local_gb':2048}
+            D: {'vcpus': 3, 'memory_mb': 2048, 'local_gb': 2048,
+                'vcpus_used': 12, 'memory_mb_used': 10240,
+                'local_gb_used': 64}
 
         """
 
+        # Getting compute node info and related instances info
         compute_ref = db.service_get_all_compute_by_host(context, host)
         compute_ref = compute_ref[0]
-
-        # Getting physical resource information
-        compute_node_ref = compute_ref['compute_node'][0]
-        resource = {'vcpus': compute_node_ref['vcpus'],
-                    'memory_mb': compute_node_ref['memory_mb'],
-                    'local_gb': compute_node_ref['local_gb'],
-                    'vcpus_used': compute_node_ref['vcpus_used'],
-                    'memory_mb_used': compute_node_ref['memory_mb_used'],
-                    'local_gb_used': compute_node_ref['local_gb_used']}
-
-        # Getting usage resource information
-        usage = {}
         instance_refs = db.instance_get_all_by_host(context,
                                                     compute_ref['host'])
+
+        # Getting total available/used resource
+        compute_ref = compute_ref['compute_node'][0]
+        resource = {'vcpus': compute_ref['vcpus'],
+                    'memory_mb': compute_ref['memory_mb'],
+                    'local_gb': compute_ref['local_gb'],
+                    'vcpus_used': compute_ref['vcpus_used'],
+                    'memory_mb_used': compute_ref['memory_mb_used'],
+                    'local_gb_used': compute_ref['local_gb_used']}
+        usage = dict()
         if not instance_refs:
             return {'resource': resource, 'usage': usage}
 
+        # Getting usage resource per project
         project_ids = [i['project_id'] for i in instance_refs]
         project_ids = list(set(project_ids))
         for project_id in project_ids:
-            vcpus = db.instance_get_vcpu_sum_by_host_and_project(context,
-                                                                 host,
-                                                                 project_id)
-            mem = db.instance_get_memory_sum_by_host_and_project(context,
-                                                                 host,
-                                                                 project_id)
-            hdd = db.instance_get_disk_sum_by_host_and_project(context,
-                                                               host,
-                                                               project_id)
-            usage[project_id] = {'vcpus': int(vcpus),
-                                 'memory_mb': int(mem),
-                                 'local_gb': int(hdd)}
+            vcpus = [i['vcpus'] for i in instance_refs \
+                if i['project_id'] == project_id]
+
+            mem = [i['memory_mb']  for i in instance_refs \
+                if i['project_id'] == project_id]
+
+            disk = [i['local_gb']  for i in instance_refs \
+                if i['project_id'] == project_id]
+
+            usage[project_id] = {'vcpus': reduce(lambda x, y: x + y, vcpus),
+                                 'memory_mb': reduce(lambda x, y: x + y, mem),
+                                 'local_gb': reduce(lambda x, y: x + y, disk)}
 
         return {'resource': resource, 'usage': usage}

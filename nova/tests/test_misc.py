@@ -14,6 +14,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import commands
 import errno
 import os
 import select
@@ -67,24 +68,26 @@ class ProjectTestCase(test.TestCase):
                 tree.unlock()
 
         elif os.path.exists(os.path.join(topdir, '.git')):
-            import git
-            repo = git.Repo(topdir)
-            for commit in repo.head.commit.iter_parents():
-                email = commit.author.email
-                if email is None:
-                    email = commit.author.name
-                if 'nova-core' in email:
+            for email in commands.getoutput('git log --format=%ae').split():
+                if not email:
                     continue
-                if email.split(' ')[-1] == '<>':
-                    email = email.split(' ')[-2]
+                if "jenkins" in email and "openstack.org" in email:
+                    continue
                 email = '<' + email + '>'
                 contributors.add(str_dict_replace(email, mailmap))
-
         else:
             return
 
         for contributor in contributors:
             if contributor == 'nova-core':
+                continue
+            # TODO(lorinh): Handle ISI's local Hudson server upstream
+            # merges properly so that the server doesn't look like a
+            # contributor. For now, we hardcode 'hudson@kronos' and 'Server'
+            # as exceptions the same way nova-core is handled
+            if contributor == '<hudson@kronos.east.isi.edu>':
+                continue
+            if contributor == 'Server':
                 continue
             if not contributor in authors_file:
                 missing.add(contributor)

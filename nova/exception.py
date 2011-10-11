@@ -25,10 +25,26 @@ SHOULD include dedicated exception logging.
 """
 
 from functools import wraps
+import sys
+
+from novaclient import exceptions as novaclient_exceptions
 
 from nova import log as logging
 
 LOG = logging.getLogger('nova.exception')
+
+
+def novaclient_converter(f):
+    """Convert novaclient ClientException HTTP codes to webob exceptions.
+    Has to be the outer-most decorator.
+    """
+    def new_f(*args, **kwargs):
+        try:
+            ret = f(*args, **kwargs)
+            return ret
+        except novaclient_exceptions.ClientException, e:
+            raise ConvertedException(e.code, e.message, e.details)
+    return new_f
 
 
 class ProcessExecutionError(IOError):
@@ -60,7 +76,7 @@ class ApiError(Error):
         super(ApiError, self).__init__(outstr)
 
 
-class BuildInProgress(Error):
+class RebuildRequiresActiveInstance(Error):
     pass
 
 
@@ -78,8 +94,8 @@ def wrap_db_error(f):
         except Exception, e:
             LOG.exception(_('DB exception wrapped.'))
             raise DBError(e)
-    return _wrap
     _wrap.func_name = f.func_name
+    return _wrap
 
 
 def wrap_exception(notifier=None, publisher_id=None, event_type=None,
@@ -96,6 +112,10 @@ def wrap_exception(notifier=None, publisher_id=None, event_type=None,
             try:
                 return f(*args, **kw)
             except Exception, e:
+                # Save exception since it can be clobbered during processing
+                # below before we can re-raise
+                exc_info = sys.exc_info()
+
                 if notifier:
                     payload = dict(args=args, exception=e)
                     payload.update(kw)
@@ -116,12 +136,8 @@ def wrap_exception(notifier=None, publisher_id=None, event_type=None,
                     notifier.notify(publisher_id, temp_type, temp_level,
                                     payload)
 
-                if not isinstance(e, Error):
-                    #exc_type, exc_value, exc_traceback = sys.exc_info()
-                    LOG.exception(_('Uncaught exception'))
-                    #logging.error(traceback.extract_stack(exc_traceback))
-                    raise Error(str(e))
-                raise
+                # re-raise original exception since it may have been clobbered
+                raise exc_info[0], exc_info[1], exc_info[2]
 
         return wraps(f)(wrapped)
     return inner
@@ -137,16 +153,21 @@ class NovaException(Exception):
     """
     message = _("An unknown exception occurred.")
 
-    def __init__(self, **kwargs):
-        try:
-            self._error_string = self.message % kwargs
+    def __init__(self, message=None, **kwargs):
+        self.kwargs = kwargs
+        if not message:
+            try:
+                message = self.message % kwargs
 
-        except Exception:
-            # at least get the core message out if something happened
-            self._error_string = self.message
+            except Exception as e:
+                # at least get the core message out if something happened
+                message = self.message
 
-    def __str__(self):
-        return self._error_string
+        super(NovaException, self).__init__(message)
+
+
+class ImagePaginationFailed(NovaException):
+    message = _("Failed to paginate through images from image service")
 
 
 class VirtualInterfaceCreateException(NovaException):
@@ -162,11 +183,23 @@ class NotAuthorized(NovaException):
     message = _("Not authorized.")
 
     def __init__(self, *args, **kwargs):
-        super(NotAuthorized, self).__init__(**kwargs)
+        super(NotAuthorized, self).__init__(*args, **kwargs)
 
 
 class AdminRequired(NotAuthorized):
     message = _("User does not have admin privileges")
+
+
+class InstanceBusy(NovaException):
+    message = _("Instance %(instance_id)s is busy. (%(task_state)s)")
+
+
+class InstanceSnapshotting(InstanceBusy):
+    message = _("Instance %(instance_id)s is currently snapshotting.")
+
+
+class InstanceBackingUp(InstanceBusy):
+    message = _("Instance %(instance_id)s is currently being backed up.")
 
 
 class Invalid(NovaException):
@@ -185,6 +218,10 @@ class InvalidInstanceType(Invalid):
     message = _("Invalid instance type %(instance_type)s.")
 
 
+class InvalidVolumeType(Invalid):
+    message = _("Invalid volume type %(volume_type)s.")
+
+
 class InvalidPortRange(Invalid):
     message = _("Invalid port range %(from_port)s:%(to_port)s.")
 
@@ -195,6 +232,16 @@ class InvalidIpProtocol(Invalid):
 
 class InvalidContentType(Invalid):
     message = _("Invalid content type %(content_type)s.")
+
+
+class InvalidCidr(Invalid):
+    message = _("Invalid cidr %(cidr)s.")
+
+
+# Cannot be templated as the error syntax varies.
+# msg needs to be constructed when raised.
+class InvalidParameterValue(Invalid):
+    message = _("%(err)s")
 
 
 class InstanceNotRunning(Invalid):
@@ -251,6 +298,11 @@ class DestinationHypervisorTooOld(Invalid):
                 "has been provided.")
 
 
+class DestinationDiskExists(Invalid):
+    message = _("The supplied disk path (%(path)s) already exists, "
+                "it is expected not to exist.")
+
+
 class InvalidDevicePath(Invalid):
     message = _("The supplied device path (%(path)s) is invalid.")
 
@@ -292,7 +344,7 @@ class NotFound(NovaException):
     message = _("Resource could not be found.")
 
     def __init__(self, *args, **kwargs):
-        super(NotFound, self).__init__(**kwargs)
+        super(NotFound, self).__init__(*args, **kwargs)
 
 
 class FlagNotSet(NotFound):
@@ -309,6 +361,29 @@ class VolumeNotFound(NotFound):
 
 class VolumeNotFoundForInstance(VolumeNotFound):
     message = _("Volume not found for instance %(instance_id)s.")
+
+
+class VolumeMetadataNotFound(NotFound):
+    message = _("Volume %(volume_id)s has no metadata with "
+                "key %(metadata_key)s.")
+
+
+class NoVolumeTypesFound(NotFound):
+    message = _("Zero volume types found.")
+
+
+class VolumeTypeNotFound(NotFound):
+    message = _("Volume type %(volume_type_id)s could not be found.")
+
+
+class VolumeTypeNotFoundByName(VolumeTypeNotFound):
+    message = _("Volume type with name %(volume_type_name)s "
+                "could not be found.")
+
+
+class VolumeTypeExtraSpecsNotFound(NotFound):
+    message = _("Volume Type %(volume_type_id)s has no extra specs with "
+                "key %(extra_specs_key)s.")
 
 
 class SnapshotNotFound(NotFound):
@@ -348,10 +423,6 @@ class KernelNotFoundForImage(ImageNotFound):
     message = _("Kernel not found for image %(image_id)s.")
 
 
-class RamdiskNotFoundForImage(ImageNotFound):
-    message = _("Ramdisk not found for image %(image_id)s.")
-
-
 class UserNotFound(NotFound):
     message = _("User %(user_id)s could not be found.")
 
@@ -372,12 +443,20 @@ class StorageRepositoryNotFound(NotFound):
     message = _("Cannot find SR to read/write VDI.")
 
 
+class NetworkNotCreated(NovaException):
+    message = _("%(req)s is required to create a network.")
+
+
 class NetworkNotFound(NotFound):
     message = _("Network %(network_id)s could not be found.")
 
 
 class NetworkNotFoundForBridge(NetworkNotFound):
     message = _("Network could not be found for bridge %(bridge)s")
+
+
+class NetworkNotFoundForUUID(NetworkNotFound):
+    message = _("Network could not be found for uuid %(uuid)s")
 
 
 class NetworkNotFoundForCidr(NetworkNotFound):
@@ -390,6 +469,15 @@ class NetworkNotFoundForInstance(NetworkNotFound):
 
 class NoNetworksFound(NotFound):
     message = _("No networks defined.")
+
+
+class NetworkNotFoundForProject(NotFound):
+    message = _("Either Network uuid %(network_uuid)s is not present or "
+                "is not assigned to the project %(project_id)s.")
+
+
+class NetworkHostNotSet(NovaException):
+    message = _("Host is not set to the network (%(network_id)s).")
 
 
 class DatastoreNotFound(NotFound):
@@ -408,6 +496,11 @@ class FixedIpNotFoundForInstance(FixedIpNotFound):
     message = _("Instance %(instance_id)s has zero fixed ips.")
 
 
+class FixedIpNotFoundForNetworkHost(FixedIpNotFound):
+    message = _("Network host %(host)s has zero fixed ips "
+                "in network %(network_id)s.")
+
+
 class FixedIpNotFoundForSpecificInstance(FixedIpNotFound):
     message = _("Instance %(instance_id)s doesn't have fixed ip '%(ip)s'.")
 
@@ -420,7 +513,20 @@ class FixedIpNotFoundForHost(FixedIpNotFound):
     message = _("Host %(host)s has zero fixed ips.")
 
 
-class NoMoreFixedIps(Error):
+class FixedIpNotFoundForNetwork(FixedIpNotFound):
+    message = _("Fixed IP address (%(address)s) does not exist in "
+                "network (%(network_uuid)s).")
+
+
+class FixedIpAlreadyInUse(NovaException):
+    message = _("Fixed IP address %(address)s is already in use.")
+
+
+class FixedIpInvalid(Invalid):
+    message = _("Fixed IP address %(address)s is invalid.")
+
+
+class NoMoreFixedIps(NovaException):
     message = _("Zero fixed ips available.")
 
 
@@ -446,6 +552,10 @@ class FloatingIpNotFoundForHost(FloatingIpNotFound):
 
 class NoMoreFloatingIps(FloatingIpNotFound):
     message = _("Zero floating ips available.")
+
+
+class FloatingIpAlreadyInUse(NovaException):
+    message = _("Floating ip %(address)s already in use by %(fixed_ip)s.")
 
 
 class NoFloatingIpsDefined(NotFound):
@@ -503,6 +613,16 @@ class SecurityGroupNotFoundForProject(SecurityGroupNotFound):
 
 class SecurityGroupNotFoundForRule(SecurityGroupNotFound):
     message = _("Security group with rule %(rule_id)s not found.")
+
+
+class SecurityGroupExistsForInstance(Invalid):
+    message = _("Security group %(security_group_id)s is already associated"
+                 " with the instance %(instance_id)s")
+
+
+class SecurityGroupNotExistsForInstance(Invalid):
+    message = _("Security group %(security_group_id)s is not associated with"
+                 " the instance %(instance_id)s")
 
 
 class MigrationNotFound(NotFound):
@@ -668,6 +788,10 @@ class InstanceExists(Duplicate):
     message = _("Instance %(name)s already exists.")
 
 
+class InvalidSharedStorage(NovaException):
+    message = _("%(path)s is on shared storage: %(reason)s")
+
+
 class MigrationError(NovaException):
     message = _("Migration error") + ": %(reason)s"
 
@@ -682,3 +806,46 @@ class PasteConfigNotFound(NotFound):
 
 class PasteAppNotFound(NotFound):
     message = _("Could not load paste app '%(name)s' from %(path)s")
+
+
+class VSANovaAccessParamNotFound(Invalid):
+    message = _("Nova access parameters were not specified.")
+
+
+class VirtualStorageArrayNotFound(NotFound):
+    message = _("Virtual Storage Array %(id)d could not be found.")
+
+
+class VirtualStorageArrayNotFoundByName(NotFound):
+    message = _("Virtual Storage Array %(name)s could not be found.")
+
+
+class CannotResizeToSameSize(NovaException):
+    message = _("When resizing, instances must change size!")
+
+
+class CannotResizeToSmallerSize(NovaException):
+    message = _("Resizing to a smaller size is not supported.")
+
+
+class ImageTooLarge(NovaException):
+    message = _("Image is larger than instance type allows")
+
+
+class ZoneRequestError(Error):
+    def __init__(self, message=None):
+        if message is None:
+            message = _("1 or more Zones could not complete the request")
+        super(ZoneRequestError, self).__init__(message=message)
+
+
+class InstanceTypeMemoryTooSmall(NovaException):
+    message = _("Instance type's memory is too small for requested image.")
+
+
+class InstanceTypeDiskTooSmall(NovaException):
+    message = _("Instance type's disk is too small for requested image.")
+
+
+class InsufficientFreeMemory(NovaException):
+    message = _("Insufficient free memory on compute node to start %(uuid)s.")
