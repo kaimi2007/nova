@@ -47,7 +47,6 @@ LOG = logging.getLogger('nova.compute.api')
 
 FLAGS = flags.FLAGS
 flags.DECLARE('vncproxy_topic', 'nova.vnc')
-flags.DECLARE('reclaim_instance_interval', 'nova.compute.manager')
 flags.DEFINE_integer('find_host_timeout', 30,
                      'Timeout after NN seconds when looking for a host.')
 
@@ -82,17 +81,17 @@ def generate_default_display_name(instance):
 
 def _is_able_to_shutdown(instance, instance_id):
     vm_state = instance["vm_state"]
-    task_state = instance["task_state"]
 
     valid_shutdown_states = [
         vm_states.ACTIVE,
         vm_states.REBUILDING,
         vm_states.BUILDING,
+        vm_states.ERROR,
     ]
 
     if vm_state not in valid_shutdown_states:
-        LOG.warn(_("Instance %(instance_id)s is not in an 'active' state. It "
-                   "is currently %(vm_state)s. Shutdown aborted.") % locals())
+        LOG.warn(_("Instance %(instance_id)s cannot be shutdown from "
+                   "its current state: %(vm_state)s.") % locals())
         return False
 
     return True

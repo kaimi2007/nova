@@ -93,8 +93,6 @@ flags.DEFINE_integer("resize_confirm_window", 0,
                      " Set to 0 to disable.")
 flags.DEFINE_integer('host_state_interval', 120,
                      'Interval in seconds for querying the host status')
-flags.DEFINE_integer('reclaim_instance_interval', 0,
-                     'Interval in seconds for reclaiming deleted instances')
 
 LOG = logging.getLogger('nova.compute.manager')
 
@@ -448,11 +446,12 @@ class ComputeManager(manager.SchedulerDependentManager):
             try:
                 self.driver.spawn(context, instance,
                                   network_info, block_device_info)
-            except Exception as ex:  # pylint: disable=W0702
-                msg = _("Instance '%(instance_id)s' failed to spawn. Is "
-                        "virtualization enabled in the BIOS? Details: "
-                        "%(ex)s") % locals()
-                LOG.exception(msg)
+            except Exception as error:  # pylint: disable=W0702
+                LOG.exception(_("Instance '%(instance_id)s' failed to spawn. "
+                                "Details: %(error)s") % locals())
+                self._instance_update(context,
+                                      instance_id,
+                                      vm_state=vm_states.ERROR)
                 _deallocate_network()
                 return
 
