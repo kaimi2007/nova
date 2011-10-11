@@ -99,7 +99,11 @@ class BareMetalDom(object):
         LOG.debug(_("%s"), self.domains)
         LOG.debug(_("========================================="))
         for dom in self.domains[:]:
-            if dom['status'] != power_state.RUNNING:
+            if dom['status'] == power_state.BUILDING:
+                LOG.debug(_("Building domain: to be removed"))
+                self.destroy_domain(dom['name'])
+                continue
+            elif dom['status'] != power_state.RUNNING:
                 LOG.debug(_("Not running domain: remove"))
                 self.domains.remove(dom)
                 continue
@@ -114,7 +118,7 @@ class BareMetalDom(object):
 
         LOG.debug(_("--> domains after reading"))
         LOG.debug(_(self.domains))
-        self.store_domain()
+        self.store_domain(self.domains, self.fp)
 
     def reboot_domain(self, name):
         """
@@ -134,12 +138,10 @@ class BareMetalDom(object):
             raise exception.NotFound("Failed power down \
                                       Bare-metal node %s" % fd['node_id'])
         self.change_domain_state(name, power_state.BUILDING)
-        self.store_domain()
         try:
             state = self.baremetal_nodes.activate_node(fd['node_id'], \
                 node_ip, name, fd['mac_address'], fd['ip_address'])
             self.change_domain_state(name, state)
-            self.store_domain()
             return state
         except:
             LOG.debug(_("deactivate -> activate fails"))
@@ -165,7 +167,7 @@ class BareMetalDom(object):
             LOG.debug(_(self.domains))
             LOG.debug(_("nodes: "))
             LOG.debug(_(self.baremetal_nodes.nodes))
-            self.store_domain()
+            self.store_domain(self.domains, self.fp)
             LOG.debug(_("after storing domains"))
             LOG.debug(_(self.domains))
         except:
@@ -200,10 +202,9 @@ class BareMetalDom(object):
         self.domains.append(new_dom)
         LOG.debug(_(new_dom))
         self.change_domain_state(new_dom['name'], power_state.BUILDING)
-        self.store_domain()
 
         self.baremetal_nodes.set_image(bpath, node_id)
-
+        state =  power_state.NOSTATE
         try:
             state = self.baremetal_nodes.activate_node(node_id,
                 node_ip, new_dom['name'], new_dom['mac_address'], \
@@ -211,12 +212,11 @@ class BareMetalDom(object):
         except:
             self.domains.remove(new_dom)
             self.baremetal_nodes.free_node(node_id)
-            raise exception.NotFound("Failed to boot Bare-metal node %s" \
-                % node_id)
+            #  raise exception.NotFound("Failed to boot Bare-metal node %s" \
+            #    % node_id)
 
         LOG.debug(_("BEFORE last self.change_domain_state +++++++++++++++++"))
         self.change_domain_state(new_dom['name'], state)
-        self.store_domain()
         return state
 
     def change_domain_state(self, name, state):
@@ -230,19 +230,18 @@ class BareMetalDom(object):
         i = self.domains.index(l)
         self.domains[i]['status'] = state
         LOG.debug(_("change_domain_state: to new state %s"), str(state))
-        self.store_domain()
+        self.store_domain(self.domains, self.fp)
 
-    def store_domain(self):
+    def store_domain(self, domains, fp):
         """
         Stores fake domains to the file
         """
         LOG.debug(_("store fake domains to the file"))
         LOG.debug(_("-------"))
-        LOG.debug(_(self.domains))
+        LOG.debug(_(domains))
         LOG.debug(_("-------"))
-        LOG.debug(_(self.fp))
-        #  self.fp.seek(0)
-        pickle.dump(self.domains, self.fp)
+        fp.seek(0)
+        pickle.dump(domains, fp)
         LOG.debug(_("after successful pickle.dump"))
 
     def find_domain(self, name):

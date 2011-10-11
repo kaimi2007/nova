@@ -204,11 +204,14 @@ class BareMetalNodes(object):
         self.sleep_mgr(5)
         path = "/tftpboot/fs_" + str(node_id)
         pathx = "/tftpboot/root_" + str(node_id)
-        key = path + "/root/.ssh/authorized_keys"
-        utils.execute('sudo', 'rm', key)
+        #  key = path + "/root/.ssh/authorized_keys"
+        #  utils.execute('sudo', 'rm', key)
         utils.execute('sudo', '/usr/sbin/rpc.mountd')
-        utils.execute('sudo', 'umount', '-f', pathx)
-        utils.execute('sudo', 'rm', '-f', pathx)
+        try:
+            utils.execute('sudo', 'umount', '-f', pathx)
+            utils.execute('sudo', 'rm', '-f', pathx)
+        except:
+            LOG.debug(_("rootfs is already removed"))
 
     def network_set(self, node_ip, mac_address, ip_address):
         """
@@ -239,7 +242,7 @@ class BareMetalNodes(object):
         """
         Checks whether the given node is activated or not
         """
-        """tile_output = "/tftpboot/tile_output_" + str(node_id)
+        tile_output = "/tftpboot/tile_output_" + str(node_id)
         grep_cmd = "ping -c1 " + node_ip + " | grep Unreachable > " \
                    + tile_output
         subprocess.Popen(grep_cmd, shell=True)
@@ -251,14 +254,16 @@ class BareMetalNodes(object):
             cmd = "TILERA_BOARD_#" + str(node_id) + " " \
                 + node_ip + " is not ready, out_msg=" + out_msg
             LOG.debug(_(cmd))
-            self.power_mgr(node_id, 3)
-            cmd = "Rebooting board is being done... Please wait 90 secs more."
-            self.sleep_mgr(90)
-            LOG.debug(_(cmd))
-        else:"""
-        cmd = "TILERA_BOARD_#" + str(node_id) + " " + node_ip \
+            self.power_mgr(node_id, 2)
+            #  cmd = "Rebooting board is being done... Please wait 90 secs more."
+            #  self.sleep_mgr(90)
+            #  LOG.debug(_(cmd))
+            return 0 
+        else:
+            cmd = "TILERA_BOARD_#" + str(node_id) + " " + node_ip \
                 + " is ready"
-        LOG.debug(_(cmd))
+            LOG.debug(_(cmd))
+            return 1
 
     def vmlinux_set(self, node_id, mode):
         """
@@ -296,12 +301,14 @@ class BareMetalNodes(object):
         self.power_mgr(node_id, 3)
         self.sleep_mgr(90)
 
-        self.check_activated(node_id, node_ip)
-        self.network_set(node_ip, mac_address, ip_address)
-        self.ssh_set(node_ip)
-        self.iptables_set(node_ip, user_data)
-
-        return power_state.RUNNING
+        chk_act = self.check_activated(node_id, node_ip)
+        if chk_act == 1:
+            self.network_set(node_ip, mac_address, ip_address)
+            self.ssh_set(node_ip)
+            self.iptables_set(node_ip, user_data)
+            return power_state.RUNNING
+        else:
+            return power_state.SHUTDOWN
 
     def get_console_output(self, console_log, node_id):
         """
