@@ -298,11 +298,12 @@ class ProxyConnection(driver.ComputeDriver):
                 LOG.debug(_('~~~~~~ current state = %s ~~~~~~'), state)
                 if state == power_state.RUNNING:
                     LOG.debug(_('instance %s: booted'), instance['name'])
-                    timer.stop()
+                else:
+                    LOG.debug(_('instance %s is not booted'), instance['name'])
             except:
                 LOG.exception(_('instance %s: failed to boot'),
                               instance['name'])
-                timer.stop()
+            timer.stop()
         timer.f = _wait_for_boot
         return timer.start(interval=0.5, now=True)
 

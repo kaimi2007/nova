@@ -106,16 +106,16 @@ class BareMetalDomTestCase(test.TestCase):
 
         fake_file = StringIO.StringIO()
 
-        domains = [dict(node_id=1, status=power_state.NOSTATE),
-                   dict(node_id=2, status=power_state.RUNNING),
-                   dict(node_id=3, status=power_state.BLOCKED),
-                   dict(node_id=4, status=power_state.PAUSED),
-                   dict(node_id=5, status=power_state.SHUTDOWN),
-                   dict(node_id=6, status=power_state.SHUTOFF),
-                   dict(node_id=7, status=power_state.CRASHED),
-                   dict(node_id=8, status=power_state.SUSPENDED),
-                   dict(node_id=9, status=power_state.FAILED),
-                   dict(node_id=10, status=power_state.BUILDING)]
+        domains = [dict(node_id=1,name='i-00000001',status=power_state.NOSTATE),
+               dict(node_id=2, name='i-00000002', status=power_state.RUNNING),
+               dict(node_id=3, name='i-00000003', status=power_state.BLOCKED),
+               dict(node_id=4, name='i-00000004', status=power_state.PAUSED),
+               dict(node_id=5, name='i-00000005', status=power_state.SHUTDOWN),
+               dict(node_id=6, name='i-00000006', status=power_state.SHUTOFF),
+               dict(node_id=7, name='i-00000007', status=power_state.CRASHED),
+               dict(node_id=8, name='i-00000008', status=power_state.SUSPENDED),
+               dict(node_id=9, name='i-00000009', status=power_state.FAILED),
+               dict(node_id=10, name='i-0000000a', status=power_state.BUILDING)]
 
         pickle.dump(domains, fake_file)
 

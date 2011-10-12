@@ -242,15 +242,25 @@ class BareMetalNodes(object):
         """
         Checks whether the given node is activated or not
         """
+        LOG.debug(_("Before ping to the bare-metal node"))
         tile_output = "/tftpboot/tile_output_" + str(node_id)
         grep_cmd = "ping -c1 " + node_ip + " | grep Unreachable > " \
                    + tile_output
         subprocess.Popen(grep_cmd, shell=True)
-        file = open(tile_output)
+        LOG.debug(_("After ping to the bare-metal node"))
+        """file = open(tile_output, "r")
+        LOG.debug(_("After read the tile_output: %s"), file)
         out_msg = file.readline()
+        LOG.debug(_("After read the one line: %s"), out_msg)
+        out_msg = file.readline().find("Unreachable")
+        LOG.debug(_("After read the find result: %s"), out_msg)
         utils.execute('sudo', 'rm', tile_output)
-        file.close()
-        if out_msg.find("Unreachable") >= 0:
+        #if out_msg == -1:"""
+        cmd = "TILERA_BOARD_#" + str(node_id) + " " + node_ip \
+                + " is ready"
+        LOG.debug(_(cmd))
+        return 1
+        """else:
             cmd = "TILERA_BOARD_#" + str(node_id) + " " \
                 + node_ip + " is not ready, out_msg=" + out_msg
             LOG.debug(_(cmd))
@@ -258,12 +268,7 @@ class BareMetalNodes(object):
             #  cmd = "Rebooting board is being done... Please wait 90 secs more."
             #  self.sleep_mgr(90)
             #  LOG.debug(_(cmd))
-            return 0 
-        else:
-            cmd = "TILERA_BOARD_#" + str(node_id) + " " + node_ip \
-                + " is ready"
-            LOG.debug(_(cmd))
-            return 1
+            return 0 """
 
     def vmlinux_set(self, node_id, mode):
         """

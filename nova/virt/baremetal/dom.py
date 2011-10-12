@@ -118,7 +118,7 @@ class BareMetalDom(object):
 
         LOG.debug(_("--> domains after reading"))
         LOG.debug(_(self.domains))
-        self.store_domain(self.domains, self.fp)
+        self.store_domain()
 
     def reboot_domain(self, name):
         """
@@ -167,7 +167,7 @@ class BareMetalDom(object):
             LOG.debug(_(self.domains))
             LOG.debug(_("nodes: "))
             LOG.debug(_(self.baremetal_nodes.nodes))
-            self.store_domain(self.domains, self.fp)
+            self.store_domain()
             LOG.debug(_("after storing domains"))
             LOG.debug(_(self.domains))
         except:
@@ -209,14 +209,12 @@ class BareMetalDom(object):
             state = self.baremetal_nodes.activate_node(node_id,
                 node_ip, new_dom['name'], new_dom['mac_address'], \
                 new_dom['ip_address'], new_dom['user_data'])
+            LOG.debug(_("BEFORE last self.change_domain_state +++++++++++++++++"))
+            self.change_domain_state(new_dom['name'], state)
         except:
             self.domains.remove(new_dom)
             self.baremetal_nodes.free_node(node_id)
-            #  raise exception.NotFound("Failed to boot Bare-metal node %s" \
-            #    % node_id)
-
-        LOG.debug(_("BEFORE last self.change_domain_state +++++++++++++++++"))
-        self.change_domain_state(new_dom['name'], state)
+            LOG.debug(_("Failed to boot Bare-metal node %s"), node_id)
         return state
 
     def change_domain_state(self, name, state):
@@ -230,18 +228,18 @@ class BareMetalDom(object):
         i = self.domains.index(l)
         self.domains[i]['status'] = state
         LOG.debug(_("change_domain_state: to new state %s"), str(state))
-        self.store_domain(self.domains, self.fp)
+        self.store_domain()
 
-    def store_domain(self, domains, fp):
+    def store_domain(self):
         """
         Stores fake domains to the file
         """
         LOG.debug(_("store fake domains to the file"))
         LOG.debug(_("-------"))
-        LOG.debug(_(domains))
+        LOG.debug(_(self.domains))
         LOG.debug(_("-------"))
-        fp.seek(0)
-        pickle.dump(domains, fp)
+        #  fp.seek(0)
+        pickle.dump(self.domains, self.fp)
         LOG.debug(_("after successful pickle.dump"))
 
     def find_domain(self, name):
