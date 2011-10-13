@@ -347,7 +347,7 @@ class LibvirtConnection(driver.ComputeDriver):
 #        self.destroy(inst, network_info)
 
         if gpus_needed > len(gpus_available):
-            raise Exception(_("Overcommit Error"))      
+            raise Exception(_("Overcommit Error"))
         for i in range(gpus_needed):
             gpus_assigned_list.append(gpus_available.pop())
         if gpus_needed:
@@ -457,7 +457,8 @@ class LibvirtConnection(driver.ComputeDriver):
                 ' %(target)s') % locals())
         if FLAGS.libvirt_type == 'lxc':
             try:
-                disk.destroy_container(target, instance, nbd=FLAGS.use_cow_images)
+                disk.destroy_container(target, instance, \
+                    nbd=FLAGS.use_cow_images)
             except:
                 pass
         if FLAGS.connection_type == 'gpu':
