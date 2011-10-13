@@ -101,6 +101,20 @@ INSTANCE_TYPE_EXTRA_SPECS = {
     '17': dict(instance_type_id=13, key='cpu_arch', value='x86_64'),
     '18': dict(instance_type_id=25, key='cpu_arch', value='x86_64'),
 
+    '21': dict(instance_type_id=26, key='xpus', value='2'),
+    '22': dict(instance_type_id=7, key='xpus', value='4'),
+    '23': dict(instance_type_id=14, key='xpus', value='1'),
+    '24': dict(instance_type_id=15, key='xpus', value='1'),
+    '25': dict(instance_type_id=19, key='xpus', value='1'),
+    '26': dict(instance_type_id=8, key='xpus', value='1'),
+
+    '31': dict(instance_type_id=26, key='cpu_arch', value='x86_64'),
+    '32': dict(instance_type_id=7, key='cpu_arch', value='x86_64'),
+    '33': dict(instance_type_id=14, key='cpu_arch', value='x86_64'),
+    '34': dict(instance_type_id=15, key='cpu_arch', value='x86_64'),
+    '35': dict(instance_type_id=19, key='cpu_arch', value='x86_64'),
+    '36': dict(instance_type_id=8, key='cpu_arch', value='x86_64'),
+
     '99': dict(instance_type_id=12, key='cpu_arch', value='tilepro64'),
     '100': dict(instance_type_id=6, key='cpu_arch', value='tilepro64'),
     '101': dict(instance_type_id=16, key='cpu_arch', value='tilepro64'),
