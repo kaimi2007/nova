@@ -337,7 +337,7 @@ class LibvirtConnection(driver.ComputeDriver):
         #added by JP for debug
         #gpus_needed = 1
         msg = _("GPUS asked, %d .") % gpus_needed
-#   raise Exception(_("Test Error"))
+#        raise Exception(_("Test Error"))
         LOG.info(msg)
         print "(JP) %s" % msg
         # Allow gpu devices inside the container
@@ -346,6 +346,8 @@ class LibvirtConnection(driver.ComputeDriver):
         gpus_assigned_list = []
 #        self.destroy(inst, network_info)
 
+        if gpus_needed > len(gpus_available):
+            raise Exception(_("Overcommit Error"))      
         for i in range(gpus_needed):
             gpus_assigned_list.append(gpus_available.pop())
         if gpus_needed:
@@ -454,11 +456,17 @@ class LibvirtConnection(driver.ComputeDriver):
         LOG.info(_('instance %(instance_name)s: deleting instance files'
                 ' %(target)s') % locals())
         if FLAGS.libvirt_type == 'lxc':
-            disk.destroy_container(target, instance, nbd=FLAGS.use_cow_images)
+            try:
+                disk.destroy_container(target, instance, nbd=FLAGS.use_cow_images)
+            except:
+                pass
         if FLAGS.connection_type == 'gpu':
             self.deassign_gpus(instance)
         if os.path.exists(target):
-            shutil.rmtree(target)
+            try:
+                shutil.rmtree(target)
+            except:
+                pass
 
     @exception.wrap_exception()
     def attach_volume(self, instance_name, device_path, mountpoint):
@@ -747,7 +755,13 @@ class LibvirtConnection(driver.ComputeDriver):
 
             if state == power_state.RUNNING:
                 if FLAGS.connection_type == 'gpu':
-                    self.assign_gpus(instance)
+                    try:
+                        self.assign_gpus(instance)
+                    except Exception as Exn:
+                        LOG.error(_("Error in GPU assignment, overcommitted."))
+                        self.destroy(instance, network_info, cleanup=True)
+                        db.instance_update(context, instance['id'], \
+                            {'vm_state': vm_states.OVERCOMMIT})
                 msg = _("Instance %s spawned successfully.") % instance_name
                 LOG.info(msg)
                 raise utils.LoopingCallDone
