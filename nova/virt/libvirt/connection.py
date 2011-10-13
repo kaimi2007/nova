@@ -49,10 +49,7 @@ import sys
 import tempfile
 import time
 import uuid
-#JP Walters
-import shlex
-import signal
-#END
+import subprocess
 from xml.dom import minidom
 from xml.etree import ElementTree
 
@@ -71,6 +68,7 @@ from nova import vnc
 from nova.auth import manager
 from nova.compute import instance_types
 from nova.compute import power_state
+from nova.compute import vm_states
 from nova.virt import disk
 from nova.virt import driver
 from nova.virt import images
@@ -148,9 +146,15 @@ flags.DEFINE_bool('libvirt_use_virtio_for_bridges',
 flags.DEFINE_list('extra_node_capabilities',
                    [],
                    'Key/value list with extra caps of the compute node')
+flags.DEFINE_string('dev_cgroups_path',
+                    '/cgroup/devices/libvirt/lxc',
+                    'LXC cgroups devices base path')
 
+# Variables for tracking gpus available and gpus assigned
 if FLAGS.connection_type == 'gpu':
-    gvirtus_pids = {}
+    gpus_available = []
+    gpus_assigned = {}
+    vcpus_used = 0
 
 
 def get_connection(read_only):
@@ -204,6 +208,10 @@ class LibvirtConnection(driver.ComputeDriver):
         return self._host_state
 
     def init_host(self, host):
+        if FLAGS.connection_type == 'gpu':
+            global gpus_available
+            gpus_available = range(FLAGS.xpus)
+
         # NOTE(nsokolov): moved instance restarting to ComputeManager
         pass
 
@@ -236,18 +244,6 @@ class LibvirtConnection(driver.ComputeDriver):
         else:
             uri = FLAGS.libvirt_uri or 'qemu:///system'
         return uri
-
-    #JP Walters: poached this from the one defined below that's used
-    #by the ajax term.  I left the ajax term stuff in place to avoid
-    #unwanted side effects
-    def get_pty_for_instance(self, instance_name):
-        virt_dom = self._conn.lookupByName(instance_name)
-        xml = virt_dom.XMLDesc(0)
-        dom = minidom.parseString(xml)
-        for serial in dom.getElementsByTagName('serial'):
-            if serial.getAttribute('type') == 'pty':
-                source = serial.getElementsByTagName('source')[0]
-                return source.getAttribute('path')
 
     def _connect(self, uri, read_only):
         auth = [[libvirt.VIR_CRED_AUTHNAME, libvirt.VIR_CRED_NOECHOPROMPT],
@@ -286,14 +282,104 @@ class LibvirtConnection(driver.ComputeDriver):
             infos.append(info)
         return infos
 
+    def allow_gpus(self, inst):
+        dev_whitelist = os.path.join(FLAGS.dev_cgroups_path,
+                                      inst['name'],
+                                      'devices.allow')
+        # Allow Nvidia Conroller
+        perm = "c 195:255  rwm"
+        cmd = "sudo echo %s >> %s" % (perm, dev_whitelist)
+        msg = _("executing  %s") % cmd
+        LOG.info(msg)
+        subprocess.Popen(cmd, shell=True)
+        for i in range(FLAGS.xpus):
+            # Allow each gpu device
+            perm = "c 195:%d  rwm" % i
+            cmd = "sudo echo %s >> %s" % (perm, dev_whitelist)
+            msg = _("executing  %s") % cmd
+            LOG.info(msg)
+            subprocess.Popen(cmd, shell=True)
+
+    def assign_gpus(self, inst):
+        """Assigns gpus to a specific instance"""
+        global gpus_available
+        global gpus_assigned
+        global vcpus_used
+        ctxt = nova_context.get_admin_context()
+        gpus_in_meta = 0
+        gpus_in_extra = 0
+        env_file = os.path.join(FLAGS.instances_path,
+                                inst['name'],
+                                'rootfs/etc/environment')
+        msg = _("instance_type_id is %d .") % inst.instance_type_id
+        LOG.info(msg)
+        print "(JP) %s" % msg
+        instance_extra = db.instance_type_extra_specs_get( \
+                                ctxt, inst.instance_type_id)
+        msg = _("instance_extra is %s .") % instance_extra
+        LOG.info(msg)
+        msg = _("vcpus for this instance are %d .") % inst.vcpus
+        LOG.info(msg)
+        vcpus_used = vcpus_used + inst.vcpus
+        if 'xpus' in inst['metadata']:
+            gpus_in_meta = int(inst['metadata']['xpus'])
+            msg = _("xpus in metadata asked, %d .") % gpus_in_meta
+            LOG.info(msg)
+        if 'xpus' in instance_extra:
+            gpus_in_extra = int(instance_extra['xpus'])
+            msg = _("xpus in instance_extra asked, %d .") % gpus_in_extra
+            LOG.info(msg)
+
+        if gpus_in_meta > gpus_in_extra:
+            gpus_needed = gpus_in_meta
+        else:
+            gpus_needed = gpus_in_extra
+        #added by JP for debug
+        #gpus_needed = 1
+        msg = _("GPUS asked, %d .") % gpus_needed
+#   raise Exception(_("Test Error"))
+        LOG.info(msg)
+        print "(JP) %s" % msg
+        # Allow gpu devices inside the container
+        self.allow_gpus(inst)
+        # Set environemnt
+        gpus_assigned_list = []
+#        self.destroy(inst, network_info)
+
+        for i in range(gpus_needed):
+            gpus_assigned_list.append(gpus_available.pop())
+        if gpus_needed:
+            print 'GPUs are definitely needed.'
+            gpus_assigned[inst['name']] = gpus_assigned_list
+            gpus_visible = str(gpus_assigned_list).strip('[]')
+            flag = "CUDA_VISIBLE_DEVICES=%s" % gpus_visible
+            cmd = "sudo echo %s >> %s" % (flag, env_file)
+            msg = _("executing the command %s") % cmd
+            LOG.info(msg)
+            print "(JP) %s" % msg
+            subprocess.Popen(cmd, shell=True)
+
+    def deassign_gpus(self, inst):
+        """Assigns gpus to a specific instance"""
+        global gpus_available
+        global gpus_assigned
+        global vcpus_used
+
+        vcpus_used = vcpus_used - inst.vcpus
+        if vcpus_used < 0:
+            vcpus_used = 0
+        #Check if already deassigned
+        if inst['name'] in gpus_assigned:
+            gpus_available.extend(gpus_assigned[inst['name']])
+            del gpus_assigned[inst['name']]
+        return
+
     def plug_vifs(self, instance, network_info):
         """Plugin VIFs into networks."""
         for (network, mapping) in network_info:
             self.vif_driver.plug(instance, network, mapping)
 
     def destroy(self, instance, network_info, cleanup=True):
-        if FLAGS.connection_type == 'gpu':
-            global gvirtus_pids
         instance_name = instance['name']
 
         try:
@@ -340,22 +426,6 @@ class LibvirtConnection(driver.ComputeDriver):
             for (network, mapping) in network_info:
                 self.vif_driver.unplug(instance, network, mapping)
 
-        if FLAGS.connection_type == 'gpu':
-            print 'Terminating gvirtus'
-            #JP Walters: retrieve the pid from the hash table
-            local_pid = gvirtus_pids[instance['name']]
-            #JP Walters: send that pid (gvirtus) a SIGTERM.
-            #gvirtus has been modified to catch SIGTERM and
-            #shut down gracefully
-            os.kill(local_pid, signal.SIGINT)
-            #JP Walters: this just ensures that we fully clean up the process.
-            #it avoids zombies
-            os.waitpid(local_pid, os.WNOHANG)
-            #JP Walters: remove the instance:pid mapping from the hash table
-            #to keep the hash table size manageable.
-            del gvirtus_pids[instance['name']]
-            print 'gvirtus dead'
-
         def _wait_for_destroy():
             """Called at an interval until the VM is gone."""
             instance_name = instance['name']
@@ -385,6 +455,8 @@ class LibvirtConnection(driver.ComputeDriver):
                 ' %(target)s') % locals())
         if FLAGS.libvirt_type == 'lxc':
             disk.destroy_container(target, instance, nbd=FLAGS.use_cow_images)
+        if FLAGS.connection_type == 'gpu':
+            self.deassign_gpus(instance)
         if os.path.exists(target):
             shutil.rmtree(target)
 
@@ -527,11 +599,6 @@ class LibvirtConnection(driver.ComputeDriver):
         reboot happens, as the guest OS cannot ignore this action.
 
         """
-        #JP Walters: we need to re-instantiate gvirtus, so we need
-        #access to the hash table
-        if FLAGS.connection_type == 'gpu':
-            global gvirtus_pids
-
         virt_dom = self._conn.lookupByName(instance['name'])
         # NOTE(itoumsn): Use XML delived from the running instance
         # instead of using to_xml(instance, network_info). This is almost
@@ -549,18 +616,6 @@ class LibvirtConnection(driver.ComputeDriver):
         self._create_new_domain(xml)
         self.firewall_driver.apply_instance_filter(instance, network_info)
 
-        if FLAGS.connection_type == 'gpu':
-            #JP Walters: again, find the tty and kick off a gvirtus-backend
-            tty = self.get_pty_for_instance(instance['name'])
-            command_line = '/usr/local/gvirtus/sbin/gvirtus-backend \
-                            /usr/local/gvirtus/etc/gvirtus.properties 0 %s' \
-                            % (tty)
-
-            args = shlex.split(str(command_line))
-            print args
-            gvirtus_driver = subprocess.Popen(args)
-            gvirtus_pids[instance['name']] = gvirtus_driver.pid
-
         def _wait_for_reboot():
             """Called at an interval until the VM is running again."""
             instance_name = instance['name']
@@ -573,6 +628,10 @@ class LibvirtConnection(driver.ComputeDriver):
                 raise utils.LoopingCallDone
 
             if state == power_state.RUNNING:
+                #No need to set environment here, as same filesystem exists.
+                #But devices whitelist needs to be set again
+                if FLAGS.connection_type == 'gpu':
+                    allow_gpus(instance)
                 msg = _("Instance %s rebooted successfully.") % instance_name
                 LOG.info(msg)
                 raise utils.LoopingCallDone
@@ -664,10 +723,6 @@ class LibvirtConnection(driver.ComputeDriver):
     @exception.wrap_exception()
     def spawn(self, context, instance, network_info,
               block_device_info=None):
-        #Added by JP Walters, gvirtus_pids is a hash table
-        #that maps instances to gvirtus_pids
-        if FLAGS.connection_type == 'gpu':
-            global gvirtus_pids
         xml = self.to_xml(instance, network_info, False,
                           block_device_info=block_device_info)
         self.firewall_driver.setup_basic_filtering(instance, network_info)
@@ -691,28 +746,13 @@ class LibvirtConnection(driver.ComputeDriver):
                 raise utils.LoopingCallDone
 
             if state == power_state.RUNNING:
+                if FLAGS.connection_type == 'gpu':
+                    self.assign_gpus(instance)
                 msg = _("Instance %s spawned successfully.") % instance_name
                 LOG.info(msg)
                 raise utils.LoopingCallDone
 
         timer = utils.LoopingCall(_wait_for_boot)
-
-        if FLAGS.connection_type == 'gpu':
-            #JP Walters: get the tty that's started.  We'll use this
-            #for our initial gvirtus_driver communication.  Note that
-            #this prevents the use of the ajax terminal since we're
-            #borrowing the tty.
-            tty = self.get_pty_for_instance(instance['name'])
-            command_line = '/usr/local/gvirtus/sbin/gvirtus-backend \
-                            /usr/local/gvirtus/etc/gvirtus.properties 0 %s' \
-                            % (tty)
-
-            args = shlex.split(str(command_line))
-            print args
-            #JP Walters: kick off gvirtus
-            gvirtus_driver = subprocess.Popen(args)
-            #JP Walters: record the pid in the hash table
-            gvirtus_pids[instance['name']] = gvirtus_driver.pid
 
         return timer.start(interval=0.5, now=True)
 
@@ -2015,12 +2055,12 @@ class HostState(object):
         return self._stats
 
     def update_status(self):
-        if FLAGS.connection_type == 'gpu':
-            global gvirtus_pids
-            print 'using %d GPUs' % len(gvirtus_pids)
         """Since under Xenserver, a compute node runs on a given host,
         we can get host status information using xenapi.
         """
+        if FLAGS.connection_type == 'gpu':
+            global gpus_available
+            global vcpus_used
         LOG.debug(_("Updating host stats"))
         print 'Updating statistics!!'
         if self.connection is None:
@@ -2033,7 +2073,7 @@ class HostState(object):
         data["xpus"] = FLAGS.xpus
         data["xpu_arch"] = FLAGS.xpu_arch
         if FLAGS.connection_type == 'gpu':
-            data["xpus_used"] = len(gvirtus_pids)
+            data["xpus_used"] = len(gpus_available)
         data["xpu_info"] = FLAGS.xpu_info
         data["net_arch"] = FLAGS.net_arch
         data["net_info"] = FLAGS.net_info
