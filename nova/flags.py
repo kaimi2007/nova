@@ -407,6 +407,10 @@ DEFINE_list('zone_capabilities',
                  'Key/Multi-value list representng capabilities of this zone')
 DEFINE_string('build_plan_encryption_key', None,
         '128bit (hex) encryption key for scheduler build plans.')
+DEFINE_string('instance_usage_audit_period', 'month',
+              'time period to generate instance usages for.')
+DEFINE_integer('bandwith_poll_interval', 600,
+               'interval to pull bandwidth usage info')
 
 DEFINE_bool('start_guests_on_host_boot', False,
             'Whether to restart guests when the host reboots')
@@ -415,6 +419,9 @@ DEFINE_bool('resume_guests_state_on_host_boot', False,
 
 DEFINE_string('root_helper', 'sudo',
               'Command prefix to use for running commands as root')
+
+DEFINE_string('network_driver', 'nova.network.linux_net',
+              'Driver to use for network creation')
 
 DEFINE_bool('use_ipv6', False, 'use ipv6')
 
