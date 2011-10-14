@@ -204,6 +204,7 @@ class BareMetalDom(object):
         self.change_domain_state(new_dom['name'], power_state.BUILDING)
 
         self.baremetal_nodes.set_image(bpath, node_id)
+
         state =  power_state.NOSTATE
         try:
             state = self.baremetal_nodes.activate_node(node_id,
@@ -238,8 +239,14 @@ class BareMetalDom(object):
         LOG.debug(_("-------"))
         LOG.debug(_(self.domains))
         LOG.debug(_("-------"))
-        #  fp.seek(0)
+        LOG.debug(_(self.fp))
+        #  self.fp.seek(0)
+        utils.execute('sudo', 'rm', self.fake_dom_file)
+        self.fp = open(self.fake_dom_file, "w")
+        self.fp.close()
+        self.fp = open(self.fake_dom_file, "r+")
         pickle.dump(self.domains, self.fp)
+        self.fp.flush()
         LOG.debug(_("after successful pickle.dump"))
 
     def find_domain(self, name):
