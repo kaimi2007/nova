@@ -23,6 +23,9 @@ Archtecture Scheduler implementation
 
 import random
 import string
+from nova import db
+from nova import flags
+from nova import utils
 
 from nova import log as logging
 
@@ -31,6 +34,13 @@ LOG = logging.getLogger('nova.scheduler.ArchitectureScheduler')
 from nova.scheduler import driver
 from nova import db
 
+FLAGS = flags.FLAGS
+flags.DEFINE_integer("max_cores", 16,
+                     "maximum number of instance cores to allow per host")
+flags.DEFINE_integer("max_gigabytes", 10000,
+                     "maximum number of volume gigabytes to allow per host")
+flags.DEFINE_integer("max_networks", 1000,
+                     "maximum number of networks to allow per host")
 
 class ArchitectureScheduler(driver.Scheduler):
     """Implements Scheduler as a random node selector."""
@@ -257,3 +267,47 @@ class ArchitectureScheduler(driver.Scheduler):
             return hosts
         else:
             return hosts[int(random.random() * len(hosts))]
+
+    def schedule_create_volume(self, context, volume_id, *_args, **_kwargs):
+        """Picks a host that is up and has the fewest volumes."""
+        volume_ref = db.volume_get(context, volume_id)
+        LOG.debug(_("## vol ref = %s"), volume_ref)
+        if (volume_ref['availability_zone']
+            and ':' in volume_ref['availability_zone']
+            and context.is_admin):
+            LOG.debug(_("## vol in zone"))
+            zone, _x, host = volume_ref['availability_zone'].partition(':')
+            service = db.service_get_by_args(context.elevated(), host,
+                                             'nova-volume')
+            LOG.debug(_("## vol service = %s"), service)
+            if not self.service_is_up(service):
+                raise driver.WillNotSchedule(_("Host %s not available") % host)
+
+            # TODO(vish): this probably belongs in the manager, if we
+            #             can generalize this somehow
+            now = utils.utcnow()
+            LOG.debug(_("## vol updating"))
+            db.volume_update(context, volume_id, {'host': host,
+                                                  'scheduled_at': now})
+            LOG.debug(_("## vol hosts = %s"), host)
+            return host
+        results = db.service_get_all_volume_sorted(context)
+        LOG.debug(_("## vol res = %s"), results)
+        for result in results:
+            (service, volume_gigabytes) = result
+            if volume_gigabytes + volume_ref['size'] > FLAGS.max_gigabytes:
+                raise driver.NoValidHost(_("All hosts have too many "
+                                           "gigabytes"))
+            if self.service_is_up(service):
+                # NOTE(vish): this probably belongs in the manager, if we
+                #             can generalize this somehow
+                now = utils.utcnow()
+                db.volume_update(context,
+                                 volume_id,
+                                 {'host': service['host'],
+                                  'scheduled_at': now})
+                LOG.debug(_("## vol hosts = %s"), service['host'])
+                return service['host']
+        raise driver.NoValidHost(_("Scheduler was unable to locate a host"
+                                   " for this request. Is the appropriate"
+                                   " service running?"))
