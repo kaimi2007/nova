@@ -144,10 +144,11 @@ class BareMetalDomTestCase(test.TestCase):
                     'ip_address': '10.5.1.2'}
 
         try:
+            empty_fake_file = StringIO.StringIO()
             self.mox.StubOutWithMock(__builtin__, 'open')
             open('/tftpboot/test_fake_dom_file', 'r+').AndReturn(\
                 StringIO.StringIO(pickle.dumps(fake_domains)))
-            open('/tftpboot/test_fake_dom_file', 'w')
+            open('/tftpboot/test_fake_dom_file', 'w').AndReturn(empty_fake_file)
 
             self.mox.ReplayAll()
 
