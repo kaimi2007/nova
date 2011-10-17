@@ -100,7 +100,6 @@ class BareMetalDomTestCase(test.TestCase):
         finally:
             self.mox.UnsetStubs()
 
-    @test.skip_test("temporary skipped for test_fake_dom_file object")
     def test_init_remove_non_running_domain(self):
         """Check to see that all entries in the domain list are removed
         except for the one that is in the running state"""
@@ -120,17 +119,19 @@ class BareMetalDomTestCase(test.TestCase):
         pickle.dump(domains, fake_file)
 
         try:
+            empty_fake_file = StringIO.StringIO()
             self.mox.StubOutWithMock(__builtin__, 'open')
             self.mox.StubOutWithMock(pickle, 'load')
             pickle.load(fake_file).AndReturn(domains)
             open('/tftpboot/test_fake_dom_file', 'r+').AndReturn(fake_file)
-            open('/tftpboot/test_fake_dom_file', 'w')
+            open('/tftpboot/test_fake_dom_file', 'w').AndReturn(empty_fake_file)
 
             self.mox.ReplayAll()
 
             bmdom = dom.BareMetalDom()
 
             self.assertEqual(bmdom.domains, [{'node_id': 2,
+                                              'name': 'i-00000002',
                                               'status': power_state.RUNNING}])
             self.assertEqual(bmdom.fake_dom_nums, 1)
         finally:
@@ -178,13 +179,13 @@ class ProxyBareMetalTestCase(test.TestCase):
         self.context = context.get_admin_context()
         fake_utils.stub_out_utils_execute(self.stubs)
 
-    @test.skip_test("temporary skipped for test_fake_dom_file object")
     def test_get_info(self):
         try:
+            empty_fake_file = StringIO.StringIO()
             self.mox.StubOutWithMock(__builtin__, 'open')
             open('/tftpboot/test_fake_dom_file', 'r+').AndReturn(\
                  StringIO.StringIO(pickle.dumps(fake_domains)))
-            open('/tftpboot/test_fake_dom_file', 'w')
+            open('/tftpboot/test_fake_dom_file', 'w').AndReturn(empty_fake_file)
             self.mox.ReplayAll()
 
             conn = proxy.get_connection(True)
