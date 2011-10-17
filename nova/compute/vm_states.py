@@ -38,3 +38,4 @@ MIGRATING = 'migrating'
 RESIZING = 'resizing'
 
 ERROR = 'error'
+OVERCOMMIT = 'overcommit'

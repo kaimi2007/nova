@@ -78,6 +78,20 @@ def generate_default_display_name(instance):
     return 'Server %s' % instance['id']
 
 
+def _is_overcommitted(instance, instance_id):
+    vm_state = instance["vm_state"]
+
+    valid_overcommit_states = [
+        vm_states.OVERCOMMIT,
+    ]
+
+    if vm_state in valid_overcommit_states:
+        LOG.warn(_("Instance %(instance_id)s overcommited"))
+        return True
+
+    return False
+
+
 def _is_able_to_shutdown(instance, instance_id):
     vm_state = instance["vm_state"]
 
@@ -811,6 +825,8 @@ class API(base.Base):
         instance = self._get_instance(context, instance_id, 'delete')
 
         if not _is_able_to_shutdown(instance, instance_id):
+            if _is_overcommitted(instance, instance_id):
+                self.db.instance_destroy(context, instance_id)
             return
 
         self._delete(context, instance)
