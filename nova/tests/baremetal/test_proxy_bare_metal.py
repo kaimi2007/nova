@@ -114,8 +114,7 @@ class BareMetalDomTestCase(test.TestCase):
                dict(node_id=6, name='i-00000006', status=power_state.SHUTOFF),
                dict(node_id=7, name='i-00000007', status=power_state.CRASHED),
                dict(node_id=8, name='i-00000008', status=power_state.SUSPENDED),
-               dict(node_id=9, name='i-00000009', status=power_state.FAILED),
-               dict(node_id=10, name='i-0000000a', status=power_state.BUILDING)]
+               dict(node_id=9, name='i-00000009', status=power_state.FAILED)]
 
         pickle.dump(domains, fake_file)
 
