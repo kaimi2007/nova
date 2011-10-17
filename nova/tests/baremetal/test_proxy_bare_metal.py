@@ -136,7 +136,6 @@ class BareMetalDomTestCase(test.TestCase):
         finally:
             self.mox.UnsetStubs()
 
-    @test.skip_test("temporary skipped for test_fake_dom_file object")
     def test_find_domain(self):
         domain = {'status': 1, 'name': 'instance-00000001',
                     'memory_kb': 16777216, 'kernel_id': '1896115634',
