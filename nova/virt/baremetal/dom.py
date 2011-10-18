@@ -244,6 +244,7 @@ class BareMetalDom(object):
         #utils.execute('cat', '/dev/null', '>', self.fake_dom_file)
         cls_cmd = "cat /dev/null > " + self.fake_dom_file
         subprocess.Popen(cls_cmd, shell=True)
+        utils.execute('sleep', '3')
         pickle.dump(self.domains, self.fp)
         self.fp.flush()
         LOG.debug(_("after successful pickle.dump"))
