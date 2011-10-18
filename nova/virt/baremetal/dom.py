@@ -241,9 +241,9 @@ class BareMetalDom(object):
         LOG.debug(_("-------"))
         LOG.debug(_(self.fp))
         #  self.fp.seek(0)
-        #utils.execute('cat', '/dev/null', '>', self.fp)        
-        utils.execute('sudo', 'rm', self.fake_dom_file)
-        self.fp = open(self.fake_dom_file, "w")
+        #utils.execute('cat', '/dev/null', '>', self.fake_dom_file)
+        cls_cmd = "cat /dev/null > " + self.fake_dom_file
+        subprocess.Popen(cls_cmd, shell=True)
         pickle.dump(self.domains, self.fp)
         self.fp.flush()
         LOG.debug(_("after successful pickle.dump"))
