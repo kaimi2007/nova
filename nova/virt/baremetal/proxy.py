@@ -57,6 +57,7 @@ from nova import vnc
 from nova.auth import manager
 from nova.compute import instance_types
 from nova.compute import power_state
+from nova.compute import vm_states
 from nova.virt import disk
 from nova.virt import driver
 from nova.virt import images
@@ -193,16 +194,11 @@ class ProxyConnection(driver.ComputeDriver):
         def _wait_for_reboot():
             try:
                 state = self._conn.reboot_domain(instance['name'])
-                db.instance_set_state(context.get_admin_context(),
-                                  instance['id'], state, 'running')
                 if state == power_state.RUNNING:
                     LOG.debug(_('instance %s: rebooted'), instance['name'])
                     timer.stop()
             except:
                 LOG.exception(_('_wait_for_reboot failed'))
-                db.instance_set_state(context.get_admin_context(),
-                              instance['id'],
-                              power_state.SHUTDOWN)
                 timer.stop()
         timer.f = _wait_for_reboot
         return timer.start(interval=0.5, now=True)
@@ -247,16 +243,11 @@ class ProxyConnection(driver.ComputeDriver):
         def _wait_for_rescue():
             try:
                 state = self._conn.reboot_domain(instance['name'])
-                db.instance_set_state(context.get_admin_context(),
-                                  instance['id'], state, 'running')
                 if state == power_state.RUNNING:
                     LOG.debug(_('instance %s: rescued'), instance['name'])
                     timer.stop()
             except:
                 LOG.exception(_('_wait_for_rescue failed'))
-                db.instance_set_state(context.get_admin_context(),
-                              instance['id'],
-                              power_state.SHUTDOWN)
                 timer.stop()
         timer.f = _wait_for_reboot
         return timer.start(interval=0.5, now=True)
@@ -275,14 +266,15 @@ class ProxyConnection(driver.ComputeDriver):
     def poll_rescued_instances(self, timeout):
         pass
 
+    def _check_vcpu(self):
+        if self.get_vcpu_total() == self.get_vcpu_used():
+            raise Exception(_("Overcommitted. No more vcpu!"))
+
     def spawn(self, context, instance, network_info,
               block_device_info=None):
         LOG.debug(_("<============= spawn of baremetal =============>")) 
-        xml_dict = self.to_xml_dict(instance, network_info)
-        self._create_image(context, instance, xml_dict,
-                           network_info=network_info,
-                           block_device_info=block_device_info)
-        LOG.debug(_("instance %s: is running"), instance['name'])
+        db.instance_update(context, instance['id'],
+                    {'vm_state': vm_states.BUILDING})
 
         def basepath(fname='', suffix=''):
             return os.path.join(FLAGS.instances_path,
@@ -290,21 +282,39 @@ class ProxyConnection(driver.ComputeDriver):
                                 fname + suffix)
         bpath = basepath(suffix='')
         timer = utils.LoopingCall(f=None)
+    
+        try:
+            self._check_vcpu()
 
-        def _wait_for_boot():
-            try:
-                LOG.debug(_(xml_dict))
-                state = self._conn.create_domain(xml_dict, bpath)
-                LOG.debug(_('~~~~~~ current state = %s ~~~~~~'), state)
-                if state == power_state.RUNNING:
-                    LOG.debug(_('instance %s: booted'), instance['name'])
-                else:
-                    LOG.debug(_('instance %s is not booted'), instance['name'])
-            except:
-                LOG.exception(_('instance %s: failed to boot'),
+            xml_dict = self.to_xml_dict(instance, network_info)
+            self._create_image(context, instance, xml_dict,
+                           network_info=network_info,
+                           block_device_info=block_device_info)
+            LOG.debug(_("instance %s: is building"), instance['name'])
+
+            def _wait_for_boot():
+                try:
+                    LOG.debug(_(xml_dict))
+                    state = self._conn.create_domain(xml_dict, bpath)
+                    LOG.debug(_('~~~~~~ current state = %s ~~~~~~'), state)
+                    if state == power_state.RUNNING:
+                        LOG.debug(_('instance %s: booted'), instance['name'])
+                        db.instance_update(context, instance['id'],
+                             {'vm_state': vm_states.ACTIVE})
+                    else:
+                        LOG.debug(_('instance %s:not booted'), instance['name'])
+                except:
+                    LOG.exception(_('instance %s: failed to boot'),
                               instance['name'])
-            timer.stop()
-        timer.f = _wait_for_boot
+                timer.stop()
+            timer.f = _wait_for_boot
+        except Exception as Exn:
+            LOG.debug(_("Error in baremetal assignment, overcommitted."))
+            db.instance_update(context, instance['id'],
+                    {'vm_state': vm_states.OVERCOMMIT, 
+                     'power_state': power_state.SUSPENDED})
+            #raise Exception(_("Overcommitted instance should be terminated!"))
+
         return timer.start(interval=0.5, now=True)
 
     def _flush_xen_console(self, virsh_output):
