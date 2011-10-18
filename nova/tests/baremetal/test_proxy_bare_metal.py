@@ -114,23 +114,24 @@ class BareMetalDomTestCase(test.TestCase):
                dict(node_id=6, name='i-00000006', status=power_state.SHUTOFF),
                dict(node_id=7, name='i-00000007', status=power_state.CRASHED),
                dict(node_id=8, name='i-00000008', status=power_state.SUSPENDED),
-               dict(node_id=9, name='i-00000009', status=power_state.FAILED),
-               dict(node_id=10, name='i-0000000a', status=power_state.BUILDING)]
+               dict(node_id=9, name='i-00000009', status=power_state.FAILED)]
 
         pickle.dump(domains, fake_file)
 
         try:
+            empty_fake_file = StringIO.StringIO()
             self.mox.StubOutWithMock(__builtin__, 'open')
             self.mox.StubOutWithMock(pickle, 'load')
             pickle.load(fake_file).AndReturn(domains)
             open('/tftpboot/test_fake_dom_file', 'r+').AndReturn(fake_file)
-            open('/tftpboot/test_fake_dom_file', 'w')
+            open('/tftpboot/test_fake_dom_file', 'w').AndReturn(empty_fake_file)
 
             self.mox.ReplayAll()
 
             bmdom = dom.BareMetalDom()
 
             self.assertEqual(bmdom.domains, [{'node_id': 2,
+                                              'name': 'i-00000002',
                                               'status': power_state.RUNNING}])
             self.assertEqual(bmdom.fake_dom_nums, 1)
         finally:
@@ -145,10 +146,11 @@ class BareMetalDomTestCase(test.TestCase):
                     'ip_address': '10.5.1.2'}
 
         try:
+            empty_fake_file = StringIO.StringIO()
             self.mox.StubOutWithMock(__builtin__, 'open')
             open('/tftpboot/test_fake_dom_file', 'r+').AndReturn(\
                 StringIO.StringIO(pickle.dumps(fake_domains)))
-            open('/tftpboot/test_fake_dom_file', 'w')
+            open('/tftpboot/test_fake_dom_file', 'w').AndReturn(empty_fake_file)
 
             self.mox.ReplayAll()
 
@@ -179,10 +181,11 @@ class ProxyBareMetalTestCase(test.TestCase):
 
     def test_get_info(self):
         try:
+            empty_fake_file = StringIO.StringIO()
             self.mox.StubOutWithMock(__builtin__, 'open')
             open('/tftpboot/test_fake_dom_file', 'r+').AndReturn(\
                  StringIO.StringIO(pickle.dumps(fake_domains)))
-            open('/tftpboot/test_fake_dom_file', 'w')
+            open('/tftpboot/test_fake_dom_file', 'w').AndReturn(empty_fake_file)
             self.mox.ReplayAll()
 
             conn = proxy.get_connection(True)
