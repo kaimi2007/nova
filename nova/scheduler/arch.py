@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2010 Openstack, LLC.
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
@@ -45,17 +43,18 @@ flags.DEFINE_integer("max_networks", 1000,
 class ArchitectureScheduler(driver.Scheduler):
     """Implements Scheduler as a random node selector."""
 
-    def testme(self):
-        print 'ok'
-
-    def hosts_up_with_arch(self, context, topic, instance_id):
+    def hosts_up_with_arch(self, context, topic, request_spec):
+#    def hosts_up_with_arch(self, context, topic, instance_id):
 
         """Figure out what is requested
         """
-        instance = db.instance_get(context, instance_id)
+        LOG.debug(_("## req: %s"), request_spec)
+        instance_type = request_spec['instance_type']
+        LOG.debug(_("## it: %s"), instance_type)
+#        instance = db.instance_get(context, instance_id)
 
-        LOG.debug(_("## instance %s"), instance)
-        LOG.debug(_("## instance.id %s"), instance.id)
+#        LOG.debug(_("## instance %s"), instance)
+#        LOG.debug(_("## instance.id %s"), instance.id)
 #        LOG.debug(_("## instance.cpu_arch %s"), instance.cpu_arch)
 
         services = db.service_get_all_by_topic(context, topic)
@@ -64,26 +63,29 @@ class ArchitectureScheduler(driver.Scheduler):
         hosts = []
 
         # from instance table
-        wanted_vcpus = instance.vcpus
-        wanted_memory_mb = instance.memory_mb
-        wanted_local_gb = instance.local_gb
+        wanted_vcpus = instance_type['vcpus']
+        wanted_memory_mb = instance_type['memory_mb']
+        wanted_local_gb = instance_type['local_gb']
+        flavorid = instance_type['flavorid']
 
         LOG.debug(_("## wanted-vcpus=%s"), wanted_vcpus)
         LOG.debug(_("## wanted-memory=%s"), wanted_memory_mb)
         LOG.debug(_("## wanted-hard=%s"), wanted_local_gb)
+        LOG.debug(_("## flavorid=%s"), flavorid)
 
         # from instance_metadata table
-        instance_meta = db.instance_metadata_get(context, instance_id)
-        LOG.debug(_("## inst-meta=%s"), instance_meta)
+#        instance_meta = db.instance_metadata_get(context, instance_id)
+#        LOG.debug(_("## inst-meta=%s"), instance_meta)
 
         # from instance_type_extra_specs table
-        instance_extra = db.instance_type_extra_specs_get( \
-            context, instance.instance_type_id)
-        LOG.debug(_("## inst-extra=%s"), instance_extra)
+#        instance_extra = db.instance_type_extra_specs_get( \
+        instance_meta = db.instance_type_extra_specs_get( \
+            context, flavorid)
+        LOG.debug(_("## inst-meta=%s"), instance_meta)
 
         # combine to inatance_meta
-        instance_meta.update(instance_extra)
-        LOG.debug(_("## new inst meta=%s"), instance_meta)
+#        instance_meta.update(instance_extra)
+#        LOG.debug(_("## new inst meta=%s"), instance_meta)
 
         try:
             wanted_cpu_arch = instance_meta['cpu_arch']
@@ -251,63 +253,67 @@ class ArchitectureScheduler(driver.Scheduler):
         LOG.debug(_("## hosts = %s"), hosts)
         return hosts
 
-    def schedule(self, context, topic, *_args, **_kwargs):
+    def _schedule(self, context, topic, request_spec, **_kwargs):
         """Picks a host that is up at random in selected
         arch (if defined).
         """
-
-        instance_id = _kwargs.get('instance_id')
-        request_spec = _kwargs.get('request_spec')
+        #instance_id = _kwargs.get('instance_id')
+#        request_spec = _kwargs.get('request_spec')
 #        instance_type = request_spec['instance_type']
 
-        hosts = self.hosts_up_with_arch(context, topic, instance_id)
+        hosts = self.hosts_up_with_arch(context, topic, request_spec)
+#        hosts = self.hosts_up_with_arch(context, topic, instance_id)
 #        hosts = self.hosts_up_with_arch(context, topic, instance_id,
 #                                        instance_type)
         if not hosts:
-            return hosts
+# OLD code
+            #return hosts
+# !OLD
+            raise driver.NoValidHost(_("Scheduler was unable to locate a host"
+                                       " for this request. Is the appropriate"
+                                       " service running?"))
         else:
             return hosts[int(random.random() * len(hosts))]
 
     def schedule_create_volume(self, context, volume_id, *_args, **_kwargs):
         """Picks a host that is up and has the fewest volumes."""
         volume_ref = db.volume_get(context, volume_id)
-        LOG.debug(_("## vol ref = %s"), volume_ref)
         if (volume_ref['availability_zone']
             and ':' in volume_ref['availability_zone']
             and context.is_admin):
-            LOG.debug(_("## vol in zone"))
             zone, _x, host = volume_ref['availability_zone'].partition(':')
             service = db.service_get_by_args(context.elevated(), host,
                                              'nova-volume')
-            LOG.debug(_("## vol service = %s"), service)
             if not self.service_is_up(service):
                 raise driver.WillNotSchedule(_("Host %s not available") % host)
-
-            # TODO(vish): this probably belongs in the manager, if we
-            #             can generalize this somehow
-            now = utils.utcnow()
-            LOG.debug(_("## vol updating"))
-            db.volume_update(context, volume_id, {'host': host,
-                                                  'scheduled_at': now})
-            LOG.debug(_("## vol hosts = %s"), host)
-            return host
+            driver.cast_to_volume_host(context, host, 'create_volume',
+                    volume_id=volume_id, **_kwargs)
+            return None
         results = db.service_get_all_volume_sorted(context)
-        LOG.debug(_("## vol res = %s"), results)
         for result in results:
             (service, volume_gigabytes) = result
             if volume_gigabytes + volume_ref['size'] > FLAGS.max_gigabytes:
                 raise driver.NoValidHost(_("All hosts have too many "
                                            "gigabytes"))
             if self.service_is_up(service):
-                # NOTE(vish): this probably belongs in the manager, if we
-                #             can generalize this somehow
-                now = utils.utcnow()
-                db.volume_update(context,
-                                 volume_id,
-                                 {'host': service['host'],
-                                  'scheduled_at': now})
-                LOG.debug(_("## vol hosts = %s"), service['host'])
-                return service['host']
+                driver.cast_to_volume_host(context, service['host'],
+                        'create_volume', volume_id=volume_id, **_kwargs)
+                return None
         raise driver.NoValidHost(_("Scheduler was unable to locate a host"
                                    " for this request. Is the appropriate"
                                    " service running?"))
+
+    def schedule_run_instance(self, context, request_spec, *_args, **kwargs):
+        """Create and run an instance or instances"""
+
+        elevated = context.elevated()
+        num_instances = request_spec.get('num_instances', 1)
+        instances = []
+        for num in xrange(num_instances):
+            host = self._schedule(context, 'compute', request_spec, **kwargs)
+            instance = self.create_instance_db_entry(elevated, request_spec)
+            driver.cast_to_compute_host(context, host,
+                    'run_instance', instance_id=instance['id'], **kwargs)
+            instances.append(driver.encode_instance(instance))
+
+        return instances
