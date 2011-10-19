@@ -34,6 +34,19 @@ FLAGS = flags.FLAGS
 
 LOG = logging.getLogger('nova.virt.baremetal.dom')
 
+def read_domains(fname):
+    f = open(fname, 'r')
+    json = f.read()
+    f.close()
+    domains = utils.loads(json)
+    return domains
+
+def write_domains(fname, domains):
+    json = utils.dumps(domains)
+    f = open(fname, 'w')
+    f.write(json)
+    f.close()
+
 
 class BareMetalDom(object):
     """
@@ -65,20 +78,8 @@ class BareMetalDom(object):
         self.fake_dom_file = fake_dom_file
         self.domains = []
         self.fake_dom_nums = 0
-        self.fp = 0
         self.baremetal_nodes = nodes.get_baremetal_nodes()
 
-        #  utils.execute('sudo', 'rm', self.fake_dom_file)
-        LOG.debug(_("open %s"), self.fake_dom_file)
-        try:
-            self.fp = open(self.fake_dom_file, "r+")
-            LOG.debug(_("fp = %s"), self.fp)
-        except IOError:
-            LOG.debug(_("%s file does not exist, will create it"),
-                      self.fake_dom_file)
-            self.fp = open(self.fake_dom_file, "w")
-            self.fp.close()
-            self.fp = open(self.fake_dom_file, "r+")
         self._read_domain_from_file()
 
     def _read_domain_from_file(self):
@@ -86,13 +87,9 @@ class BareMetalDom(object):
         Reads the domains from a pickled representation.
         """
         try:
-            self.domains = pickle.load(self.fp)
-            self.fp.close()
-            self.fp = open(self.fake_dom_file, "w")
-        except EOFError:
+            self.domains = read_domains(self.fake_dom_file)
+        except IOError:
             dom = []
-            self.fp.close()
-            self.fp = open(self.fake_dom_file, "w")
             LOG.debug(_("No domains exist."))
             return
         LOG.debug(_("============= initial domains ==========="))
@@ -239,15 +236,7 @@ class BareMetalDom(object):
         LOG.debug(_("-------"))
         LOG.debug(_(self.domains))
         LOG.debug(_("-------"))
-        LOG.debug(_(self.fp))
-        #  self.fp.seek(0)
-        #utils.execute('cat', '/dev/null', '>', self.fake_dom_file)
-        cls_cmd = "cat /dev/null > " + self.fake_dom_file
-        subprocess.Popen(cls_cmd, shell=True)
-        utils.execute('sleep', '3')
-        pickle.dump(self.domains, self.fp)
-        self.fp.flush()
-        LOG.debug(_("after successful pickle.dump"))
+        write_domains(self.fake_dom_file, self.domains)
 
     def find_domain(self, name):
         """
