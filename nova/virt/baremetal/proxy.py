@@ -280,37 +280,36 @@ class ProxyConnection(driver.ComputeDriver):
         bpath = basepath(suffix='')
         timer = utils.LoopingCall(f=None)
     
-        try:
-            self._check_vcpu()
-
-            xml_dict = self.to_xml_dict(instance, network_info)
-            self._create_image(context, instance, xml_dict,
+        def _wait_for_boot():
+            try:
+                 self._check_vcpu()
+ 
+                 xml_dict = self.to_xml_dict(instance, network_info)
+                 self._create_image(context, instance, xml_dict,
                            network_info=network_info,
                            block_device_info=block_device_info)
-            LOG.debug(_("instance %s: is building"), instance['name'])
+                 LOG.debug(_("instance %s: is building"), instance['name'])
+                 LOG.debug(_(xml_dict))
+ 
+                 state = self._conn.create_domain(xml_dict, bpath)
 
-            def _wait_for_boot():
-                try:
-                    LOG.debug(_(xml_dict))
-                    state = self._conn.create_domain(xml_dict, bpath)
-                    LOG.debug(_('~~~~~~ current state = %s ~~~~~~'), state)
-                    if state == power_state.RUNNING:
-                        LOG.debug(_('instance %s: booted'), instance['name'])
-                        db.instance_update(context, instance['id'],
-                             {'vm_state': vm_states.ACTIVE})
-                    else:
-                        LOG.debug(_('instance %s:not booted'), instance['name'])
-                except:
-                    LOG.exception(_('instance %s: failed to boot'),
-                              instance['name'])
-                timer.stop()
-            timer.f = _wait_for_boot
-        except Exception as Exn:
-            LOG.debug(_("Error in baremetal assignment, overcommitted."))
-            db.instance_update(context, instance['id'],
-                    {'vm_state': vm_states.OVERCOMMIT, 
-                     'power_state': power_state.SUSPENDED})
-            #raise Exception(_("Overcommitted instance should be terminated!"))
+                 if state == power_state.RUNNING:
+                     LOG.debug(_('instance %s: booted'), instance['name'])
+                     db.instance_update(context, instance['id'],
+                            {'vm_state': vm_states.ACTIVE})
+                     LOG.debug(_('~~~~~~ current state = %s ~~~~~~'), state)
+                 else:
+                     LOG.debug(_('instance %s:not booted'), instance['name'])
+            except Exception as Exn:
+                 LOG.debug(_("Bremetal assignment is overcommitted."))
+                 db.instance_update(context, instance['id'],
+                            {'vm_state': vm_states.OVERCOMMIT, 
+                             'power_state': power_state.SUSPENDED})
+
+            LOG.exception(_("instance %s spawned successfully"),
+                          instance['name'])
+            timer.stop()
+        timer.f = _wait_for_boot
 
         return timer.start(interval=0.5, now=True)
 
@@ -634,7 +633,7 @@ class ProxyConnection(driver.ComputeDriver):
             LOG.warn(_("Cannot get the number of cpu, because this "
                        "function is not implemented for this platform. "
                        "This error can be safely ignored for now."))
-            return 0
+            return False
 
     def get_memory_mb_total(self):
         """Get the total memory size(MB) of physical computer.

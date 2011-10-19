@@ -157,8 +157,8 @@ class BareMetalNodes(object):
         for node in self.nodes:
             if node['node_id'] == node_id:
                 node['status'] = status
-                return 1
-        return 0
+                return True
+        return False
 
     def get_status(self):
         """
@@ -227,8 +227,6 @@ class BareMetalNodes(object):
         self.sleep_mgr(5)
         path = "/tftpboot/fs_" + str(node_id)
         pathx = "/tftpboot/root_" + str(node_id)
-        #  key = path + "/root/.ssh/authorized_keys"
-        #  utils.execute('sudo', 'rm', key)
         utils.execute('sudo', '/usr/sbin/rpc.mountd')
         try:
             utils.execute('sudo', 'umount', '-f', pathx)
@@ -251,15 +249,11 @@ class BareMetalNodes(object):
     def iptables_set(self, node_ip, user_data):
         """
         Sets security setting (iptables:port) if needed
+            iptables -A INPUT -p tcp ! -s $IP --dport $PORT -j DROP
         """
         if user_data != '':
             open_ip = base64.b64decode(user_data)
             utils.execute('/tftpboot/iptables_rule', node_ip, open_ip)
-        """utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
-            '--resume', '--net', node_ip, '--run', '-', \
-            'iptables', '-A', 'INPUT', '-p', 'tcp', '!', '-s', \
-            '10.0.11.1', '--dport', '963', '-j', 'DROP', '-', '--wait', \
-            '--quit')"""
 
     def check_activated(self, node_id, node_ip):
         """
@@ -270,28 +264,22 @@ class BareMetalNodes(object):
         grep_cmd = "ping -c1 " + node_ip + " | grep Unreachable > " \
                    + tile_output
         subprocess.Popen(grep_cmd, shell=True)
-        LOG.debug(_("After ping to the bare-metal node"))
-        """file = open(tile_output, "r")
-        LOG.debug(_("After read the tile_output: %s"), file)
-        out_msg = file.readline()
-        LOG.debug(_("After read the one line: %s"), out_msg)
+        self.sleep_mgr(5)
+
+        file = open(tile_output, "r")
         out_msg = file.readline().find("Unreachable")
-        LOG.debug(_("After read the find result: %s"), out_msg)
         utils.execute('sudo', 'rm', tile_output)
-        #if out_msg == -1:"""
-        cmd = "TILERA_BOARD_#" + str(node_id) + " " + node_ip \
+        if out_msg == -1:
+           cmd = "TILERA_BOARD_#" + str(node_id) + " " + node_ip \
                 + " is ready"
-        LOG.debug(_(cmd))
-        return 1
-        """else:
+           LOG.debug(_(cmd))
+           return True
+        else:
             cmd = "TILERA_BOARD_#" + str(node_id) + " " \
                 + node_ip + " is not ready, out_msg=" + out_msg
             LOG.debug(_(cmd))
             self.power_mgr(node_id, 2)
-            #  cmd = "Rebooting board is being done... Please wait 90 secs more."
-            #  self.sleep_mgr(90)
-            #  LOG.debug(_(cmd))
-            return 0 """
+            return False
 
     def vmlinux_set(self, node_id, mode):
         """
