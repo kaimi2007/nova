@@ -106,7 +106,6 @@ class ProxyConnection(driver.ComputeDriver):
         self.baremetal_nodes = nodes.get_baremetal_nodes()
         self._wrapped_conn = None
         self.read_only = read_only
-  
         self._host_state = None
 
     @property
@@ -269,7 +268,7 @@ class ProxyConnection(driver.ComputeDriver):
 
     def spawn(self, context, instance, network_info,
               block_device_info=None):
-        LOG.debug(_("<============= spawn of baremetal =============>")) 
+        LOG.debug(_("<============= spawn of baremetal =============>"))
         db.instance_update(context, instance['id'],
                     {'vm_state': vm_states.BUILDING})
 
@@ -279,11 +278,11 @@ class ProxyConnection(driver.ComputeDriver):
                                 fname + suffix)
         bpath = basepath(suffix='')
         timer = utils.LoopingCall(f=None)
-    
+
         def _wait_for_boot():
             try:
                 self._check_vcpu()
- 
+
                 xml_dict = self.to_xml_dict(instance, network_info)
                 self._create_image(context, instance, xml_dict,
                            network_info=network_info,

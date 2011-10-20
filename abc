@@ -1,0 +1,569 @@
+Running pep8 ...
+nova/scheduler/arch.py:43:1: E302 expected 2 blank lines, found 1
+class ArchitectureScheduler(driver.Scheduler):
+^
+    Separate top-level function and class definitions with two blank lines.
+
+    Method definitions inside a class are separated by a single blank line.
+
+    Extra blank lines may be used (sparingly) to separate groups of related
+    functions.  Blank lines may be omitted between a bunch of related
+    one-liners (e.g. a set of dummy implementations).
+
+    Use blank lines in functions, sparingly, to indicate logical sections.
+
+    Okay: def a():\n    pass\n\n\ndef b():\n    pass
+    Okay: def a():\n    pass\n\n\n# Foo\n# Bar\n\ndef b():\n    pass
+
+    E301: class Foo:\n    b = 0\n    def bar():\n        pass
+    E302: def a():\n    pass\n\ndef b(n):\n    pass
+    E303: def a():\n    pass\n\n\n\ndef b(n):\n    pass
+    E303: def a():\n\n\n\n    pass
+    E304: @decorator\n\ndef a():\n    pass
+nova/tests/baremetal/test_proxy_bare_metal.py:45:1: E302 expected 2 blank lines, found 1
+def json_equal(x, y):
+^
+    Separate top-level function and class definitions with two blank lines.
+
+    Method definitions inside a class are separated by a single blank line.
+
+    Extra blank lines may be used (sparingly) to separate groups of related
+    functions.  Blank lines may be omitted between a bunch of related
+    one-liners (e.g. a set of dummy implementations).
+
+    Use blank lines in functions, sparingly, to indicate logical sections.
+
+    Okay: def a():\n    pass\n\n\ndef b():\n    pass
+    Okay: def a():\n    pass\n\n\n# Foo\n# Bar\n\ndef b():\n    pass
+
+    E301: class Foo:\n    b = 0\n    def bar():\n        pass
+    E302: def a():\n    pass\n\ndef b(n):\n    pass
+    E303: def a():\n    pass\n\n\n\ndef b(n):\n    pass
+    E303: def a():\n\n\n\n    pass
+    E304: @decorator\n\ndef a():\n    pass
+nova/tests/baremetal/test_proxy_bare_metal.py:47:26: E225 missing whitespace around operator
+    return utils.loads(x)==utils.loads(y)
+                         ^
+    - Always surround these binary operators with a single space on
+      either side: assignment (=), augmented assignment (+=, -= etc.),
+      comparisons (==, <, >, !=, <>, <=, >=, in, not in, is, is not),
+      Booleans (and, or, not).
+
+    - Use spaces around arithmetic operators.
+
+    Okay: i = i + 1
+    Okay: submitted += 1
+    Okay: x = x * 2 - 1
+    Okay: hypot2 = x * x + y * y
+    Okay: c = (a + b) * (a - b)
+    Okay: foo(bar, key='word', *args, **kwargs)
+    Okay: baz(**kwargs)
+    Okay: negative = -1
+    Okay: spam(-1)
+    Okay: alpha[:-i]
+    Okay: if not -5 < x < +5:\n    pass
+    Okay: lambda *args, **kw: (args, kw)
+
+    E225: i=i+1
+    E225: submitted +=1
+    E225: x = x*2 - 1
+    E225: hypot2 = x*x + y*y
+    E225: c = (a+b) * (a-b)
+    E225: c = alpha -4
+    E225: z = x **y
+nova/tests/baremetal/test_proxy_bare_metal.py:71:56: W291 trailing whitespace
+        fake_file = StringIO.StringIO('''[{"status": 1,
+                                                       ^
+    JCR: Trailing whitespace is superfluous.
+    FBM: Except when it occurs as part of a blank line (i.e. the line is
+         nothing but whitespace). According to Python docs[1] a line with only
+         whitespace is considered a blank line, and is to be ignored. However,
+         matching a blank line to its indentation level avoids mistakenly
+         terminating a multi-line statement (e.g. class declaration) when
+         pasting code into the standard Python interpreter.
+
+         [1] http://docs.python.org/reference/lexical_analysis.html#blank-lines
+
+    The warning returned varies on whether the line itself is blank, for easier
+    filtering for those who want to indent their blank lines.
+
+    Okay: spam(1)
+    W291: spam(1)\s
+    W293: class Foo(object):\n    \n    bang = 12
+nova/tests/baremetal/test_proxy_bare_metal.py:72:61: W291 trailing whitespace
+         "image_id": "1552326678", "vcpus": 1, "node_id": 6,
+                                                            ^
+    JCR: Trailing whitespace is superfluous.
+    FBM: Except when it occurs as part of a blank line (i.e. the line is
+         nothing but whitespace). According to Python docs[1] a line with only
+         whitespace is considered a blank line, and is to be ignored. However,
+         matching a blank line to its indentation level avoids mistakenly
+         terminating a multi-line statement (e.g. class declaration) when
+         pasting code into the standard Python interpreter.
+
+         [1] http://docs.python.org/reference/lexical_analysis.html#blank-lines
+
+    The warning returned varies on whether the line itself is blank, for easier
+    filtering for those who want to indent their blank lines.
+
+    Okay: spam(1)
+    W291: spam(1)\s
+    W293: class Foo(object):\n    \n    bang = 12
+nova/tests/baremetal/test_proxy_bare_metal.py:73:61: W291 trailing whitespace
+         "name": "instance-00000001", "memory_kb": 16777216,
+                                                            ^
+    JCR: Trailing whitespace is superfluous.
+    FBM: Except when it occurs as part of a blank line (i.e. the line is
+         nothing but whitespace). According to Python docs[1] a line with only
+         whitespace is considered a blank line, and is to be ignored. However,
+         matching a blank line to its indentation level avoids mistakenly
+         terminating a multi-line statement (e.g. class declaration) when
+         pasting code into the standard Python interpreter.
+
+         [1] http://docs.python.org/reference/lexical_analysis.html#blank-lines
+
+    The warning returned varies on whether the line itself is blank, for easier
+    filtering for those who want to indent their blank lines.
+
+    Okay: spam(1)
+    W291: spam(1)\s
+    W293: class Foo(object):\n    \n    bang = 12
+nova/tests/baremetal/test_proxy_bare_metal.py:74:72: W291 trailing whitespace
+         "mac_address": "02:16:3e:01:4e:c9", "kernel_id": "1896115634",
+                                                                       ^
+    JCR: Trailing whitespace is superfluous.
+    FBM: Except when it occurs as part of a blank line (i.e. the line is
+         nothing but whitespace). According to Python docs[1] a line with only
+         whitespace is considered a blank line, and is to be ignored. However,
+         matching a blank line to its indentation level avoids mistakenly
+         terminating a multi-line statement (e.g. class declaration) when
+         pasting code into the standard Python interpreter.
+
+         [1] http://docs.python.org/reference/lexical_analysis.html#blank-lines
+
+    The warning returned varies on whether the line itself is blank, for easier
+    filtering for those who want to indent their blank lines.
+
+    Okay: spam(1)
+    W291: spam(1)\s
+    W293: class Foo(object):\n    \n    bang = 12
+nova/tests/baremetal/test_proxy_bare_metal.py:98:80: E501 line too long (84 characters)
+            IOError(2, 'No such file or directory', '/tftpboot/test_fake_dom_file'))
+                                                                               ^
+    Limit all lines to a maximum of 79 characters.
+
+    There are still many devices around that are limited to 80 character
+    lines; plus, limiting windows to 80 characters makes it possible to have
+    several windows side-by-side.  The default wrapping on such devices looks
+    ugly.  Therefore, please limit all lines to a maximum of 79 characters.
+    For flowing long blocks of text (docstrings or comments), limiting the
+    length to 72 characters is recommended.
+nova/tests/baremetal/test_proxy_bare_metal.py:102:80: E501 line too long (88 characters)
+            self.assertRaises(IOError, dom.read_domains, '/tftpboot/test_fake_dom_file')
+                                                                               ^
+    Limit all lines to a maximum of 79 characters.
+
+    There are still many devices around that are limited to 80 character
+    lines; plus, limiting windows to 80 characters makes it possible to have
+    several windows side-by-side.  The default wrapping on such devices looks
+    ugly.  Therefore, please limit all lines to a maximum of 79 characters.
+    For flowing long blocks of text (docstrings or comments), limiting the
+    length to 72 characters is recommended.
+nova/tests/baremetal/test_proxy_bare_metal.py:103:1: W293 blank line contains whitespace
+
+^
+    JCR: Trailing whitespace is superfluous.
+    FBM: Except when it occurs as part of a blank line (i.e. the line is
+         nothing but whitespace). According to Python docs[1] a line with only
+         whitespace is considered a blank line, and is to be ignored. However,
+         matching a blank line to its indentation level avoids mistakenly
+         terminating a multi-line statement (e.g. class declaration) when
+         pasting code into the standard Python interpreter.
+
+         [1] http://docs.python.org/reference/lexical_analysis.html#blank-lines
+
+    The warning returned varies on whether the line itself is blank, for easier
+    filtering for those who want to indent their blank lines.
+
+    Okay: spam(1)
+    W291: spam(1)\s
+    W293: class Foo(object):\n    \n    bang = 12
+nova/tests/baremetal/test_proxy_bare_metal.py:111:42: W291 trailing whitespace
+        expected_json = '''[{"status": 1,
+                                         ^
+    JCR: Trailing whitespace is superfluous.
+    FBM: Except when it occurs as part of a blank line (i.e. the line is
+         nothing but whitespace). According to Python docs[1] a line with only
+         whitespace is considered a blank line, and is to be ignored. However,
+         matching a blank line to its indentation level avoids mistakenly
+         terminating a multi-line statement (e.g. class declaration) when
+         pasting code into the standard Python interpreter.
+
+         [1] http://docs.python.org/reference/lexical_analysis.html#blank-lines
+
+    The warning returned varies on whether the line itself is blank, for easier
+    filtering for those who want to indent their blank lines.
+
+    Okay: spam(1)
+    W291: spam(1)\s
+    W293: class Foo(object):\n    \n    bang = 12
+nova/tests/baremetal/test_proxy_bare_metal.py:112:67: W291 trailing whitespace
+               "image_id": "1552326678", "vcpus": 1, "node_id": 6,
+                                                                  ^
+    JCR: Trailing whitespace is superfluous.
+    FBM: Except when it occurs as part of a blank line (i.e. the line is
+         nothing but whitespace). According to Python docs[1] a line with only
+         whitespace is considered a blank line, and is to be ignored. However,
+         matching a blank line to its indentation level avoids mistakenly
+         terminating a multi-line statement (e.g. class declaration) when
+         pasting code into the standard Python interpreter.
+
+         [1] http://docs.python.org/reference/lexical_analysis.html#blank-lines
+
+    The warning returned varies on whether the line itself is blank, for easier
+    filtering for those who want to indent their blank lines.
+
+    Okay: spam(1)
+    W291: spam(1)\s
+    W293: class Foo(object):\n    \n    bang = 12
+nova/tests/baremetal/test_proxy_bare_metal.py:113:67: W291 trailing whitespace
+               "name": "instance-00000001", "memory_kb": 16777216,
+                                                                  ^
+    JCR: Trailing whitespace is superfluous.
+    FBM: Except when it occurs as part of a blank line (i.e. the line is
+         nothing but whitespace). According to Python docs[1] a line with only
+         whitespace is considered a blank line, and is to be ignored. However,
+         matching a blank line to its indentation level avoids mistakenly
+         terminating a multi-line statement (e.g. class declaration) when
+         pasting code into the standard Python interpreter.
+
+         [1] http://docs.python.org/reference/lexical_analysis.html#blank-lines
+
+    The warning returned varies on whether the line itself is blank, for easier
+    filtering for those who want to indent their blank lines.
+
+    Okay: spam(1)
+    W291: spam(1)\s
+    W293: class Foo(object):\n    \n    bang = 12
+nova/tests/baremetal/test_proxy_bare_metal.py:114:78: W291 trailing whitespace
+               "mac_address": "02:16:3e:01:4e:c9", "kernel_id": "1896115634",
+                                                                             ^
+    JCR: Trailing whitespace is superfluous.
+    FBM: Except when it occurs as part of a blank line (i.e. the line is
+         nothing but whitespace). According to Python docs[1] a line with only
+         whitespace is considered a blank line, and is to be ignored. However,
+         matching a blank line to its indentation level avoids mistakenly
+         terminating a multi-line statement (e.g. class declaration) when
+         pasting code into the standard Python interpreter.
+
+         [1] http://docs.python.org/reference/lexical_analysis.html#blank-lines
+
+    The warning returned varies on whether the line itself is blank, for easier
+    filtering for those who want to indent their blank lines.
+
+    Okay: spam(1)
+    W291: spam(1)\s
+    W293: class Foo(object):\n    \n    bang = 12
+nova/tests/baremetal/test_proxy_bare_metal.py:119:72: W291 trailing whitespace
+            # Check if the argument to file.write() represents the same
+                                                                       ^
+    JCR: Trailing whitespace is superfluous.
+    FBM: Except when it occurs as part of a blank line (i.e. the line is
+         nothing but whitespace). According to Python docs[1] a line with only
+         whitespace is considered a blank line, and is to be ignored. However,
+         matching a blank line to its indentation level avoids mistakenly
+         terminating a multi-line statement (e.g. class declaration) when
+         pasting code into the standard Python interpreter.
+
+         [1] http://docs.python.org/reference/lexical_analysis.html#blank-lines
+
+    The warning returned varies on whether the line itself is blank, for easier
+    filtering for those who want to indent their blank lines.
+
+    Okay: spam(1)
+    W291: spam(1)\s
+    W293: class Foo(object):\n    \n    bang = 12
+nova/tests/baremetal/test_proxy_bare_metal.py:121:80: E501 line too long (87 characters)
+            # We can't do an exact string comparison because of ordering and whitespace
+                                                                               ^
+    Limit all lines to a maximum of 79 characters.
+
+    There are still many devices around that are limited to 80 character
+    lines; plus, limiting windows to 80 characters makes it possible to have
+    several windows side-by-side.  The default wrapping on such devices looks
+    ugly.  Therefore, please limit all lines to a maximum of 79 characters.
+    For flowing long blocks of text (docstrings or comments), limiting the
+    length to 72 characters is recommended.
+nova/tests/baremetal/test_proxy_bare_metal.py:122:80: E501 line too long (83 characters)
+            mock_file.write(mox.Func(functools.partial(json_equal, expected_json)))
+                                                                               ^
+    Limit all lines to a maximum of 79 characters.
+
+    There are still many devices around that are limited to 80 character
+    lines; plus, limiting windows to 80 characters makes it possible to have
+    several windows side-by-side.  The default wrapping on such devices looks
+    ugly.  Therefore, please limit all lines to a maximum of 79 characters.
+    For flowing long blocks of text (docstrings or comments), limiting the
+    length to 72 characters is recommended.
+nova/tests/baremetal/test_proxy_bare_metal.py:129:1: W293 blank line contains whitespace
+
+^
+    JCR: Trailing whitespace is superfluous.
+    FBM: Except when it occurs as part of a blank line (i.e. the line is
+         nothing but whitespace). According to Python docs[1] a line with only
+         whitespace is considered a blank line, and is to be ignored. However,
+         matching a blank line to its indentation level avoids mistakenly
+         terminating a multi-line statement (e.g. class declaration) when
+         pasting code into the standard Python interpreter.
+
+         [1] http://docs.python.org/reference/lexical_analysis.html#blank-lines
+
+    The warning returned varies on whether the line itself is blank, for easier
+    filtering for those who want to indent their blank lines.
+
+    Okay: spam(1)
+    W291: spam(1)\s
+    W293: class Foo(object):\n    \n    bang = 12
+nova/tests/baremetal/test_proxy_bare_metal.py:130:9: E303 too many blank lines (2)
+        finally:
+        ^
+    Separate top-level function and class definitions with two blank lines.
+
+    Method definitions inside a class are separated by a single blank line.
+
+    Extra blank lines may be used (sparingly) to separate groups of related
+    functions.  Blank lines may be omitted between a bunch of related
+    one-liners (e.g. a set of dummy implementations).
+
+    Use blank lines in functions, sparingly, to indicate logical sections.
+
+    Okay: def a():\n    pass\n\n\ndef b():\n    pass
+    Okay: def a():\n    pass\n\n\n# Foo\n# Bar\n\ndef b():\n    pass
+
+    E301: class Foo:\n    b = 0\n    def bar():\n        pass
+    E302: def a():\n    pass\n\ndef b(n):\n    pass
+    E303: def a():\n    pass\n\n\n\ndef b(n):\n    pass
+    E303: def a():\n\n\n\n    pass
+    E304: @decorator\n\ndef a():\n    pass
+nova/tests/baremetal/test_proxy_bare_metal.py:184:5: E303 too many blank lines (2)
+    def test_init_remove_non_running_domain(self):
+    ^
+    Separate top-level function and class definitions with two blank lines.
+
+    Method definitions inside a class are separated by a single blank line.
+
+    Extra blank lines may be used (sparingly) to separate groups of related
+    functions.  Blank lines may be omitted between a bunch of related
+    one-liners (e.g. a set of dummy implementations).
+
+    Use blank lines in functions, sparingly, to indicate logical sections.
+
+    Okay: def a():\n    pass\n\n\ndef b():\n    pass
+    Okay: def a():\n    pass\n\n\n# Foo\n# Bar\n\ndef b():\n    pass
+
+    E301: class Foo:\n    b = 0\n    def bar():\n        pass
+    E302: def a():\n    pass\n\ndef b(n):\n    pass
+    E303: def a():\n    pass\n\n\n\ndef b(n):\n    pass
+    E303: def a():\n\n\n\n    pass
+    E304: @decorator\n\ndef a():\n    pass
+nova/tests/baremetal/test_proxy_bare_metal.py:190:80: E501 line too long (80 characters)
+        domains = [dict(node_id=1,name='i-00000001',status=power_state.NOSTATE),
+                                                                               ^
+    Limit all lines to a maximum of 79 characters.
+
+    There are still many devices around that are limited to 80 character
+    lines; plus, limiting windows to 80 characters makes it possible to have
+    several windows side-by-side.  The default wrapping on such devices looks
+    ugly.  Therefore, please limit all lines to a maximum of 79 characters.
+    For flowing long blocks of text (docstrings or comments), limiting the
+    length to 72 characters is recommended.
+nova/tests/baremetal/test_proxy_bare_metal.py:197:80: E501 line too long (80 characters)
+               dict(node_id=8, name='i-00000008', status=power_state.SUSPENDED),
+                                                                               ^
+    Limit all lines to a maximum of 79 characters.
+
+    There are still many devices around that are limited to 80 character
+    lines; plus, limiting windows to 80 characters makes it possible to have
+    several windows side-by-side.  The default wrapping on such devices looks
+    ugly.  Therefore, please limit all lines to a maximum of 79 characters.
+    For flowing long blocks of text (docstrings or comments), limiting the
+    length to 72 characters is recommended.
+nova/tests/baremetal/test_proxy_bare_metal.py:190:34: E231 missing whitespace after ','
+        domains = [dict(node_id=1,name='i-00000001',status=power_state.NOSTATE),
+                                 ^
+    JCR: Each comma, semicolon or colon should be followed by whitespace.
+
+    Okay: [a, b]
+    Okay: (3,)
+    Okay: a[1:4]
+    Okay: a[:4]
+    Okay: a[1:]
+    Okay: a[1:4:2]
+    E231: ['a','b']
+    E231: foo(bar,baz)
+nova/tests/baremetal/test_proxy_bare_metal.py:199:1: W293 blank line contains whitespace
+
+^
+    JCR: Trailing whitespace is superfluous.
+    FBM: Except when it occurs as part of a blank line (i.e. the line is
+         nothing but whitespace). According to Python docs[1] a line with only
+         whitespace is considered a blank line, and is to be ignored. However,
+         matching a blank line to its indentation level avoids mistakenly
+         terminating a multi-line statement (e.g. class declaration) when
+         pasting code into the standard Python interpreter.
+
+         [1] http://docs.python.org/reference/lexical_analysis.html#blank-lines
+
+    The warning returned varies on whether the line itself is blank, for easier
+    filtering for those who want to indent their blank lines.
+
+    Okay: spam(1)
+    W291: spam(1)\s
+    W293: class Foo(object):\n    \n    bang = 12
+nova/tests/baremetal/test_proxy_bare_metal.py:218:5: E303 too many blank lines (3)
+    def test_find_domain(self):
+    ^
+    Separate top-level function and class definitions with two blank lines.
+
+    Method definitions inside a class are separated by a single blank line.
+
+    Extra blank lines may be used (sparingly) to separate groups of related
+    functions.  Blank lines may be omitted between a bunch of related
+    one-liners (e.g. a set of dummy implementations).
+
+    Use blank lines in functions, sparingly, to indicate logical sections.
+
+    Okay: def a():\n    pass\n\n\ndef b():\n    pass
+    Okay: def a():\n    pass\n\n\n# Foo\n# Bar\n\ndef b():\n    pass
+
+    E301: class Foo:\n    b = 0\n    def bar():\n        pass
+    E302: def a():\n    pass\n\ndef b(n):\n    pass
+    E303: def a():\n    pass\n\n\n\ndef b(n):\n    pass
+    E303: def a():\n\n\n\n    pass
+    E304: @decorator\n\ndef a():\n    pass
+nova/tests/baremetal/test_proxy_bare_metal.py:231:80: E501 line too long (80 characters)
+        dom.read_domains('/tftpboot/test_fake_dom_file').AndReturn(fake_domains)
+                                                                               ^
+    Limit all lines to a maximum of 79 characters.
+
+    There are still many devices around that are limited to 80 character
+    lines; plus, limiting windows to 80 characters makes it possible to have
+    several windows side-by-side.  The default wrapping on such devices looks
+    ugly.  Therefore, please limit all lines to a maximum of 79 characters.
+    For flowing long blocks of text (docstrings or comments), limiting the
+    length to 72 characters is recommended.
+nova/tests/baremetal/test_proxy_bare_metal.py:233:1: W293 blank line contains whitespace
+
+^
+    JCR: Trailing whitespace is superfluous.
+    FBM: Except when it occurs as part of a blank line (i.e. the line is
+         nothing but whitespace). According to Python docs[1] a line with only
+         whitespace is considered a blank line, and is to be ignored. However,
+         matching a blank line to its indentation level avoids mistakenly
+         terminating a multi-line statement (e.g. class declaration) when
+         pasting code into the standard Python interpreter.
+
+         [1] http://docs.python.org/reference/lexical_analysis.html#blank-lines
+
+    The warning returned varies on whether the line itself is blank, for easier
+    filtering for those who want to indent their blank lines.
+
+    Okay: spam(1)
+    W291: spam(1)\s
+    W293: class Foo(object):\n    \n    bang = 12
+nova/tests/baremetal/test_proxy_bare_metal.py:267:80: E501 line too long (80 characters)
+        dom.read_domains('/tftpboot/test_fake_dom_file').AndReturn(fake_domains)
+                                                                               ^
+    Limit all lines to a maximum of 79 characters.
+
+    There are still many devices around that are limited to 80 character
+    lines; plus, limiting windows to 80 characters makes it possible to have
+    several windows side-by-side.  The default wrapping on such devices looks
+    ugly.  Therefore, please limit all lines to a maximum of 79 characters.
+    For flowing long blocks of text (docstrings or comments), limiting the
+    length to 72 characters is recommended.
+nova/tests/baremetal/test_proxy_bare_metal.py:269:1: W293 blank line contains whitespace
+
+^
+    JCR: Trailing whitespace is superfluous.
+    FBM: Except when it occurs as part of a blank line (i.e. the line is
+         nothing but whitespace). According to Python docs[1] a line with only
+         whitespace is considered a blank line, and is to be ignored. However,
+         matching a blank line to its indentation level avoids mistakenly
+         terminating a multi-line statement (e.g. class declaration) when
+         pasting code into the standard Python interpreter.
+
+         [1] http://docs.python.org/reference/lexical_analysis.html#blank-lines
+
+    The warning returned varies on whether the line itself is blank, for easier
+    filtering for those who want to indent their blank lines.
+
+    Okay: spam(1)
+    W291: spam(1)\s
+    W293: class Foo(object):\n    \n    bang = 12
+nova/virt/baremetal/dom.py:52:1: E302 expected 2 blank lines, found 1
+def read_domains(fname):
+^
+    Separate top-level function and class definitions with two blank lines.
+
+    Method definitions inside a class are separated by a single blank line.
+
+    Extra blank lines may be used (sparingly) to separate groups of related
+    functions.  Blank lines may be omitted between a bunch of related
+    one-liners (e.g. a set of dummy implementations).
+
+    Use blank lines in functions, sparingly, to indicate logical sections.
+
+    Okay: def a():\n    pass\n\n\ndef b():\n    pass
+    Okay: def a():\n    pass\n\n\n# Foo\n# Bar\n\ndef b():\n    pass
+
+    E301: class Foo:\n    b = 0\n    def bar():\n        pass
+    E302: def a():\n    pass\n\ndef b(n):\n    pass
+    E303: def a():\n    pass\n\n\n\ndef b(n):\n    pass
+    E303: def a():\n\n\n\n    pass
+    E304: @decorator\n\ndef a():\n    pass
+nova/virt/baremetal/dom.py:59:1: E302 expected 2 blank lines, found 1
+def write_domains(fname, domains):
+^
+    Separate top-level function and class definitions with two blank lines.
+
+    Method definitions inside a class are separated by a single blank line.
+
+    Extra blank lines may be used (sparingly) to separate groups of related
+    functions.  Blank lines may be omitted between a bunch of related
+    one-liners (e.g. a set of dummy implementations).
+
+    Use blank lines in functions, sparingly, to indicate logical sections.
+
+    Okay: def a():\n    pass\n\n\ndef b():\n    pass
+    Okay: def a():\n    pass\n\n\n# Foo\n# Bar\n\ndef b():\n    pass
+
+    E301: class Foo:\n    b = 0\n    def bar():\n        pass
+    E302: def a():\n    pass\n\ndef b(n):\n    pass
+    E303: def a():\n    pass\n\n\n\ndef b(n):\n    pass
+    E303: def a():\n\n\n\n    pass
+    E304: @decorator\n\ndef a():\n    pass
+nova/virt/baremetal/dom.py:220:16: E222 multiple spaces after operator
+        state =  power_state.NOSTATE
+               ^
+    Avoid extraneous whitespace in the following situations:
+
+    - More than one space around an assignment (or other) operator to
+      align it with another.
+
+    Okay: a = 12 + 3
+    E221: a = 4  + 5
+    E222: a = 4 +  5
+    E223: a = 4	+ 5
+    E224: a = 4 +	5
+nova/virt/baremetal/dom.py:225:80: E501 line too long (82 characters)
+            LOG.debug(_("BEFORE last self.change_domain_state +++++++++++++++++"))
+                                                                               ^
+    Limit all lines to a maximum of 79 characters.
+
+    There are still many devices around that are limited to 80 character
+    lines; plus, limiting windows to 80 characters makes it possible to have
+    several windows side-by-side.  The default wrapping on such devices looks
+    ugly.  Therefore, please limit all lines to a maximum of 79 characters.
+    For flowing long blocks of text (docstrings or comments), limiting the
+    length to 72 characters is recommended.
