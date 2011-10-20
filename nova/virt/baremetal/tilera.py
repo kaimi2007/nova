@@ -81,7 +81,7 @@ class BareMetalNodes(object):
     def __init__(self, file_name="/tftpboot/tilera_boards"):
         """
         Only call __init__ the first time object is instantiated
-        From the bare-metal node list file,
+        From the bare-metal node list file: /tftpboot/tilera_boards,
         Reads each item of each node
             such as node ID, IP address, MAC address, vcpus,
             memory, hdd, hypervisor type/version, and cpu
@@ -200,6 +200,8 @@ class BareMetalNodes(object):
         """
         Changes power state of the given node
             according to the mode (1-ON, 2-OFF, 3-REBOOT)
+        /tftpboot/pdu_mgr script handles power management of
+        PDU (Power Distribution Unit)
         """
         if node_id < 5:
             pdu_num = 1
@@ -214,6 +216,8 @@ class BareMetalNodes(object):
     def deactivate_node(self, node_id):
         """
         Deactivates the given node by turnning it off
+        /tftpboot/fs_x directory is a NFS of node#x
+        /tftpboot/root_x file is an file system image of node#x
         """
         node_ip = self.find_ip_w_id(node_id)
         LOG.debug(_("deactivate_node is called for \
@@ -250,6 +254,7 @@ class BareMetalNodes(object):
         """
         Sets security setting (iptables:port) if needed
             iptables -A INPUT -p tcp ! -s $IP --dport $PORT -j DROP
+        /tftpboot/iptables_rule script sets iptables rule on the given node
         """
         if user_data != '':
             open_ip = base64.b64decode(user_data)
@@ -343,6 +348,7 @@ class BareMetalNodes(object):
         """
         Gets the bare-metal file system image into the instance path
         in case of dummy image
+        Noting to do for tilera nodes: actual image is used
         """
         path_fs = "/tftpboot/tilera_fs"
         path_root = bp + "/root"
@@ -352,6 +358,8 @@ class BareMetalNodes(object):
         """
         Sets the PXE bare-metal file system from the instance path
             after euca key is injected
+        /tftpboot/fs_x directory is a NFS of node#x
+        /tftpboot/root_x file is an file system image of node#x
         """
         path1 = bpath + "/root"
         pathx = "/tftpboot/root_" + str(node_id)

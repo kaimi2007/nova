@@ -262,10 +262,6 @@ class ProxyConnection(driver.ComputeDriver):
     def poll_rescued_instances(self, timeout):
         pass
 
-    def _check_vcpu(self):
-        if self.get_vcpu_total() == self.get_vcpu_used():
-            raise Exception(_("Overcommitted. No more vcpu!"))
-
     def spawn(self, context, instance, network_info,
               block_device_info=None):
         LOG.debug(_("<============= spawn of baremetal =============>"))
@@ -279,24 +275,23 @@ class ProxyConnection(driver.ComputeDriver):
         bpath = basepath(suffix='')
         timer = utils.LoopingCall(f=None)
 
+        xml_dict = self.to_xml_dict(instance, network_info)
+        self._create_image(context, instance, xml_dict,
+            network_info=network_info,
+            block_device_info=block_device_info)
+        LOG.debug(_("instance %s: is building"), instance['name'])
+        LOG.debug(_(xml_dict))
+
         def _wait_for_boot():
             try:
-                self._check_vcpu()
-
-                xml_dict = self.to_xml_dict(instance, network_info)
-                self._create_image(context, instance, xml_dict,
-                           network_info=network_info,
-                           block_device_info=block_device_info)
-                LOG.debug(_("instance %s: is building"), instance['name'])
-                LOG.debug(_(xml_dict))
-
                 state = self._conn.create_domain(xml_dict, bpath)
-
                 if state == power_state.RUNNING:
                     LOG.debug(_('instance %s: booted'), instance['name'])
                     db.instance_update(context, instance['id'],
                             {'vm_state': vm_states.ACTIVE})
                     LOG.debug(_('~~~~~~ current state = %s ~~~~~~'), state)
+                    LOG.debug(_("instance %s spawned successfully"),
+                            instance['name'])
                 else:
                     LOG.debug(_('instance %s:not booted'), instance['name'])
             except Exception as Exn:
@@ -304,9 +299,6 @@ class ProxyConnection(driver.ComputeDriver):
                 db.instance_update(context, instance['id'],
                            {'vm_state': vm_states.OVERCOMMIT,
                             'power_state': power_state.SUSPENDED})
-
-            LOG.exception(_("instance %s spawned successfully"),
-                          instance['name'])
             timer.stop()
         timer.f = _wait_for_boot
 

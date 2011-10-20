@@ -106,6 +106,8 @@ class BareMetalNodes(object):
     def vmlinux_set(self, node_id, mode):
         """
         Sets kernel into default path (/tftpboot) if needed
+        in case of dummy image
+        from basepath to /tftpboot
             based on the given mode
             such as 0-NoSet, 1-SetVmlinux, 9-RemoveVmlinux
         """
@@ -139,6 +141,7 @@ class BareMetalNodes(object):
     def get_image(self, bp):
         """
         Gets the bare-metal file system image into the instance path
+        in case of dummy image
         """
         pass
 

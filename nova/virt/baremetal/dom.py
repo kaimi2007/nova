@@ -86,7 +86,9 @@ class BareMetalDom(object):
                  fake_dom_file="/tftpboot/test_fake_dom_file"):
         """
         Only call __init__ the first time object is instantiated
-        Sets and Opens domain file
+        Sets and Opens domain file: /tftpboot/test_fake_dom_file
+        Even though nova-compute service is rebooted,
+        this file should retain the existing domains
         """
         if self._is_init:
             return
