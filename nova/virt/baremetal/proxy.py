@@ -106,7 +106,6 @@ class ProxyConnection(driver.ComputeDriver):
         self.baremetal_nodes = nodes.get_baremetal_nodes()
         self._wrapped_conn = None
         self.read_only = read_only
-  
         self._host_state = None
 
     @property
@@ -269,7 +268,7 @@ class ProxyConnection(driver.ComputeDriver):
 
     def spawn(self, context, instance, network_info,
               block_device_info=None):
-        LOG.debug(_("<============= spawn of baremetal =============>")) 
+        LOG.debug(_("<============= spawn of baremetal =============>"))
         db.instance_update(context, instance['id'],
                     {'vm_state': vm_states.BUILDING})
 
@@ -279,32 +278,32 @@ class ProxyConnection(driver.ComputeDriver):
                                 fname + suffix)
         bpath = basepath(suffix='')
         timer = utils.LoopingCall(f=None)
-    
+
         def _wait_for_boot():
             try:
-                 self._check_vcpu()
- 
-                 xml_dict = self.to_xml_dict(instance, network_info)
-                 self._create_image(context, instance, xml_dict,
+                self._check_vcpu()
+
+                xml_dict = self.to_xml_dict(instance, network_info)
+                self._create_image(context, instance, xml_dict,
                            network_info=network_info,
                            block_device_info=block_device_info)
-                 LOG.debug(_("instance %s: is building"), instance['name'])
-                 LOG.debug(_(xml_dict))
- 
-                 state = self._conn.create_domain(xml_dict, bpath)
+                LOG.debug(_("instance %s: is building"), instance['name'])
+                LOG.debug(_(xml_dict))
 
-                 if state == power_state.RUNNING:
-                     LOG.debug(_('instance %s: booted'), instance['name'])
-                     db.instance_update(context, instance['id'],
+                state = self._conn.create_domain(xml_dict, bpath)
+
+                if state == power_state.RUNNING:
+                    LOG.debug(_('instance %s: booted'), instance['name'])
+                    db.instance_update(context, instance['id'],
                             {'vm_state': vm_states.ACTIVE})
-                     LOG.debug(_('~~~~~~ current state = %s ~~~~~~'), state)
-                 else:
-                     LOG.debug(_('instance %s:not booted'), instance['name'])
+                    LOG.debug(_('~~~~~~ current state = %s ~~~~~~'), state)
+                else:
+                    LOG.debug(_('instance %s:not booted'), instance['name'])
             except Exception as Exn:
-                 LOG.debug(_("Bremetal assignment is overcommitted."))
-                 db.instance_update(context, instance['id'],
-                            {'vm_state': vm_states.OVERCOMMIT, 
-                             'power_state': power_state.SUSPENDED})
+                LOG.debug(_("Bremetal assignment is overcommitted."))
+                db.instance_update(context, instance['id'],
+                           {'vm_state': vm_states.OVERCOMMIT,
+                            'power_state': power_state.SUSPENDED})
 
             LOG.exception(_("instance %s spawned successfully"),
                           instance['name'])
@@ -326,7 +325,8 @@ class ProxyConnection(driver.ComputeDriver):
         console_log = os.path.join(FLAGS.instances_path, instance['name'],
                                    'console.log')
 
-        utils.execute('sudo', 'chown', os.getuid(), console_log, run_as_root=False)
+        utils.execute('sudo', 'chown', os.getuid(), console_log,
+                       run_as_root=False)
 
         fd = self._conn.find_domain(instance['name'])
 

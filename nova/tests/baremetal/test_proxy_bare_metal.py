@@ -42,9 +42,10 @@ fake_domains = [{'status': 1, 'name': 'instance-00000001',
                  'mac_address': '02:16:3e:01:4e:c9',
                  'ip_address': '10.5.1.2'}]
 
+
 def json_equal(x, y):
     """Check if two json strings represent the equivalent Python object"""
-    return utils.loads(x)==utils.loads(y)
+    return utils.loads(x) == utils.loads(y)
 
 
 class DomainReadWriteTestCase(test.TestCase):
@@ -68,10 +69,10 @@ class DomainReadWriteTestCase(test.TestCase):
 
     def test_read_domain(self):
         """Read a file that contains at least one domain"""
-        fake_file = StringIO.StringIO('''[{"status": 1, 
-         "image_id": "1552326678", "vcpus": 1, "node_id": 6, 
-         "name": "instance-00000001", "memory_kb": 16777216, 
-         "mac_address": "02:16:3e:01:4e:c9", "kernel_id": "1896115634", 
+        fake_file = StringIO.StringIO('''[{"status": 1,
+         "image_id": "1552326678", "vcpus": 1, "node_id": 6,
+         "name": "instance-00000001", "memory_kb": 16777216,
+         "mac_address": "02:16:3e:01:4e:c9", "kernel_id": "1896115634",
          "ramdisk_id": "", "ip_address": "10.5.1.2"}]''')
 
         self.mox.StubOutWithMock(__builtin__, 'open')
@@ -95,12 +96,14 @@ class DomainReadWriteTestCase(test.TestCase):
         self.mox.StubOutWithMock(__builtin__, 'open')
         try:
             open('/tftpboot/test_fake_dom_file', 'r').AndRaise(\
-            IOError(2, 'No such file or directory', '/tftpboot/test_fake_dom_file'))
+            IOError(2, 'No such file or directory',
+                       '/tftpboot/test_fake_dom_file'))
 
             self.mox.ReplayAll()
 
-            self.assertRaises(IOError, dom.read_domains, '/tftpboot/test_fake_dom_file')
-                    
+            self.assertRaises(IOError, dom.read_domains,
+                       '/tftpboot/test_fake_dom_file')
+
         finally:
             self.mox.UnsetStubs()
 
@@ -108,25 +111,26 @@ class DomainReadWriteTestCase(test.TestCase):
         """Write the domain to file"""
         self.mox.StubOutWithMock(__builtin__, 'open')
         mock_file = self.mox.CreateMock(file)
-        expected_json = '''[{"status": 1, 
-               "image_id": "1552326678", "vcpus": 1, "node_id": 6, 
-               "name": "instance-00000001", "memory_kb": 16777216, 
-               "mac_address": "02:16:3e:01:4e:c9", "kernel_id": "1896115634", 
+        expected_json = '''[{"status": 1,
+               "image_id": "1552326678", "vcpus": 1, "node_id": 6,
+               "name": "instance-00000001", "memory_kb": 16777216,
+               "mac_address": "02:16:3e:01:4e:c9", "kernel_id": "1896115634",
                "ramdisk_id": "", "ip_address": "10.5.1.2"}]'''
         try:
             open('/tftpboot/test_fake_dom_file', 'w').AndReturn(mock_file)
 
-            # Check if the argument to file.write() represents the same 
+            # Check if the argument to file.write() represents the same
             # Python object as expected_json
-            # We can't do an exact string comparison because of ordering and whitespace
-            mock_file.write(mox.Func(functools.partial(json_equal, expected_json)))
+            # We can't do an exact string comparison
+            # because of ordering and whitespace
+            mock_file.write(mox.Func(functools.partial(json_equal,\
+                expected_json)))
             mock_file.close()
 
             self.mox.ReplayAll()
 
             dom.write_domains('/tftpboot/test_fake_dom_file', fake_domains)
 
-        
         finally:
             self.mox.UnsetStubs()
 
@@ -180,23 +184,23 @@ class BareMetalDomTestCase(test.TestCase):
         # Expectd values
         self.assertEqual(bmdom.fake_dom_nums, 0)
 
-
     def test_init_remove_non_running_domain(self):
         """Check to see that all entries in the domain list are removed
         except for the one that is in the running state"""
 
         fake_file = StringIO.StringIO()
 
-        domains = [dict(node_id=1,name='i-00000001',status=power_state.NOSTATE),
-               dict(node_id=2, name='i-00000002', status=power_state.RUNNING),
-               dict(node_id=3, name='i-00000003', status=power_state.BLOCKED),
-               dict(node_id=4, name='i-00000004', status=power_state.PAUSED),
-               dict(node_id=5, name='i-00000005', status=power_state.SHUTDOWN),
-               dict(node_id=6, name='i-00000006', status=power_state.SHUTOFF),
-               dict(node_id=7, name='i-00000007', status=power_state.CRASHED),
-               dict(node_id=8, name='i-00000008', status=power_state.SUSPENDED),
-               dict(node_id=9, name='i-00000009', status=power_state.FAILED)]
-        
+        domains = [dict(node_id=1, name='i-00000001',
+                        status=power_state.NOSTATE),
+              dict(node_id=2, name='i-00000002', status=power_state.RUNNING),
+              dict(node_id=3, name='i-00000003', status=power_state.BLOCKED),
+              dict(node_id=4, name='i-00000004', status=power_state.PAUSED),
+              dict(node_id=5, name='i-00000005', status=power_state.SHUTDOWN),
+              dict(node_id=6, name='i-00000006', status=power_state.SHUTOFF),
+              dict(node_id=7, name='i-00000007', status=power_state.CRASHED),
+              dict(node_id=8, name='i-00000008', status=power_state.SUSPENDED),
+              dict(node_id=9, name='i-00000009', status=power_state.FAILED)]
+
         # Create the mock objects
         self.mox.StubOutWithMock(dom, 'read_domains')
         self.mox.StubOutWithMock(dom, 'write_domains')
@@ -213,8 +217,6 @@ class BareMetalDomTestCase(test.TestCase):
                                           'status': power_state.RUNNING}])
         self.assertEqual(bmdom.fake_dom_nums, 1)
 
-
-
     def test_find_domain(self):
         domain = {'status': 1, 'name': 'instance-00000001',
                     'memory_kb': 16777216, 'kernel_id': '1896115634',
@@ -228,9 +230,10 @@ class BareMetalDomTestCase(test.TestCase):
         self.mox.StubOutWithMock(dom, 'write_domains')
 
         # Expected calls
-        dom.read_domains('/tftpboot/test_fake_dom_file').AndReturn(fake_domains)
+        dom.read_domains('/tftpboot/test_fake_dom_file')\
+            .AndReturn(fake_domains)
         dom.write_domains('/tftpboot/test_fake_dom_file', fake_domains)
-        
+
         self.mox.ReplayAll()
 
         # Code under test
@@ -264,9 +267,10 @@ class ProxyBareMetalTestCase(test.TestCase):
         self.mox.StubOutWithMock(dom, 'write_domains')
 
         # Expected calls
-        dom.read_domains('/tftpboot/test_fake_dom_file').AndReturn(fake_domains)
+        dom.read_domains('/tftpboot/test_fake_dom_file')\
+            .AndReturn(fake_domains)
         dom.write_domains('/tftpboot/test_fake_dom_file', fake_domains)
-        
+
         self.mox.ReplayAll()
 
         # Code under test

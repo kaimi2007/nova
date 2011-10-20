@@ -49,12 +49,14 @@ FLAGS = flags.FLAGS
 
 LOG = logging.getLogger('nova.virt.baremetal.dom')
 
+
 def read_domains(fname):
     f = open(fname, 'r')
     json = f.read()
     f.close()
     domains = utils.loads(json)
     return domains
+
 
 def write_domains(fname, domains):
     json = utils.dumps(domains)
@@ -217,12 +219,12 @@ class BareMetalDom(object):
 
         self.baremetal_nodes.set_image(bpath, node_id)
 
-        state =  power_state.NOSTATE
+        state = power_state.NOSTATE
         try:
             state = self.baremetal_nodes.activate_node(node_id,
                 node_ip, new_dom['name'], new_dom['mac_address'], \
                 new_dom['ip_address'], new_dom['user_data'])
-            LOG.debug(_("BEFORE last self.change_domain_state +++++++++++++++++"))
+            LOG.debug(_("BEFORE last self.change_domain_state ++++++++++++"))
             self.change_domain_state(new_dom['name'], state)
         except:
             self.domains.remove(new_dom)
