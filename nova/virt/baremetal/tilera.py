@@ -270,10 +270,10 @@ class BareMetalNodes(object):
         out_msg = file.readline().find("Unreachable")
         utils.execute('sudo', 'rm', tile_output)
         if out_msg == -1:
-           cmd = "TILERA_BOARD_#" + str(node_id) + " " + node_ip \
+            cmd = "TILERA_BOARD_#" + str(node_id) + " " + node_ip \
                 + " is ready"
-           LOG.debug(_(cmd))
-           return True
+            LOG.debug(_(cmd))
+            return True
         else:
             cmd = "TILERA_BOARD_#" + str(node_id) + " " \
                 + node_ip + " is not ready, out_msg=" + out_msg
@@ -292,11 +292,11 @@ class BareMetalNodes(object):
         cmd = "Noting to do for tilera nodes: vmlinux is in CF"
         LOG.debug(_(cmd))
 
-    def sleep_mgr(self, time):
+    def sleep_mgr(self, time_in_seconds):
         """
         Sleeps until the node is activated
         """
-        utils.execute('sleep', time)
+        time.sleep(time_in_seconds)
 
     def ssh_set(self, node_ip):
         """
