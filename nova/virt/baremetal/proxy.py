@@ -265,8 +265,6 @@ class ProxyConnection(driver.ComputeDriver):
     def spawn(self, context, instance, network_info,
               block_device_info=None):
         LOG.debug(_("<============= spawn of baremetal =============>"))
-        db.instance_update(context, instance['id'],
-                    {'vm_state': vm_states.BUILDING})
 
         def basepath(fname='', suffix=''):
             return os.path.join(FLAGS.instances_path,
@@ -284,6 +282,9 @@ class ProxyConnection(driver.ComputeDriver):
 
         def _wait_for_boot():
             try:
+                LOG.debug(_("Key is injected but instance is not running yet"))
+                db.instance_update(context, instance['id'],
+                    {'vm_state': vm_states.BUILDING})
                 state = self._conn.create_domain(xml_dict, bpath)
                 if state == power_state.RUNNING:
                     LOG.debug(_('instance %s: booted'), instance['name'])
