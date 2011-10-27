@@ -18,7 +18,8 @@ from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer
 from sqlalchemy import MetaData, String, Table
 from nova import compute
 from nova import log as logging
-
+from nova import db
+from nova import context
 
 meta = MetaData()
 
@@ -59,6 +60,32 @@ def upgrade(migrate_engine):
             table.create()
             # We're using a helper method here instead of direct table
             # manipulation
+            db.api.instance_type_extra_specs_update_or_create(
+                                          context.get_admin_context(),
+                                          1,  # m1.tiny
+                                          extra_specs=dict(
+                                            cpu_arch="x86_64"))
+            db.api.instance_type_extra_specs_update_or_create(
+                                          context.get_admin_context(),
+                                          2,  # m1.small
+                                          extra_specs=dict(
+                                            cpu_arch="x86_64"))
+            db.api.instance_type_extra_specs_update_or_create(
+                                          context.get_admin_context(),
+                                          3,  # m1.medium
+                                          extra_specs=dict(
+                                            cpu_arch="x86_64"))
+            db.api.instance_type_extra_specs_update_or_create(
+                                          context.get_admin_context(),
+                                          4,  # m1.large
+                                          extra_specs=dict(
+                                            cpu_arch="x86_64"))
+            db.api.instance_type_extra_specs_update_or_create(
+                                          context.get_admin_context(),
+                                          5,  # m1.xlarge
+                                          extra_specs=dict(
+                                            cpu_arch="x86_64"))
+
             compute.instance_types.create(name="cg1.small",
                                           memory=2048,
                                           vcpus=1,

@@ -1,9 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2010 United States Government as represented by the
-# Administrator of the National Aeronautics and Space Administration.
-# All Rights Reserved.
-# Copyright (c) 2010 Citrix Systems, Inc.
+# Copyright (c) 2011 University of Southern California
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -16,7 +13,7 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-
+#
 """
 A connection to a hypervisor through baremetal.
 
@@ -57,6 +54,7 @@ from nova import vnc
 from nova.auth import manager
 from nova.compute import instance_types
 from nova.compute import power_state
+from nova.compute import vm_states
 from nova.virt import disk
 from nova.virt import driver
 from nova.virt import images
@@ -108,7 +106,6 @@ class ProxyConnection(driver.ComputeDriver):
         self.baremetal_nodes = nodes.get_baremetal_nodes()
         self._wrapped_conn = None
         self.read_only = read_only
-  
         self._host_state = None
 
     @property
@@ -193,16 +190,11 @@ class ProxyConnection(driver.ComputeDriver):
         def _wait_for_reboot():
             try:
                 state = self._conn.reboot_domain(instance['name'])
-                db.instance_set_state(context.get_admin_context(),
-                                  instance['id'], state, 'running')
                 if state == power_state.RUNNING:
                     LOG.debug(_('instance %s: rebooted'), instance['name'])
                     timer.stop()
             except:
                 LOG.exception(_('_wait_for_reboot failed'))
-                db.instance_set_state(context.get_admin_context(),
-                              instance['id'],
-                              power_state.SHUTDOWN)
                 timer.stop()
         timer.f = _wait_for_reboot
         return timer.start(interval=0.5, now=True)
@@ -247,16 +239,11 @@ class ProxyConnection(driver.ComputeDriver):
         def _wait_for_rescue():
             try:
                 state = self._conn.reboot_domain(instance['name'])
-                db.instance_set_state(context.get_admin_context(),
-                                  instance['id'], state, 'running')
                 if state == power_state.RUNNING:
                     LOG.debug(_('instance %s: rescued'), instance['name'])
                     timer.stop()
             except:
                 LOG.exception(_('_wait_for_rescue failed'))
-                db.instance_set_state(context.get_admin_context(),
-                              instance['id'],
-                              power_state.SHUTDOWN)
                 timer.stop()
         timer.f = _wait_for_reboot
         return timer.start(interval=0.5, now=True)
@@ -277,12 +264,7 @@ class ProxyConnection(driver.ComputeDriver):
 
     def spawn(self, context, instance, network_info,
               block_device_info=None):
-        LOG.debug(_("<============= spawn of baremetal =============>")) 
-        xml_dict = self.to_xml_dict(instance, network_info)
-        self._create_image(context, instance, xml_dict,
-                           network_info=network_info,
-                           block_device_info=block_device_info)
-        LOG.debug(_("instance %s: is running"), instance['name'])
+        LOG.debug(_("<============= spawn of baremetal =============>"))
 
         def basepath(fname='', suffix=''):
             return os.path.join(FLAGS.instances_path,
@@ -291,20 +273,36 @@ class ProxyConnection(driver.ComputeDriver):
         bpath = basepath(suffix='')
         timer = utils.LoopingCall(f=None)
 
+        xml_dict = self.to_xml_dict(instance, network_info)
+        self._create_image(context, instance, xml_dict,
+            network_info=network_info,
+            block_device_info=block_device_info)
+        LOG.debug(_("instance %s: is building"), instance['name'])
+        LOG.debug(_(xml_dict))
+
         def _wait_for_boot():
             try:
-                LOG.debug(_(xml_dict))
+                LOG.debug(_("Key is injected but instance is not running yet"))
+                db.instance_update(context, instance['id'],
+                    {'vm_state': vm_states.BUILDING})
                 state = self._conn.create_domain(xml_dict, bpath)
-                LOG.debug(_('~~~~~~ current state = %s ~~~~~~'), state)
                 if state == power_state.RUNNING:
                     LOG.debug(_('instance %s: booted'), instance['name'])
+                    db.instance_update(context, instance['id'],
+                            {'vm_state': vm_states.ACTIVE})
+                    LOG.debug(_('~~~~~~ current state = %s ~~~~~~'), state)
+                    LOG.debug(_("instance %s spawned successfully"),
+                            instance['name'])
                 else:
-                    LOG.debug(_('instance %s is not booted'), instance['name'])
-            except:
-                LOG.exception(_('instance %s: failed to boot'),
-                              instance['name'])
+                    LOG.debug(_('instance %s:not booted'), instance['name'])
+            except Exception as Exn:
+                LOG.debug(_("Bremetal assignment is overcommitted."))
+                db.instance_update(context, instance['id'],
+                           {'vm_state': vm_states.OVERCOMMIT,
+                            'power_state': power_state.SUSPENDED})
             timer.stop()
         timer.f = _wait_for_boot
+
         return timer.start(interval=0.5, now=True)
 
     def _flush_xen_console(self, virsh_output):
@@ -320,7 +318,8 @@ class ProxyConnection(driver.ComputeDriver):
         console_log = os.path.join(FLAGS.instances_path, instance['name'],
                                    'console.log')
 
-        utils.execute('sudo', 'chown', os.getuid(), console_log, run_as_root=False)
+        utils.execute('sudo', 'chown', os.getuid(), console_log,
+                       run_as_root=False)
 
         fd = self._conn.find_domain(instance['name'])
 
@@ -627,7 +626,7 @@ class ProxyConnection(driver.ComputeDriver):
             LOG.warn(_("Cannot get the number of cpu, because this "
                        "function is not implemented for this platform. "
                        "This error can be safely ignored for now."))
-            return 0
+            return False
 
     def get_memory_mb_total(self):
         """Get the total memory size(MB) of physical computer.

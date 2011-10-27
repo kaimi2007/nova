@@ -41,7 +41,7 @@ class BareMetalNodes(object):
         Sets status of the given node by the given status
         and Returns 1 if the node is in the nodes list
         """
-        return 1
+        return True
 
     def get_status(self):
         """
@@ -55,7 +55,7 @@ class BareMetalNodes(object):
         Sets the status as 1 (RUNNING)
         and Returns the node ID
         """
-        return 0
+        return False
 
     def find_ip_w_id(self, id):
         """
@@ -68,7 +68,7 @@ class BareMetalNodes(object):
         Sets/frees status of the given node as 0 (IDLE)
             so that the node can be used by other user
         """
-        return 0
+        return False
 
     def power_mgr(self, node_id, mode):
         """
@@ -106,6 +106,8 @@ class BareMetalNodes(object):
     def vmlinux_set(self, node_id, mode):
         """
         Sets kernel into default path (/tftpboot) if needed
+        in case of dummy image
+        from basepath to /tftpboot
             based on the given mode
             such as 0-NoSet, 1-SetVmlinux, 9-RemoveVmlinux
         """
@@ -139,6 +141,7 @@ class BareMetalNodes(object):
     def get_image(self, bp):
         """
         Gets the bare-metal file system image into the instance path
+        in case of dummy image
         """
         pass
 

@@ -1,3 +1,26 @@
+# vim: tabstop=4 shiftwidth=4 softtabstop=4
+
+# Copyright (c) 2011 University of Southern California
+#
+#    Licensed under the Apache License, Version 2.0 (the "License"); you may
+#    not use this file except in compliance with the License. You may obtain
+#    a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+#    License for the specific language governing permissions and limitations
+#    under the License.
+
+"""
+Tilera back-end for bare-metal compute node provisioning
+
+The details of this implementation are specific to ISI's testbed. This code
+is provided here as an example of how to implement a backend.
+"""
+
 import base64
 import multiprocessing
 import os
@@ -58,7 +81,7 @@ class BareMetalNodes(object):
     def __init__(self, file_name="/tftpboot/tilera_boards"):
         """
         Only call __init__ the first time object is instantiated
-        From the bare-metal node list file,
+        From the bare-metal node list file: /tftpboot/tilera_boards,
         Reads each item of each node
             such as node ID, IP address, MAC address, vcpus,
             memory, hdd, hypervisor type/version, and cpu
@@ -134,8 +157,8 @@ class BareMetalNodes(object):
         for node in self.nodes:
             if node['node_id'] == node_id:
                 node['status'] = status
-                return 1
-        return 0
+                return True
+        return False
 
     def get_status(self):
         """
@@ -177,6 +200,8 @@ class BareMetalNodes(object):
         """
         Changes power state of the given node
             according to the mode (1-ON, 2-OFF, 3-REBOOT)
+        /tftpboot/pdu_mgr script handles power management of
+        PDU (Power Distribution Unit)
         """
         if node_id < 5:
             pdu_num = 1
@@ -191,6 +216,8 @@ class BareMetalNodes(object):
     def deactivate_node(self, node_id):
         """
         Deactivates the given node by turnning it off
+        /tftpboot/fs_x directory is a NFS of node#x
+        /tftpboot/root_x file is an file system image of node#x
         """
         node_ip = self.find_ip_w_id(node_id)
         LOG.debug(_("deactivate_node is called for \
@@ -204,8 +231,6 @@ class BareMetalNodes(object):
         self.sleep_mgr(5)
         path = "/tftpboot/fs_" + str(node_id)
         pathx = "/tftpboot/root_" + str(node_id)
-        #  key = path + "/root/.ssh/authorized_keys"
-        #  utils.execute('sudo', 'rm', key)
         utils.execute('sudo', '/usr/sbin/rpc.mountd')
         try:
             utils.execute('sudo', 'umount', '-f', pathx)
@@ -228,15 +253,12 @@ class BareMetalNodes(object):
     def iptables_set(self, node_ip, user_data):
         """
         Sets security setting (iptables:port) if needed
+            iptables -A INPUT -p tcp ! -s $IP --dport $PORT -j DROP
+        /tftpboot/iptables_rule script sets iptables rule on the given node
         """
         if user_data != '':
             open_ip = base64.b64decode(user_data)
             utils.execute('/tftpboot/iptables_rule', node_ip, open_ip)
-        """utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
-            '--resume', '--net', node_ip, '--run', '-', \
-            'iptables', '-A', 'INPUT', '-p', 'tcp', '!', '-s', \
-            '10.0.11.1', '--dport', '963', '-j', 'DROP', '-', '--wait', \
-            '--quit')"""
 
     def check_activated(self, node_id, node_ip):
         """
@@ -247,28 +269,22 @@ class BareMetalNodes(object):
         grep_cmd = "ping -c1 " + node_ip + " | grep Unreachable > " \
                    + tile_output
         subprocess.Popen(grep_cmd, shell=True)
-        LOG.debug(_("After ping to the bare-metal node"))
-        """file = open(tile_output, "r")
-        LOG.debug(_("After read the tile_output: %s"), file)
-        out_msg = file.readline()
-        LOG.debug(_("After read the one line: %s"), out_msg)
+        self.sleep_mgr(5)
+
+        file = open(tile_output, "r")
         out_msg = file.readline().find("Unreachable")
-        LOG.debug(_("After read the find result: %s"), out_msg)
         utils.execute('sudo', 'rm', tile_output)
-        #if out_msg == -1:"""
-        cmd = "TILERA_BOARD_#" + str(node_id) + " " + node_ip \
+        if out_msg == -1:
+            cmd = "TILERA_BOARD_#" + str(node_id) + " " + node_ip \
                 + " is ready"
-        LOG.debug(_(cmd))
-        return 1
-        """else:
+            LOG.debug(_(cmd))
+            return True
+        else:
             cmd = "TILERA_BOARD_#" + str(node_id) + " " \
                 + node_ip + " is not ready, out_msg=" + out_msg
             LOG.debug(_(cmd))
             self.power_mgr(node_id, 2)
-            #  cmd = "Rebooting board is being done... Please wait 90 secs more."
-            #  self.sleep_mgr(90)
-            #  LOG.debug(_(cmd))
-            return 0 """
+            return False
 
     def vmlinux_set(self, node_id, mode):
         """
@@ -281,11 +297,11 @@ class BareMetalNodes(object):
         cmd = "Noting to do for tilera nodes: vmlinux is in CF"
         LOG.debug(_(cmd))
 
-    def sleep_mgr(self, time):
+    def sleep_mgr(self, time_in_seconds):
         """
         Sleeps until the node is activated
         """
-        utils.execute('sleep', time)
+        time.sleep(time_in_seconds)
 
     def ssh_set(self, node_ip):
         """
@@ -332,6 +348,7 @@ class BareMetalNodes(object):
         """
         Gets the bare-metal file system image into the instance path
         in case of dummy image
+        Noting to do for tilera nodes: actual image is used
         """
         path_fs = "/tftpboot/tilera_fs"
         path_root = bp + "/root"
@@ -341,6 +358,8 @@ class BareMetalNodes(object):
         """
         Sets the PXE bare-metal file system from the instance path
             after euca key is injected
+        /tftpboot/fs_x directory is a NFS of node#x
+        /tftpboot/root_x file is an file system image of node#x
         """
         path1 = bpath + "/root"
         pathx = "/tftpboot/root_" + str(node_id)
