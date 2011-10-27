@@ -288,14 +288,16 @@ class LibvirtConnection(driver.ComputeDriver):
                                       'devices.allow')
         # Allow Nvidia Conroller
         perm = "c 195:255  rwm"
-        cmd = "sudo echo %s >> %s" % (perm, dev_whitelist)
+#        cmd = "sudo echo %s >> %s" % (perm, dev_whitelist)
+        cmd = "echo %s | sudo tee -a %s" % (perm, dev_whitelist)
         msg = _("executing  %s") % cmd
         LOG.info(msg)
         subprocess.Popen(cmd, shell=True)
         for i in range(FLAGS.xpus):
             # Allow each gpu device
             perm = "c 195:%d  rwm" % i
-            cmd = "sudo echo %s >> %s" % (perm, dev_whitelist)
+#            cmd = "sudo echo %s >> %s" % (perm, dev_whitelist)
+            cmd = "echo %s | sudo tee -a %s" % (perm, dev_whitelist)
             msg = _("executing  %s") % cmd
             LOG.info(msg)
             subprocess.Popen(cmd, shell=True)
@@ -355,11 +357,13 @@ class LibvirtConnection(driver.ComputeDriver):
             gpus_assigned[inst['name']] = gpus_assigned_list
             gpus_visible = str(gpus_assigned_list).strip('[]')
             flag = "CUDA_VISIBLE_DEVICES=%s" % gpus_visible
-            cmd = "sudo echo %s >> %s" % (flag, env_file)
+            cmd = "echo %s | sudo tee -a %s" % (flag, env_file)
+#            cmd = "echo %s >> %s" % (flag, env_file)
             msg = _("executing the command %s") % cmd
             LOG.info(msg)
             print "(JP) %s" % msg
             subprocess.Popen(cmd, shell=True)
+#            utils.executeShell(cmd, run_as_root=True)
 
     def deassign_gpus(self, inst):
         """Assigns gpus to a specific instance"""
