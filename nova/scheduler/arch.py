@@ -66,12 +66,12 @@ class ArchitectureScheduler(driver.Scheduler):
         wanted_vcpus = instance_type['vcpus']
         wanted_memory_mb = instance_type['memory_mb']
         wanted_local_gb = instance_type['local_gb']
-        flavorid = instance_type['id']
+        instance_id = instance_type['id']
 
         LOG.debug(_("## wanted-vcpus=%s"), wanted_vcpus)
         LOG.debug(_("## wanted-memory=%s"), wanted_memory_mb)
         LOG.debug(_("## wanted-hard=%s"), wanted_local_gb)
-        LOG.debug(_("## flavorid=%s"), flavorid)
+        LOG.debug(_("## instance_id=%s"), instance_id)
 
         # from instance_metadata table
 #        instance_meta = db.instance_metadata_get(context, instance_id)
@@ -80,7 +80,7 @@ class ArchitectureScheduler(driver.Scheduler):
         # from instance_type_extra_specs table
 #        instance_extra = db.instance_type_extra_specs_get( \
         instance_meta = db.instance_type_extra_specs_get( \
-            context, flavorid)
+            context, instance_id)
         LOG.debug(_("## inst-meta=%s"), instance_meta)
 
         # combine to inatance_meta
