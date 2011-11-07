@@ -40,7 +40,6 @@ flags.DEFINE_integer("max_gigabytes", 10000,
 flags.DEFINE_integer("max_networks", 1000,
                      "maximum number of networks to allow per host")
 
-
 class ArchitectureScheduler(driver.Scheduler):
     """Implements Scheduler as a random node selector."""
 
@@ -67,7 +66,7 @@ class ArchitectureScheduler(driver.Scheduler):
         wanted_vcpus = instance_type['vcpus']
         wanted_memory_mb = instance_type['memory_mb']
         wanted_local_gb = instance_type['local_gb']
-        flavorid = instance_type['flavorid']
+        flavorid = instance_type['id']
 
         LOG.debug(_("## wanted-vcpus=%s"), wanted_vcpus)
         LOG.debug(_("## wanted-memory=%s"), wanted_memory_mb)
@@ -179,9 +178,11 @@ class ArchitectureScheduler(driver.Scheduler):
                         int(resource_cap['disk_total'])
                         - int(resource_cap['disk_used']))
 
-                    if wanted_vcpus > (int(resource_cap['vcpus']) \
-                        - int(resource_cap['vcpus_used'])) \
-                    or wanted_memory_mb > \
+#                    if wanted_vcpus > (int(resource_cap['vcpus']) \
+#                        - int(resource_cap['vcpus_used'])) \
+#                    or wanted_memory_mb > \
+
+                    if wanted_memory_mb > \
                        int(resource_cap['host_memory_free']) \
                     or wanted_local_gb > (int(resource_cap['disk_total']) \
                         - int(resource_cap['disk_used'])):
