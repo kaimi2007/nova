@@ -554,7 +554,9 @@ class LibvirtConnection(driver.ComputeDriver):
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE) 
                 x = p.communicate()
                 LOG.info(_('attach_volume: return (%s, %s)') % (x[0], x[1]))
-                if len(x[1]) > 5: # new  "No such file exists..."
+                #if len(x[1]) > 5: # new  "No such file exists..."
+                s = x[1].lower()
+                if (s.find('no such') >= 0) : # new  "No such file exists..."
                     cmd2 = cmd_lxc + ' /bin/mkdir ' + dir_name
                     LOG.info(_('attach_volume: cmd (%s)') % cmd2)
                     subprocess.call(cmd2, shell=True)
@@ -612,9 +614,8 @@ class LibvirtConnection(driver.ComputeDriver):
         virt_dom = self._lookup_by_name(instance_name)
 # ISI
         if FLAGS.libvirt_type == 'lxc':
-            LOG.info(_('detach_volume: path(%s): do nothing'))
-            return
-            LOG.info(_('detach_volume: path(%s)') % device_path)
+            #LOG.info(_('detach_volume: path(%s): do nothing'))
+            #return
             # get id of the virt_dom
             pid = virt_dom.ID()
             spid = str(pid)
@@ -622,9 +623,12 @@ class LibvirtConnection(driver.ComputeDriver):
             init_pid = 1 + int(spid)
             LOG.info(_('detach_volume: init_pid(%d)') % init_pid)
             cmd_lxc = 'sudo lxc-attach -n %s -- ' % str(init_pid)
-            cmd1 = cmd_lxc + ' /bin/umount ' + mountpoint
+            # for only 1 volume: to be extended in the future
+            cmd1 = cmd_lxc + ' /bin/umount ' + '/euca-volume0'
             subprocess.call(cmd1, shell=True)
-            cmd1 = cmd_lxc + ' /bin/umount ' + mountpoint + '1'
+            cmd1 = cmd_lxc + ' /bin/rmdir ' + '/euca-volume0'
+            subprocess.call(cmd1, shell=True)
+            cmd1 = cmd_lxc + ' /bin/rm ' + mountpoint
             subprocess.call(cmd1, shell=True)
             return
 # !ISI
