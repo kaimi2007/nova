@@ -89,6 +89,9 @@ class ProjectTestCase(test.TestCase):
                 continue
             if contributor == '<do-not-email@isi.edu>':
                 continue
+            # Note(lorinh): Hack because accidental commit as root
+            if contributor == '<root@bespin.(none)>':
+                continue
             if contributor == 'Server':
                 continue
             if not contributor in authors_file:

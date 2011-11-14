@@ -299,14 +299,16 @@ class LibvirtConnection(driver.ComputeDriver):
                                       'devices.allow')
         # Allow Nvidia Conroller
         perm = "c 195:255  rwm"
-        cmd = "sudo echo %s >> %s" % (perm, dev_whitelist)
+#        cmd = "sudo echo %s >> %s" % (perm, dev_whitelist)
+        cmd = "echo %s | sudo tee -a %s" % (perm, dev_whitelist)
         msg = _("executing  %s") % cmd
         LOG.info(msg)
         subprocess.Popen(cmd, shell=True)
         for i in range(FLAGS.xpus):
             # Allow each gpu device
             perm = "c 195:%d  rwm" % i
-            cmd = "sudo echo %s >> %s" % (perm, dev_whitelist)
+#            cmd = "sudo echo %s >> %s" % (perm, dev_whitelist)
+            cmd = "echo %s | sudo tee -a %s" % (perm, dev_whitelist)
             msg = _("executing  %s") % cmd
             LOG.info(msg)
             subprocess.Popen(cmd, shell=True)
@@ -366,11 +368,13 @@ class LibvirtConnection(driver.ComputeDriver):
             gpus_assigned[inst['name']] = gpus_assigned_list
             gpus_visible = str(gpus_assigned_list).strip('[]')
             flag = "CUDA_VISIBLE_DEVICES=%s" % gpus_visible
-            cmd = "sudo echo %s >> %s" % (flag, env_file)
+            cmd = "echo %s | sudo tee -a %s" % (flag, env_file)
+#            cmd = "echo %s >> %s" % (flag, env_file)
             msg = _("executing the command %s") % cmd
             LOG.info(msg)
             print "(JP) %s" % msg
             subprocess.Popen(cmd, shell=True)
+#            utils.executeShell(cmd, run_as_root=True)
 
     def deassign_gpus(self, inst):
         """Assigns gpus to a specific instance"""
@@ -502,6 +506,102 @@ class LibvirtConnection(driver.ComputeDriver):
     @exception.wrap_exception()
     def attach_volume(self, connection_info, instance_name, mountpoint):
         virt_dom = self._lookup_by_name(instance_name)
+# ISI
+        if FLAGS.libvirt_type == 'lxc':
+
+
+            LOG.info(_('attach_volume: path(%s)') % device_path)
+            # get id of the virt_dom
+            pid = virt_dom.ID()
+            spid = str(pid)
+            LOG.info(_('attach_volume: pid(%s)') % spid)
+            init_pid = 1 + int(spid)
+            LOG.info(_('attach_volume: init_pid(%d)') % init_pid)
+            # get major, minor number of the device
+            s = os.stat(device_path)
+            major_num = os.major(s.st_rdev)
+            minor_num = os.minor(s.st_rdev)
+            LOG.info(_('attach_volume: path(%s)') % device_path)
+            LOG.info(_('attach_volume: major_num(%d) minor_num(%d)') % (major_num, minor_num))
+
+            # allow the device
+            dev_whitelist = os.path.join(FLAGS.dev_cgroups_path,
+                                      instance_name,
+                                      'devices.allow')
+            # Allow the disk
+            perm = "b %d:%d rwm" % (major_num, minor_num)
+            cmd = "echo %s | sudo tee -a %s" % (perm, dev_whitelist)
+            LOG.info(_('attach_volume: cmd(%s)') % cmd)
+            subprocess.Popen(cmd, shell=True)
+
+
+            # pass the numbers to the LXC instance
+            # run lxc-attach:
+            # sudo lxc-attach -n pid -- mknod -m 777
+            #                 <mountpoint> b <major #> <minor #> 
+            cmd_lxc = 'sudo lxc-attach -n %s -- ' % str(init_pid)
+            # check if 'mountpoint' already exists
+            #cmd = '/bin/ls %s' % mountpoint
+            #if subprocess.call(cmd, shell=True) == 0: # not new
+            #    postfix = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', \
+            #               'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z']
+            #    for t in range (len(postfix)):
+            #        n_mountpoint = mountpoint + postfix[t]
+            #        cmd = '/bin/ls %s' % n_mountpoint
+            #        if subprocess.call(cmd, shell=True) <> 0: # new
+            #            break;
+
+            # create device(s) for mount
+            new_mountpoint = mountpoint 
+            cmd = '/bin/mknod -m 777 %s b %d %d '\
+                 % (new_mountpoint, major_num, minor_num)
+            cmd = cmd_lxc + cmd
+            LOG.info(_('attach_volume: cmd (%s)') % cmd)
+            subprocess.call(cmd, shell=True)
+
+            #new_mountpoint = mountpoint + '1'
+            #minor_num = minor_num + 1
+
+            # Allow the disk
+            #perm = "b %d:%d rwm" % (major_num, minor_num)
+            #cmd = "echo %s | sudo tee -a %s" % (perm, dev_whitelist)
+            #LOG.info(_('attach_volume: cmd(%s)') % cmd)
+            #subprocess.call(cmd, shell=True)
+
+            #cmd = '/bin/mknod -m 777 %s b %d %d '\
+            #     % (new_mountpoint, major_num, minor_num)
+            #cmd = cmd_lxc + cmd
+            #LOG.info(_('attach_volume: cmd (%s)') % cmd)
+            #subprocess.call(cmd, shell=True)
+           
+
+            # create a directory for mount
+            for n in range (0, 100):
+                dir_name = '/euca-volume' + str(n)
+                cmd1 = cmd_lxc + ' /bin/ls ' + dir_name
+                LOG.info(_('attach_volume: cmd (%s)') % cmd1)
+                p = subprocess.Popen(cmd1, shell=True,  \
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE) 
+                x = p.communicate()
+                LOG.info(_('attach_volume: return (%s, %s)') % (x[0], x[1]))
+                #if len(x[1]) > 5: # new  "No such file exists..."
+                s = x[1].lower()
+                if (s.find('no such') >= 0) : # new  "No such file exists..."
+                    cmd2 = cmd_lxc + ' /bin/mkdir ' + dir_name
+                    LOG.info(_('attach_volume: cmd (%s)') % cmd2)
+                    subprocess.call(cmd2, shell=True)
+                    break;
+            # mount
+            cmd1 = cmd_lxc + ' /bin/mount ' + new_mountpoint + ' ' + dir_name
+            LOG.info(_('attach_volume: cmd (%s)') % cmd1)
+            subprocess.call(cmd1, shell=True)
+
+            cmd1 = cmd_lxc + " /bin/chmod 'og+w' " + ' ' + dir_name
+            LOG.info(_('attach_volume: cmd (%s)') % cmd1)
+            subprocess.call(cmd1, shell=True)
+
+            return
+# !ISI
         mount_device = mountpoint.rpartition("/")[2]
         xml = self.volume_driver_method('connect_volume',
                                         connection_info,
@@ -530,6 +630,28 @@ class LibvirtConnection(driver.ComputeDriver):
 
     @exception.wrap_exception()
     def detach_volume(self, connection_info, instance_name, mountpoint):
+        virt_dom = self._lookup_by_name(instance_name)
+# ISI
+        if FLAGS.libvirt_type == 'lxc':
+            #LOG.info(_('detach_volume: path(%s): do nothing'))
+            #return
+            # get id of the virt_dom
+            pid = virt_dom.ID()
+            spid = str(pid)
+            LOG.info(_('detach_volume: pid(%s)') % spid)
+            init_pid = 1 + int(spid)
+            LOG.info(_('detach_volume: init_pid(%d)') % init_pid)
+            cmd_lxc = 'sudo lxc-attach -n %s -- ' % str(init_pid)
+            # for only 1 volume: to be extended in the future
+            cmd1 = cmd_lxc + ' /bin/umount ' + '/euca-volume0'
+            subprocess.call(cmd1, shell=True)
+            cmd1 = cmd_lxc + ' /bin/rmdir ' + '/euca-volume0'
+            subprocess.call(cmd1, shell=True)
+            cmd1 = cmd_lxc + ' /bin/rm ' + mountpoint
+            subprocess.call(cmd1, shell=True)
+            return
+# !ISI
+        
         mount_device = mountpoint.rpartition("/")[2]
         try:
             # NOTE(vish): This is called to cleanup volumes after live

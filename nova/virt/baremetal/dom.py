@@ -1,3 +1,19 @@
+# vim: tabstop=4 shiftwidth=4 softtabstop=4
+
+# Copyright (c) 2011 University of Southern California
+#
+#    Licensed under the Apache License, Version 2.0 (the "License"); you may
+#    not use this file except in compliance with the License. You may obtain
+#    a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+#    License for the specific language governing permissions and limitations
+#    under the License.
+
 import multiprocessing
 import os
 import random
@@ -7,7 +23,6 @@ import sys
 import tempfile
 import time
 import uuid
-import pickle
 from xml.dom import minidom
 from xml.etree import ElementTree
 
@@ -35,6 +50,21 @@ FLAGS = flags.FLAGS
 LOG = logging.getLogger('nova.virt.baremetal.dom')
 
 
+def read_domains(fname):
+    f = open(fname, 'r')
+    json = f.read()
+    f.close()
+    domains = utils.loads(json)
+    return domains
+
+
+def write_domains(fname, domains):
+    json = utils.dumps(domains)
+    f = open(fname, 'w')
+    f.write(json)
+    f.close()
+
+
 class BareMetalDom(object):
     """
     BareMetalDom class handles fake domain for bare metal back ends
@@ -56,7 +86,9 @@ class BareMetalDom(object):
                  fake_dom_file="/tftpboot/test_fake_dom_file"):
         """
         Only call __init__ the first time object is instantiated
-        Sets and Opens domain file
+        Sets and Opens domain file: /tftpboot/test_fake_dom_file
+        Even though nova-compute service is rebooted,
+        this file should retain the existing domains
         """
         if self._is_init:
             return
@@ -65,34 +97,18 @@ class BareMetalDom(object):
         self.fake_dom_file = fake_dom_file
         self.domains = []
         self.fake_dom_nums = 0
-        self.fp = 0
         self.baremetal_nodes = nodes.get_baremetal_nodes()
 
-        #  utils.execute('sudo', 'rm', self.fake_dom_file)
-        LOG.debug(_("open %s"), self.fake_dom_file)
-        try:
-            self.fp = open(self.fake_dom_file, "r+")
-            LOG.debug(_("fp = %s"), self.fp)
-        except IOError:
-            LOG.debug(_("%s file does not exist, will create it"),
-                      self.fake_dom_file)
-            self.fp = open(self.fake_dom_file, "w")
-            self.fp.close()
-            self.fp = open(self.fake_dom_file, "r+")
         self._read_domain_from_file()
 
     def _read_domain_from_file(self):
         """
-        Reads the domains from a pickled representation.
+        Reads the domains from a file.
         """
         try:
-            self.domains = pickle.load(self.fp)
-            self.fp.close()
-            self.fp = open(self.fake_dom_file, "w")
-        except EOFError:
+            self.domains = read_domains(self.fake_dom_file)
+        except IOError:
             dom = []
-            self.fp.close()
-            self.fp = open(self.fake_dom_file, "w")
             LOG.debug(_("No domains exist."))
             return
         LOG.debug(_("============= initial domains ==========="))
@@ -204,12 +220,13 @@ class BareMetalDom(object):
         self.change_domain_state(new_dom['name'], power_state.BUILDING)
 
         self.baremetal_nodes.set_image(bpath, node_id)
-        state =  power_state.NOSTATE
+
+        state = power_state.NOSTATE
         try:
             state = self.baremetal_nodes.activate_node(node_id,
                 node_ip, new_dom['name'], new_dom['mac_address'], \
                 new_dom['ip_address'], new_dom['user_data'])
-            LOG.debug(_("BEFORE last self.change_domain_state +++++++++++++++++"))
+            LOG.debug(_("BEFORE last self.change_domain_state ++++++++++++"))
             self.change_domain_state(new_dom['name'], state)
         except:
             self.domains.remove(new_dom)
@@ -238,9 +255,7 @@ class BareMetalDom(object):
         LOG.debug(_("-------"))
         LOG.debug(_(self.domains))
         LOG.debug(_("-------"))
-        #  fp.seek(0)
-        pickle.dump(self.domains, self.fp)
-        LOG.debug(_("after successful pickle.dump"))
+        write_domains(self.fake_dom_file, self.domains)
 
     def find_domain(self, name):
         """
