@@ -12,3 +12,4 @@ nova.egg-info
 *.sqlite
 *.log
 bin/nova.conf
+networks/*
