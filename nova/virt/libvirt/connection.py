@@ -500,7 +500,7 @@ class LibvirtConnection(driver.ComputeDriver):
             major_num = os.major(s.st_rdev)
             minor_num = os.minor(s.st_rdev)
             LOG.info(_('attach_volume: path(%s)') % device_path)
-            LOG.info(_('attach_volume: major_num(%d) minor_num(%d)') % (major_num, minor_num))
+            LOG.info(_('attach_volume: major_num(%(major_num)d) minor_num(%(minor_num)d)') % locals())
 
             # allow the device
             dev_whitelist = os.path.join(FLAGS.dev_cgroups_path,
@@ -564,7 +564,7 @@ class LibvirtConnection(driver.ComputeDriver):
                 p = subprocess.Popen(cmd1, shell=True,  \
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE) 
                 x = p.communicate()
-                LOG.info(_('attach_volume: return (%s, %s)') % (x[0], x[1]))
+                LOG.info(_('attach_volume: return (%(x[0])s, %(x[1])s)') % locals())
                 #if len(x[1]) > 5: # new  "No such file exists..."
                 s = x[1].lower()
                 if (len(s) > 0 and s.find('no such') >= 0) : # new  "No such file exists..."
@@ -652,7 +652,7 @@ class LibvirtConnection(driver.ComputeDriver):
 
             dev_key = init_pid + mountpoint
             if dev_key not in lxc_mounts:
-                raise Exception(_('no such process(%s) or mount point(%s)') % (init_pid, mountpoint))
+                raise Exception(_('no such process(%(init_pid)s) or mount point(%(mountpoint)s)') % locals())
             dir_name = lxc_mounts[dev_key]
 
             LOG.info(_('detach_volume: init_pid(%s)') % init_pid)
