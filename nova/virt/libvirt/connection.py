@@ -79,9 +79,11 @@ libvirt = None
 libxml2 = None
 Template = None
 
-
 LOG = logging.getLogger('nova.virt.libvirt_conn')
 
+#ISI
+lxc_mounts = {}
+#!ISI
 
 FLAGS = flags.FLAGS
 flags.DECLARE('live_migration_retry_count', 'nova.compute.manager')
@@ -478,15 +480,21 @@ class LibvirtConnection(driver.ComputeDriver):
         virt_dom = self._lookup_by_name(instance_name)
 # ISI
         if FLAGS.libvirt_type == 'lxc':
-
-
             LOG.info(_('attach_volume: path(%s)') % device_path)
             # get id of the virt_dom
             pid = virt_dom.ID()
             spid = str(pid)
             LOG.info(_('attach_volume: pid(%s)') % spid)
-            init_pid = 1 + int(spid)
-            LOG.info(_('attach_volume: init_pid(%d)') % init_pid)
+
+            # get PID of the init process
+            ps_command = subprocess.Popen("ps -o pid --ppid %s --noheaders" % spid, shell=True, stdout=subprocess.PIPE)
+            init_pid = ps_command.stdout.read()
+            init_pid = int(init_pid)
+            init_pid = str(init_pid)
+            retcode = ps_command.wait()
+            assert retcode == 0, "ps command returned %d" % retcode
+
+            LOG.info(_('attach_volume: init_pid(%s)') % init_pid)
             # get major, minor number of the device
             s = os.stat(device_path)
             major_num = os.major(s.st_rdev)
@@ -504,12 +512,11 @@ class LibvirtConnection(driver.ComputeDriver):
             LOG.info(_('attach_volume: cmd(%s)') % cmd)
             subprocess.Popen(cmd, shell=True)
 
-
             # pass the numbers to the LXC instance
             # run lxc-attach:
             # sudo lxc-attach -n pid -- mknod -m 777
             #                 <mountpoint> b <major #> <minor #> 
-            cmd_lxc = 'sudo lxc-attach -n %s -- ' % str(init_pid)
+            cmd_lxc = 'sudo lxc-attach -n %s -- ' % init_pid
             # check if 'mountpoint' already exists
             #cmd = '/bin/ls %s' % mountpoint
             #if subprocess.call(cmd, shell=True) == 0: # not new
@@ -521,16 +528,19 @@ class LibvirtConnection(driver.ComputeDriver):
             #        if subprocess.call(cmd, shell=True) <> 0: # new
             #            break;
 
+            LOG.info(_('attach_volume: mountpoint(%s)') % mountpoint)
+            dev_key = init_pid + mountpoint
+            LOG.info(_('attach_volume: dev_key(%s)') % dev_key)
+            if dev_key in lxc_mounts:
+                LOG.info(_('attach_volume: dev_key(%s) is already used') % dev_key)
+                raise Exception(_('the same mount point(%s) is already used.') % mountpoint)
+
             # create device(s) for mount
-            new_mountpoint = mountpoint 
             cmd = '/bin/mknod -m 777 %s b %d %d '\
-                 % (new_mountpoint, major_num, minor_num)
+                 % (mountpoint, major_num, minor_num)
             cmd = cmd_lxc + cmd
             LOG.info(_('attach_volume: cmd (%s)') % cmd)
             subprocess.call(cmd, shell=True)
-
-            #new_mountpoint = mountpoint + '1'
-            #minor_num = minor_num + 1
 
             # Allow the disk
             #perm = "b %d:%d rwm" % (major_num, minor_num)
@@ -539,13 +549,14 @@ class LibvirtConnection(driver.ComputeDriver):
             #subprocess.call(cmd, shell=True)
 
             #cmd = '/bin/mknod -m 777 %s b %d %d '\
-            #     % (new_mountpoint, major_num, minor_num)
+            #     % (mountpoint, major_num, minor_num)
             #cmd = cmd_lxc + cmd
             #LOG.info(_('attach_volume: cmd (%s)') % cmd)
             #subprocess.call(cmd, shell=True)
            
 
             # create a directory for mount
+            found = 0
             for n in range (0, 100):
                 dir_name = '/euca-volume' + str(n)
                 cmd1 = cmd_lxc + ' /bin/ls ' + dir_name
@@ -556,13 +567,23 @@ class LibvirtConnection(driver.ComputeDriver):
                 LOG.info(_('attach_volume: return (%s, %s)') % (x[0], x[1]))
                 #if len(x[1]) > 5: # new  "No such file exists..."
                 s = x[1].lower()
-                if (s.find('no such') >= 0) : # new  "No such file exists..."
+                if (len(s) > 0 and s.find('no such') >= 0) : # new  "No such file exists..."
                     cmd2 = cmd_lxc + ' /bin/mkdir ' + dir_name
                     LOG.info(_('attach_volume: cmd (%s)') % cmd2)
                     subprocess.call(cmd2, shell=True)
+                    found = 1
                     break;
+            if found == 0:
+                cmd = '/bin/rm %s '\
+                     % (mountpoint)
+                cmd = cmd_lxc + cmd
+                LOG.info(_('attach_volume: cmd (%s)') % cmd)
+                subprocess.call(cmd, shell=True)
+                raise Exception(_('cannot find mounting directories'))
+
+            lxc_mounts[dev_key] = dir_name 
             # mount
-            cmd1 = cmd_lxc + ' /bin/mount ' + new_mountpoint + ' ' + dir_name
+            cmd1 = cmd_lxc + ' /bin/mount ' + mountpoint + ' ' + dir_name
             LOG.info(_('attach_volume: cmd (%s)') % cmd1)
             subprocess.call(cmd1, shell=True)
 
@@ -620,15 +641,33 @@ class LibvirtConnection(driver.ComputeDriver):
             pid = virt_dom.ID()
             spid = str(pid)
             LOG.info(_('detach_volume: pid(%s)') % spid)
-            init_pid = 1 + int(spid)
-            LOG.info(_('detach_volume: init_pid(%d)') % init_pid)
+
+            # get PID of the init process
+            ps_command = subprocess.Popen("ps -o pid --ppid %s --noheaders" % spid, shell=True, stdout=subprocess.PIPE)
+            init_pid = ps_command.stdout.read()
+            init_pid = int(init_pid)
+            init_pid = str(init_pid)
+            retcode = ps_command.wait()
+            assert retcode == 0, "ps command returned %d" % retcode
+
+            dev_key = init_pid + mountpoint
+            if dev_key not in lxc_mounts:
+                raise Exception(_('no such process(%s) or mount point(%s)') % (init_pid, mountpoint))
+            dir_name = lxc_mounts[dev_key]
+
+            LOG.info(_('detach_volume: init_pid(%s)') % init_pid)
             cmd_lxc = 'sudo lxc-attach -n %s -- ' % str(init_pid)
-            # for only 1 volume: to be extended in the future
-            cmd1 = cmd_lxc + ' /bin/umount ' + '/euca-volume0'
+            cmd1 = cmd_lxc + ' /bin/umount ' + dir_name
+            LOG.info(_('detach_volume: cmd(%s)') % cmd1)
             subprocess.call(cmd1, shell=True)
-            cmd1 = cmd_lxc + ' /bin/rmdir ' + '/euca-volume0'
+            cmd1 = cmd_lxc + ' /bin/rmdir  ' + dir_name
+            LOG.info(_('detach_volume: cmd(%s)') % cmd1)
             subprocess.call(cmd1, shell=True)
+
+            del lxc_mounts[dev_key]  # delete dictionary entry
+
             cmd1 = cmd_lxc + ' /bin/rm ' + mountpoint
+            LOG.info(_('detach_volume: cmd(%s)') % cmd1)
             subprocess.call(cmd1, shell=True)
             return
 # !ISI
