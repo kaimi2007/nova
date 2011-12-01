@@ -727,6 +727,7 @@ class NetworkCommands(object):
     @args('--vpn', dest="vpn_start", help='vpn start')
     @args('--fixed_range_v6', dest="fixed_range_v6",
           help='IPv6 subnet (ex: fe80::/64')
+    @args('--gateway', dest="gateway", help='gateway')
     @args('--gateway_v6', dest="gateway_v6", help='ipv6 gateway')
     @args('--bridge', dest="bridge",
             metavar='<bridge>',
@@ -746,9 +747,10 @@ class NetworkCommands(object):
       help='Network interface priority')
     def create(self, label=None, fixed_range_v4=None, num_networks=None,
                network_size=None, multi_host=None, vlan_start=None,
-               vpn_start=None, fixed_range_v6=None, gateway_v6=None,
-               bridge=None, bridge_interface=None, dns1=None, dns2=None,
-               project_id=None, priority=None, uuid=None):
+               vpn_start=None, fixed_range_v6=None, gateway=None,
+               gateway_v6=None, bridge=None, bridge_interface=None,
+               dns1=None, dns2=None, project_id=None, priority=None,
+               uuid=None):
         """Creates fixed ips for host by range"""
 
         # check for certain required inputs
@@ -811,6 +813,7 @@ class NetworkCommands(object):
                                     vlan_start=int(vlan_start),
                                     vpn_start=int(vpn_start),
                                     cidr_v6=fixed_range_v6,
+                                    gateway=gateway,
                                     gateway_v6=gateway_v6,
                                     bridge=bridge,
                                     bridge_interface=bridge_interface,
@@ -858,14 +861,26 @@ class NetworkCommands(object):
                           network.cidr,
                           network.cidr_v6)
 
-    @args('--network', dest="fixed_range", metavar='<x.x.x.x/yy>',
+    @args('--fixed_range', dest="fixed_range", metavar='<x.x.x.x/yy>',
             help='Network to delete')
-    def delete(self, fixed_range):
+    @args('--uuid', dest='uuid', metavar='<uuid>',
+            help='UUID of network to delete')
+    def delete(self, fixed_range=None, uuid=None):
         """Deletes a network"""
 
-        # delete the network
+        if fixed_range is None and uuid is None:
+            raise Exception("Please specify either fixed_range or uuid")
+
         net_manager = utils.import_object(FLAGS.network_manager)
-        net_manager.delete_network(context.get_admin_context(), fixed_range)
+        if "QuantumManager" in FLAGS.network_manager:
+            if uuid is None:
+                raise Exception("UUID is required to delete Quantum Networks")
+            if fixed_range:
+                raise Exception("Deleting by fixed_range is not supported " \
+                    "with the QuantumManager")
+        # delete the network
+        net_manager.delete_network(context.get_admin_context(),
+            fixed_range, uuid)
 
     @args('--network', dest="fixed_range", metavar='<x.x.x.x/yy>',
             help='Network to modify')
@@ -1021,7 +1036,7 @@ class ServiceCommands(object):
                     _('Updated_At'))
         for svc in services:
             delta = now - (svc['updated_at'] or svc['created_at'])
-            alive = (delta.seconds <= 15)
+            alive = abs(utils.total_seconds(delta)) <= FLAGS.service_down_time
             art = (alive and ":-)") or "XXX"
             active = 'enabled'
             if svc['disabled']:
@@ -1809,6 +1824,7 @@ class ImageCommands(object):
             return new
         except Exception as exc:
             print _("Failed to register %(path)s: %(exc)s") % locals()
+            sys.exit(1)
 
     @args('--image', dest='image', metavar='<image>', help='Image')
     @args('--kernel', dest='kernel', metavar='<kernel>', help='Kernel')
@@ -1947,6 +1963,147 @@ class ImageCommands(object):
         self._convert_images(machine_images)
 
 
+class StorageManagerCommands(object):
+    """Class for mangaging Storage Backends and Flavors"""
+
+    def flavor_list(self, flavor=None):
+        ctxt = context.get_admin_context()
+
+        try:
+            if flavor == None:
+                flavors = db.sm_flavor_get_all(ctxt)
+            else:
+                flavors = db.sm_flavor_get(ctxt, flavor)
+        except exception.NotFound as ex:
+            print "error: %s" % ex
+            sys.exit(2)
+
+        print "%-18s\t%-20s\t%s" % (_('id'),
+                                    _('Label'),
+                                    _('Description'))
+
+        for flav in flavors:
+            print "%-18s\t%-20s\t%s" % (
+                    flav['id'],
+                    flav['label'],
+                    flav['description'])
+
+    def flavor_create(self, label, desc):
+        # TODO flavor name must be unique
+        try:
+            db.sm_flavor_create(context.get_admin_context(),
+                                dict(label=label,
+                                     description=desc))
+        except exception.DBError, e:
+            _db_error(e)
+
+    def flavor_delete(self, label):
+        try:
+            db.sm_flavor_delete(context.get_admin_context(), label)
+
+        except exception.DBError, e:
+            _db_error(e)
+
+    def _splitfun(self, item):
+        i = item.split("=")
+        return i[0:2]
+
+    def backend_list(self, backend_conf_id=None):
+        ctxt = context.get_admin_context()
+
+        try:
+            if backend_conf_id == None:
+                backends = db.sm_backend_conf_get_all(ctxt)
+            else:
+                backends = db.sm_backend_conf_get(ctxt, backend_conf_id)
+
+        except exception.NotFound as ex:
+            print "error: %s" % ex
+            sys.exit(2)
+
+        print "%-5s\t%-10s\t%-40s\t%-10s\t%s" % (_('id'),
+                                                      _('Flavor id'),
+                                                      _('SR UUID'),
+                                                      _('SR Type'),
+                                                      _('Config Parameters'),)
+
+        for b in backends:
+            print "%-5s\t%-10s\t%-40s\t%-10s\t%s" % (b['id'],
+                                                     b['flavor_id'],
+                                                     b['sr_uuid'],
+                                                     b['sr_type'],
+                                                     b['config_params'],)
+
+    def backend_add(self, flavor_label, sr_type, *args):
+        # TODO Add backend_introduce.
+        ctxt = context.get_admin_context()
+        params = dict(map(self._splitfun, args))
+
+        if 'sr_uuid' in params:
+            try:
+                backend = db.sm_backend_conf_get_by_sr(ctxt,
+                                                       params['sr_uuid'])
+            except exception.DBError, e:
+                _db_error(e)
+
+            if backend:
+                if len(backend) > 1:
+                    print 'error: Multiple backends found with given sr_uuid'
+                    sys.exit(2)
+
+                print 'Backend config found. Would you like to recreate this?'
+                print '(WARNING:Recreating will destroy all VDIs on backend!!)'
+                c = raw_input('Proceed? (y/n) ')
+                if c == 'y' or c == 'Y':
+                    try:
+                        db.sm_backend_conf_update(ctxt, backend['id'],
+                                                  dict(created=False))
+                    except exception.DBError, e:
+                        _db_error(e)
+                return
+
+            else:
+                print 'Backend config not found. Would you like to create it?'
+                print '(WARNING: Creating will destroy all data on backend!!!)'
+                c = raw_input('Proceed? (y/n) ')
+                if c != 'y' and c != 'Y':
+                    return
+
+        print '(WARNING: Creating will destroy all data on backend!!!)'
+        c = raw_input('Proceed? (y/n) ')
+        if c == 'y' or c == 'Y':
+            if flavor_label == None:
+                print "error: backend needs to be associated with flavor"
+                sys.exit(2)
+
+            try:
+                flavors = db.sm_flavor_get(ctxt, flavor_label)
+
+            except exception.NotFound as ex:
+                print "error: %s" % ex
+                sys.exit(2)
+
+            config_params = "".join(['%s=%s ' %
+                                   (key, params[key]) for key in params])
+
+            try:
+                db.sm_backend_conf_create(ctxt,
+                                          dict(flavor_id=flavors[0]['id'],
+                                               sr_uuid=None,
+                                               sr_type=sr_type,
+                                               config_params=config_params))
+            except exception.DBError, e:
+                _db_error(e)
+
+    def backend_remove(self, backend_conf_id):
+        try:
+            db.sm_backend_conf_delete(context.get_admin_context(),
+                                      backend_conf_id)
+
+        except exception.DBError, e:
+            _db_error(e)
+
+
 class AgentBuildCommands(object):
     """Class for managing agent builds."""
 
@@ -2017,6 +2174,47 @@ class ConfigCommands(object):
         print FLAGS.FlagsIntoString()
 
 
+class GetLogCommands(object):
+    """Get logging information"""
+
+    def errors(self):
+        """Get all of the errors from the log files"""
+        if FLAGS.logdir:
+            error_found = 0
+            logs = [x for x in os.listdir(FLAGS.logdir) if x.endswith('.log')]
+            for file in logs:
+                log_file = os.path.join(FLAGS.logdir, file)
+                lines = [line.strip() for line in open(log_file, "r")]
+                lines.reverse()
+                print_name = 0
+                for index, line in enumerate(lines):
+                    if line.find(" ERROR ") > 0:
+                        error_found += 1
+                        if print_name == 0:
+                            print log_file + ":-"
+                            print_name = 1
+                        print "Line %d : %s" % (len(lines) - index, line)
+        if error_found == 0:
+            print "No errors in logfiles!"
+
+    def syslog(self, num_entries=10):
+        """Get <num_entries> of the nova syslog events"""
+        entries = int(num_entries)
+        count = 0
+        lines = [line.strip() for line in open('/var/log/syslog', "r")]
+        lines.reverse()
+        print "Last %s nova syslog entries:-" % (entries)
+        for line in lines:
+            if line.find("nova") > 0:
+                count += 1
+                print "%s" % (line)
+            if count == entries:
+                break
+
+        if count == 0:
+            print "No nova entries in syslog!"
+
+
 CATEGORIES = [
     ('account', AccountCommands),
     ('agent', AgentBuildCommands),
@@ -2034,12 +2232,14 @@ CATEGORIES = [
     ('role', RoleCommands),
     ('service', ServiceCommands),
     ('shell', ShellCommands),
+    ('sm', StorageManagerCommands),
     ('user', UserCommands),
     ('version', VersionCommands),
     ('vm', VmCommands),
     ('volume', VolumeCommands),
     ('vpn', VpnCommands),
-    ('vsa', VsaCommands)]
+    ('vsa', VsaCommands),
+    ('logs', GetLogCommands)]
 
 
 def lazy_match(name, key_value_tuples):

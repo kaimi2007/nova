@@ -107,6 +107,8 @@ def wrap_exception(notifier=None, publisher_id=None, event_type=None,
     # TODO(sandy): Find a way to import nova.notifier.api so we don't have
     # to pass it in as a parameter. Otherwise we get a cyclic import of
     # nova.notifier.api -> nova.utils -> nova.exception :(
+    # TODO(johannes): Also, it would be nice to use
+    # utils.save_and_reraise_exception() without an import loop
     def inner(f):
         def wrapped(*args, **kw):
             try:
@@ -195,15 +197,19 @@ class InstanceBusy(NovaException):
 
 
 class InstanceSnapshotting(InstanceBusy):
-    message = _("Instance %(instance_id)s is currently snapshotting.")
+    message = _("Instance %(instance_uuid)s is currently snapshotting.")
 
 
 class InstanceBackingUp(InstanceBusy):
-    message = _("Instance %(instance_id)s is currently being backed up.")
+    message = _("Instance %(instance_uuid)s is currently being backed up.")
 
 
 class Invalid(NovaException):
     message = _("Unacceptable parameters.")
+
+
+class InvalidRequest(Invalid):
+    message = _("The request is invalid.")
 
 
 class InvalidSignature(Invalid):
@@ -223,7 +229,7 @@ class InvalidVolumeType(Invalid):
 
 
 class InvalidPortRange(Invalid):
-    message = _("Invalid port range %(from_port)s:%(to_port)s.")
+    message = _("Invalid port range %(from_port)s:%(to_port)s. %(msg)s")
 
 
 class InvalidIpProtocol(Invalid):
@@ -390,7 +396,7 @@ class SnapshotNotFound(NotFound):
     message = _("Snapshot %(snapshot_id)s could not be found.")
 
 
-class VolumeIsBusy(Error):
+class VolumeIsBusy(NovaException):
     message = _("deleting volume %(volume_name)s that has snapshot")
 
 
@@ -542,10 +548,6 @@ class FloatingIpNotFoundForAddress(FloatingIpNotFound):
     message = _("Floating ip not found for address %(address)s.")
 
 
-class FloatingIpNotFoundForProject(FloatingIpNotFound):
-    message = _("Floating ip not found for project %(project_id)s.")
-
-
 class FloatingIpNotFoundForHost(FloatingIpNotFound):
     message = _("Floating ip not found for host %(host)s.")
 
@@ -567,7 +569,7 @@ class NoFloatingIpsDefined(NotFound):
 
 
 class KeypairNotFound(NotFound):
-    message = _("Keypair %(keypair_name)s not found for user %(user_id)s")
+    message = _("Keypair %(name)s not found for user %(user_id)s")
 
 
 class CertificateNotFound(NotFound):
@@ -857,3 +859,16 @@ class InsufficientFreeMemory(NovaException):
 
 class CouldNotFetchMetrics(NovaException):
     message = _("Could not fetch bandwidth/cpu/disk metrics for this host.")
+
+
+class NoValidHost(NovaException):
+    message = _("No valid host was found. %(reason)s")
+
+
+class WillNotSchedule(NovaException):
+    message = _("Host %(host)s is not up or doesn't exist.")
+
+
+class QuotaError(ApiError):
+    """Quota Exceeded."""
+    pass

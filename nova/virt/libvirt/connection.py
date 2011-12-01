@@ -29,6 +29,8 @@ Supports KVM, LXC, QEMU, UML, and XEN.
                 (default: kvm).
 :libvirt_uri:  Override for the default libvirt URI (depends on libvirt_type).
 :libvirt_xml_template:  Libvirt XML Template.
+:libvirt_disk_prefix:  Override the default disk prefix for the devices
+                       attached to a server.
 :rescue_image_id:  Rescue ami image (None = original image).
 :rescue_kernel_id:  Rescue aki image (None = original image).
 :rescue_ramdisk_id:  Rescue ari image (None = original image).
@@ -72,11 +74,10 @@ from nova.compute import vm_states
 from nova.virt import disk
 from nova.virt import driver
 from nova.virt import images
-from nova.virt.libvirt import netutils
+from nova.virt.libvirt import utils as libvirt_utils
 
 
 libvirt = None
-libxml2 = None
 Template = None
 
 
@@ -139,6 +140,7 @@ flags.DEFINE_string('libvirt_vif_driver',
 flags.DEFINE_list('libvirt_volume_drivers',
                   ['iscsi=nova.virt.libvirt.volume.LibvirtISCSIVolumeDriver',
                    'local=nova.virt.libvirt.volume.LibvirtVolumeDriver',
+                   'fake=nova.virt.libvirt.volume.LibvirtFakeVolumeDriver',
                    'rdb=nova.virt.libvirt.volume.LibvirtNetVolumeDriver',
                    'sheepdog=nova.virt.libvirt.volume.LibvirtNetVolumeDriver'],
                   'Libvirt handlers for remote volumes.')
@@ -155,6 +157,12 @@ flags.DEFINE_list('extra_node_capabilities',
 flags.DEFINE_string('dev_cgroups_path',
                     '/cgroup/devices/libvirt/lxc',
                     'LXC cgroups devices base path')
+flags.DEFINE_string('libvirt_disk_prefix',
+                    None,
+                    'Override the default disk prefix for the devices '
+                    'attached to a server, which is dependent on '
+                    'libvirt_type. (valid options are: sd, xvd, uvd, vd)')
+
 
 # Variables for tracking gpus available and gpus assigned
 if FLAGS.connection_type == 'gpu':
@@ -162,18 +170,14 @@ if FLAGS.connection_type == 'gpu':
     gpus_assigned = {}
     vcpus_used = 0
 
-
 def get_connection(read_only):
     # These are loaded late so that there's no need to install these
     # libraries when not using libvirt.
     # Cheetah is separate because the unit tests want to load Cheetah,
     # but not libvirt.
     global libvirt
-    global libxml2
     if libvirt is None:
         libvirt = __import__('libvirt')
-    if libxml2 is None:
-        libxml2 = __import__('libxml2')
     _late_load_cheetah()
     return LibvirtConnection(read_only)
 
@@ -198,6 +202,7 @@ class LibvirtConnection(driver.ComputeDriver):
 
         self.libvirt_xml = open(FLAGS.libvirt_xml_template).read()
         self.cpuinfo_xml = open(FLAGS.cpuinfo_xml_template).read()
+        self._host_state = None
         self._wrapped_conn = None
         self.read_only = read_only
 
@@ -210,10 +215,18 @@ class LibvirtConnection(driver.ComputeDriver):
             driver_class = utils.import_class(driver)
             self.volume_drivers[driver_type] = driver_class(self)
         self._host_state = None
-#        self.session = None
+
+        disk_prefix_map = {"lxc": "", "uml": "ubd", "xen": "sd"}
+        if FLAGS.libvirt_disk_prefix:
+            self._disk_prefix = FLAGS.libvirt_disk_prefix
+        else:
+            self._disk_prefix = disk_prefix_map.get(FLAGS.libvirt_type, 'vd')
+        self.default_root_device = self._disk_prefix + 'a'
+        self.default_local_device = self._disk_prefix + 'b'
+        self.default_swap_device = self._disk_prefix + 'c'
 
     @property
-    def HostState(self):
+    def host_state(self):
         if not self._host_state:
             self._host_state = HostState(self.read_only)
         return self._host_state
@@ -240,7 +253,8 @@ class LibvirtConnection(driver.ComputeDriver):
             return True
         except libvirt.libvirtError as e:
             if e.get_error_code() == libvirt.VIR_ERR_SYSTEM_ERROR and \
-               e.get_error_domain() == libvirt.VIR_FROM_REMOTE:
+               e.get_error_domain() in (libvirt.VIR_FROM_REMOTE,
+                       libvirt.VIR_FROM_RPC):
                 LOG.debug(_('Connection to libvirt broke'))
                 return False
             raise
@@ -428,18 +442,29 @@ class LibvirtConnection(driver.ComputeDriver):
                                 locals())
                     raise
 
-        try:
-            # NOTE(justinsb): We remove the domain definition. We probably
-            # would do better to keep it if cleanup=False (e.g. volumes?)
-            # (e.g. #2 - not losing machines on failure)
-            virt_dom.undefine()
-        except libvirt.libvirtError as e:
-            errcode = e.get_error_code()
-            LOG.warning(_("Error from libvirt during undefine of "
-                          "%(instance_name)s. Code=%(errcode)s "
-                          "Error=%(e)s") %
-                        locals())
-            raise
+            try:
+                # NOTE(derekh): we can switch to undefineFlags and
+                # VIR_DOMAIN_UNDEFINE_MANAGED_SAVE once we require 0.9.4
+                if virt_dom.hasManagedSaveImage(0):
+                    virt_dom.managedSaveRemove(0)
+            except libvirt.libvirtError as e:
+                errcode = e.get_error_code()
+                LOG.warning(_("Error from libvirt during saved instance "
+                              "removal %(instance_name)s. Code=%(errcode)s"
+                              " Error=%(e)s") % locals())
+
+            try:
+                # NOTE(justinsb): We remove the domain definition. We probably
+                # would do better to keep it if cleanup=False (e.g. volumes?)
+                # (e.g. #2 - not losing machines on failure)
+                virt_dom.undefine()
+            except libvirt.libvirtError as e:
+                errcode = e.get_error_code()
+                LOG.warning(_("Error from libvirt during undefine of "
+                              "%(instance_name)s. Code=%(errcode)s "
+                              "Error=%(e)s") %
+                            locals())
+                raise
 
         for (network, mapping) in network_info:
             self.vif_driver.unplug(instance, network, mapping)
@@ -611,22 +636,15 @@ class LibvirtConnection(driver.ComputeDriver):
     def _get_disk_xml(self, xml, device):
         """Returns the xml for the disk mounted at device"""
         try:
-            doc = libxml2.parseDoc(xml)
+            doc = ElementTree.fromstring(xml)
         except Exception:
             return None
-        ctx = doc.xpathNewContext()
-        try:
-            ret = ctx.xpathEval('/domain/devices/disk')
-            for node in ret:
-                for child in node.children:
-                    if child.name == 'target':
-                        if child.prop('dev') == device:
-                            return str(node)
-        finally:
-            if ctx is not None:
-                ctx.xpathFreeContext()
-            if doc is not None:
-                doc.freeDoc()
+        ret = doc.findall('./devices/disk')
+        for node in ret:
+            for child in node.getchildren():
+                if child.tag == 'target':
+                    if child.get('dev') == device:
+                        return ElementTree.tostring(node)
 
     @exception.wrap_exception()
     def detach_volume(self, connection_info, instance_name, mountpoint):
@@ -673,7 +691,10 @@ class LibvirtConnection(driver.ComputeDriver):
 
         This command only works with qemu 0.14+
         """
-        virt_dom = self._lookup_by_name(instance['name'])
+        try:
+            virt_dom = self._lookup_by_name(instance['name'])
+        except exception.InstanceNotFound:
+            raise exception.InstanceNotRunning()
 
         (image_service, image_id) = nova.image.get_image_service(
             context, instance['image_ref'])
@@ -698,10 +719,17 @@ class LibvirtConnection(driver.ComputeDriver):
             metadata['properties']['architecture'] = arch
 
         source_format = base.get('disk_format') or 'raw'
+        if source_format == 'ami':
+            # NOTE(vish): assume amis are raw
+            source_format = 'raw'
         image_format = FLAGS.snapshot_image_format or source_format
         if FLAGS.use_cow_images:
             source_format = 'qcow2'
-        metadata['disk_format'] = image_format
+        # NOTE(vish): glance forces ami disk format to be ami
+        if base.get('disk_format') == 'ami':
+            metadata['disk_format'] = 'ami'
+        else:
+            metadata['disk_format'] = image_format
 
         if 'container_format' in base:
             metadata['container_format'] = base['container_format']
@@ -725,20 +753,11 @@ class LibvirtConnection(driver.ComputeDriver):
         temp_dir = tempfile.mkdtemp()
         try:
             out_path = os.path.join(temp_dir, snapshot_name)
-            qemu_img_cmd = ('qemu-img',
-                            'convert',
-                            '-f',
-                            source_format,
-                            '-O',
-                            image_format,
-                            '-s',
-                            snapshot_name,
-                            disk_path,
-                            out_path)
-            utils.execute(*qemu_img_cmd)
-
+            libvirt_utils.extract_snapshot(disk_path, source_format,
+                                           snapshot_name, out_path,
+                                           image_format)
             # Upload that image to the image service
-            with open(out_path) as image_file:
+            with libvirt_utils.file_open(out_path) as image_file:
                 image_service.update(context,
                                      image_href,
                                      metadata,
@@ -757,6 +776,7 @@ class LibvirtConnection(driver.ComputeDriver):
         reboot happens, as the guest OS cannot ignore this action.
 
         """
+
         virt_dom = self._conn.lookupByName(instance['name'])
         # NOTE(itoumsn): Use XML delived from the running instance
         # instead of using to_xml(instance, network_info). This is almost
@@ -798,31 +818,31 @@ class LibvirtConnection(driver.ComputeDriver):
         return timer.start(interval=0.5, now=True)
 
     @exception.wrap_exception()
-    def pause(self, instance, callback):
+    def pause(self, instance):
         """Pause VM instance"""
         dom = self._lookup_by_name(instance.name)
         dom.suspend()
 
     @exception.wrap_exception()
-    def unpause(self, instance, callback):
+    def unpause(self, instance):
         """Unpause paused VM instance"""
         dom = self._lookup_by_name(instance.name)
         dom.resume()
 
     @exception.wrap_exception()
-    def suspend(self, instance, callback):
+    def suspend(self, instance):
         """Suspend the specified instance"""
         dom = self._lookup_by_name(instance.name)
         dom.managedSave(0)
 
     @exception.wrap_exception()
-    def resume(self, instance, callback):
+    def resume(self, instance):
         """resume the specified instance"""
         dom = self._lookup_by_name(instance.name)
         dom.create()
 
     @exception.wrap_exception()
-    def rescue(self, context, instance, callback, network_info):
+    def rescue(self, context, instance, network_info):
         """Loads a VM using rescue images.
 
         A rescue is normally performed when something goes wrong with the
@@ -837,9 +857,7 @@ class LibvirtConnection(driver.ComputeDriver):
         unrescue_xml_path = os.path.join(FLAGS.instances_path,
                                          instance['name'],
                                          'unrescue.xml')
-        f = open(unrescue_xml_path, 'w')
-        f.write(unrescue_xml)
-        f.close()
+        libvirt_utils.write_to_file(unrescue_xml_path, unrescue_xml)
 
         xml = self.to_xml(instance, network_info, rescue=True)
         rescue_images = {
@@ -852,7 +870,7 @@ class LibvirtConnection(driver.ComputeDriver):
         self.reboot(instance, network_info, xml=xml)
 
     @exception.wrap_exception()
-    def unrescue(self, instance, callback, network_info):
+    def unrescue(self, instance, network_info):
         """Reboot the VM which is being rescued back into primary images.
 
         Because reboot destroys and re-creates instances, unresue should
@@ -862,11 +880,13 @@ class LibvirtConnection(driver.ComputeDriver):
         unrescue_xml_path = os.path.join(FLAGS.instances_path,
                                          instance['name'],
                                          'unrescue.xml')
-        f = open(unrescue_xml_path)
-        unrescue_xml = f.read()
-        f.close()
-        os.remove(unrescue_xml_path)
+        unrescue_xml = libvirt_utils.load_file(unrescue_xml_path)
+        libvirt_utils.file_delete(unrescue_xml_path)
         self.reboot(instance, network_info, xml=unrescue_xml)
+
+    @exception.wrap_exception()
+    def poll_rebooting_instances(self, timeout):
+        pass
 
     @exception.wrap_exception()
     def poll_rescued_instances(self, timeout):
@@ -879,7 +899,7 @@ class LibvirtConnection(driver.ComputeDriver):
     # NOTE(ilyaalekseyev): Implementation like in multinics
     # for xenapi(tr3buchet)
     @exception.wrap_exception()
-    def spawn(self, context, instance, network_info,
+    def spawn(self, context, instance, image_meta, network_info,
               block_device_info=None):
         xml = self.to_xml(instance, network_info, False,
                           block_device_info=block_device_info)
@@ -941,18 +961,12 @@ class LibvirtConnection(driver.ComputeDriver):
         fp.write(data)
         return fpath
 
-    def _dump_file(self, fpath):
-        fp = open(fpath, 'r+')
-        contents = fp.read()
-        LOG.info(_('Contents of file %(fpath)s: %(contents)r') % locals())
-        return contents
-
     @exception.wrap_exception()
     def get_console_output(self, instance):
         console_log = os.path.join(FLAGS.instances_path, instance['name'],
                                    'console.log')
 
-        utils.execute('chown', os.getuid(), console_log, run_as_root=True)
+        libvirt_utils.chown(console_log, os.getuid())
 
         if FLAGS.libvirt_type == 'xen':
             # Xen is special
@@ -966,23 +980,10 @@ class LibvirtConnection(driver.ComputeDriver):
         else:
             fpath = console_log
 
-        return self._dump_file(fpath)
+        return libvirt_utils.load_file(fpath)
 
     @exception.wrap_exception()
     def get_ajax_console(self, instance):
-        def get_open_port():
-            start_port, end_port = FLAGS.ajaxterm_portrange.split("-")
-            for i in xrange(0, 100):  # don't loop forever
-                port = random.randint(int(start_port), int(end_port))
-                # netcat will exit with 0 only if the port is in use,
-                # so a nonzero return value implies it is unused
-                cmd = 'netcat', '0.0.0.0', port, '-w', '1'
-                try:
-                    stdout, stderr = utils.execute(*cmd, process_input='')
-                except exception.ProcessExecutionError:
-                    return port
-            raise Exception(_('Unable to find an open port'))
-
         def get_pty_for_instance(instance_name):
             virt_dom = self._lookup_by_name(instance_name)
             xml = virt_dom.XMLDesc(0)
@@ -993,17 +994,15 @@ class LibvirtConnection(driver.ComputeDriver):
                     source = serial.getElementsByTagName('source')[0]
                     return source.getAttribute('path')
 
-        port = get_open_port()
+        start_port, end_port = FLAGS.ajaxterm_portrange.split("-")
+        port = libvirt_utils.get_open_port(int(start_port), int(end_port))
         token = str(uuid.uuid4())
         host = instance['host']
 
-        ajaxterm_cmd = 'sudo socat - %s' \
+        ajaxterm_cmd = 'sudo netcat - %s' \
                        % get_pty_for_instance(instance['name'])
 
-        cmd = ['%s/tools/ajaxterm/ajaxterm.py' % utils.novadir(),
-               '--command', ajaxterm_cmd, '-t', token, '-p', port]
-
-        utils.execute(cmd)
+        libvirt_utils.run_ajaxterm(ajaxterm_cmd, token, port)
         return {'token': token, 'host': host, 'port': port}
 
     def get_host_ip_addr(self):
@@ -1046,7 +1045,7 @@ class LibvirtConnection(driver.ComputeDriver):
         if not os.path.exists(target):
             base_dir = os.path.join(FLAGS.instances_path, '_base')
             if not os.path.exists(base_dir):
-                os.mkdir(base_dir)
+                libvirt_utils.ensure_tree(base_dir)
             base = os.path.join(base_dir, fname)
 
             @utils.synchronized(fname)
@@ -1057,11 +1056,9 @@ class LibvirtConnection(driver.ComputeDriver):
             call_if_not_exists(base, fn, *args, **kwargs)
 
             if cow:
-                utils.execute('qemu-img', 'create', '-f', 'qcow2', '-o',
-                              'cluster_size=2M,backing_file=%s' % base,
-                              target)
+                libvirt_utils.create_cow_image(base, target)
             else:
-                utils.execute('cp', base, target)
+                libvirt_utils.copy_image(base, target)
 
     def _fetch_image(self, context, target, image_id, user_id, project_id,
                      size=None):
@@ -1076,9 +1073,10 @@ class LibvirtConnection(driver.ComputeDriver):
         if not fs_format:
             fs_format = FLAGS.default_local_format
 
-        utils.execute('truncate', target, '-s', "%d%c" % (local_size, unit))
+        libvirt_utils.create_image('raw', target,
+                                   '%d%c' % (local_size, unit))
         if fs_format:
-            utils.execute('mkfs', '-t', fs_format, target)
+            libvirt_utils.mkfs(fs_format, target)
 
     def _create_ephemeral(self, target, local_size, fs_label, os_type):
         self._create_local(target, local_size)
@@ -1086,8 +1084,8 @@ class LibvirtConnection(driver.ComputeDriver):
 
     def _create_swap(self, target, swap_mb):
         """Create a swap file of specified size"""
-        self._create_local(target, swap_mb, unit='M')
-        utils.execute('mkswap', target)
+        libvirt_utils.create_image('raw', target, '%dM' % swap_mb)
+        libvirt_utils.mkfs(target, 'swap')
 
     def _create_image(self, context, inst, libvirt_xml, suffix='',
                       disk_images=None, network_info=None,
@@ -1102,22 +1100,17 @@ class LibvirtConnection(driver.ComputeDriver):
                                 fname + suffix)
 
         # ensure directories exist and are writable
-        utils.execute('mkdir', '-p', basepath(suffix=''))
+        libvirt_utils.ensure_tree(basepath(suffix=''))
 
         LOG.info(_('instance %s: Creating image'), inst['name'])
-        f = open(basepath('libvirt.xml'), 'w')
-        f.write(libvirt_xml)
-        f.close()
+        libvirt_utils.write_to_file(basepath('libvirt.xml'), libvirt_xml)
 
         if FLAGS.libvirt_type == 'lxc':
             container_dir = '%s/rootfs' % basepath(suffix='')
-            utils.execute('mkdir', '-p', container_dir)
+            libvirt_utils.ensure_tree(container_dir)
 
         # NOTE(vish): No need add the suffix to console.log
-        console_log = basepath('console.log', '')
-        if os.path.exists(console_log):
-            utils.execute('chown', os.getuid(), console_log, run_as_root=True)
-        os.close(os.open(console_log, os.O_CREAT | os.O_WRONLY, 0660))
+        libvirt_utils.write_to_file(basepath('console.log', ''), '', 007)
 
         if not disk_images:
             disk_images = {'image_id': inst['image_ref'],
@@ -1125,8 +1118,8 @@ class LibvirtConnection(driver.ComputeDriver):
                            'ramdisk_id': inst['ramdisk_id']}
 
         if disk_images['kernel_id']:
-            fname = '%08x' % int(disk_images['kernel_id'])
-            self._cache_image(fn=self._fetch_image,
+            fname = disk_images['kernel_id']
+            self._cache_image(fn=libvirt_utils.fetch_image,
                               context=context,
                               target=basepath('kernel'),
                               fname=fname,
@@ -1134,8 +1127,8 @@ class LibvirtConnection(driver.ComputeDriver):
                               user_id=inst['user_id'],
                               project_id=inst['project_id'])
             if disk_images['ramdisk_id']:
-                fname = '%08x' % int(disk_images['ramdisk_id'])
-                self._cache_image(fn=self._fetch_image,
+                fname = disk_images['ramdisk_id']
+                self._cache_image(fn=libvirt_utils.fetch_image,
                                   context=context,
                                   target=basepath('ramdisk'),
                                   fname=fname,
@@ -1143,7 +1136,7 @@ class LibvirtConnection(driver.ComputeDriver):
                                   user_id=inst['user_id'],
                                   project_id=inst['project_id'])
 
-        root_fname = hashlib.sha1(disk_images['image_id']).hexdigest()
+        root_fname = hashlib.sha1(str(disk_images['image_id'])).hexdigest()
         size = FLAGS.minimum_root_size
 
         inst_type_id = inst['instance_type_id']
@@ -1154,7 +1147,7 @@ class LibvirtConnection(driver.ComputeDriver):
 
         if not self._volume_in_mapping(self.default_root_device,
                                        block_device_info):
-            self._cache_image(fn=self._fetch_image,
+            self._cache_image(fn=libvirt_utils.fetch_image,
                               context=context,
                               target=basepath('disk'),
                               fname=root_fname,
@@ -1219,8 +1212,8 @@ class LibvirtConnection(driver.ComputeDriver):
             target_partition = None
 
         if config_drive_id:
-            fname = '%08x' % int(config_drive_id)
-            self._cache_image(fn=self._fetch_image,
+            fname = config_drive_id
+            self._cache_image(fn=libvirt_utils.fetch_image,
                               target=basepath('disk.config'),
                               fname=fname,
                               image_id=config_drive_id,
@@ -1308,20 +1301,7 @@ class LibvirtConnection(driver.ComputeDriver):
                                 nbd=FLAGS.use_cow_images)
 
         if FLAGS.libvirt_type == 'uml':
-            utils.execute('chown', 'root', basepath('disk'), run_as_root=True)
-
-    if FLAGS.libvirt_type == 'uml':
-        _disk_prefix = 'ubd'
-    elif FLAGS.libvirt_type == 'xen':
-        _disk_prefix = 'sd'
-    elif FLAGS.libvirt_type == 'lxc':
-        _disk_prefix = ''
-    else:
-        _disk_prefix = 'vd'
-
-    default_root_device = _disk_prefix + 'a'
-    default_local_device = _disk_prefix + 'b'
-    default_swap_device = _disk_prefix + 'c'
+            libvirt_utils.chown(basepath('disk'), 'root')
 
     def _volume_in_mapping(self, mount_device, block_device_info):
         block_device_list = [block_device.strip_dev(vol['mount_device'])
@@ -1510,10 +1490,6 @@ class LibvirtConnection(driver.ComputeDriver):
 
         return domain
 
-    def get_diagnostics(self, instance_name):
-        raise exception.ApiError(_("diagnostics are not supported "
-                                   "for libvirt"))
-
     def get_disks(self, instance_name):
         """
         Note that this function takes an instance name.
@@ -1521,37 +1497,29 @@ class LibvirtConnection(driver.ComputeDriver):
         Returns a list of all block devices for this domain.
         """
         domain = self._lookup_by_name(instance_name)
-        # TODO(devcamcar): Replace libxml2 with etree.
         xml = domain.XMLDesc(0)
         doc = None
 
         try:
-            doc = libxml2.parseDoc(xml)
+            doc = ElementTree.fromstring(xml)
         except Exception:
             return []
 
-        ctx = doc.xpathNewContext()
         disks = []
 
-        try:
-            ret = ctx.xpathEval('/domain/devices/disk')
+        ret = doc.findall('./devices/disk')
 
-            for node in ret:
-                devdst = None
+        for node in ret:
+            devdst = None
 
-                for child in node.children:
-                    if child.name == 'target':
-                        devdst = child.prop('dev')
+            for child in node.children:
+                if child.name == 'target':
+                    devdst = child.prop('dev')
 
-                if devdst is None:
-                    continue
+            if devdst is None:
+                continue
 
-                disks.append(devdst)
-        finally:
-            if ctx is not None:
-                ctx.xpathFreeContext()
-            if doc is not None:
-                doc.freeDoc()
+            disks.append(devdst)
 
         return disks
 
@@ -1562,37 +1530,29 @@ class LibvirtConnection(driver.ComputeDriver):
         Returns a list of all network interfaces for this instance.
         """
         domain = self._lookup_by_name(instance_name)
-        # TODO(devcamcar): Replace libxml2 with etree.
         xml = domain.XMLDesc(0)
         doc = None
 
         try:
-            doc = libxml2.parseDoc(xml)
+            doc = ElementTree.fromstring(xml)
         except Exception:
             return []
 
-        ctx = doc.xpathNewContext()
         interfaces = []
 
-        try:
-            ret = ctx.xpathEval('/domain/devices/interface')
+        ret = doc.findall('./devices/interface')
 
-            for node in ret:
-                devdst = None
+        for node in ret:
+            devdst = None
 
-                for child in node.children:
-                    if child.name == 'target':
-                        devdst = child.prop('dev')
+            for child in node.children:
+                if child.name == 'target':
+                    devdst = child.prop('dev')
 
-                if devdst is None:
-                    continue
+            if devdst is None:
+                continue
 
-                interfaces.append(devdst)
-        finally:
-            if ctx is not None:
-                ctx.xpathFreeContext()
-            if doc is not None:
-                doc.freeDoc()
+            interfaces.append(devdst)
 
         return interfaces
 
@@ -1637,8 +1597,8 @@ class LibvirtConnection(driver.ComputeDriver):
 
         """
 
-        hddinfo = os.statvfs(FLAGS.instances_path)
-        return hddinfo.f_frsize * hddinfo.f_blocks / 1024 / 1024 / 1024
+        stats = libvirt_utils.get_fs_info(FLAGS.instances_path)
+        return stats['total'] / (1024 ** 3)
 
     def get_vcpu_used(self):
         """ Get vcpu usage number of physical computer.
@@ -1680,9 +1640,8 @@ class LibvirtConnection(driver.ComputeDriver):
 
         """
 
-        hddinfo = os.statvfs(FLAGS.instances_path)
-        avail = hddinfo.f_frsize * hddinfo.f_bavail / 1024 / 1024 / 1024
-        return self.get_local_gb_total() - avail
+        stats = libvirt_utils.get_fs_info(FLAGS.instances_path)
+        return stats['used'] / (1024 ** 3)
 
     def get_hypervisor_type(self):
         """Get hypervisor type.
@@ -1724,8 +1683,8 @@ class LibvirtConnection(driver.ComputeDriver):
         """
 
         xml = self._conn.getCapabilities()
-        xml = libxml2.parseDoc(xml)
-        nodes = xml.xpathEval('//host/cpu')
+        xml = ElementTree.fromstring(xml)
+        nodes = xml.findall('.//host/cpu')
         if len(nodes) != 1:
             reason = _("'<cpu>' must be 1, but %d\n") % len(nodes)
             reason += xml.serialize()
@@ -1733,38 +1692,36 @@ class LibvirtConnection(driver.ComputeDriver):
 
         cpu_info = dict()
 
-        arch_nodes = xml.xpathEval('//host/cpu/arch')
+        arch_nodes = xml.findall('.//host/cpu/arch')
         if arch_nodes:
-            cpu_info['arch'] = arch_nodes[0].getContent()
+            cpu_info['arch'] = arch_nodes[0].text
 
-        model_nodes = xml.xpathEval('//host/cpu/model')
+        model_nodes = xml.findall('.//host/cpu/model')
         if model_nodes:
-            cpu_info['model'] = model_nodes[0].getContent()
+            cpu_info['model'] = model_nodes[0].text
 
-        vendor_nodes = xml.xpathEval('//host/cpu/vendor')
+        vendor_nodes = xml.findall('.//host/cpu/vendor')
         if vendor_nodes:
-            cpu_info['vendor'] = vendor_nodes[0].getContent()
+            cpu_info['vendor'] = vendor_nodes[0].text
 
-        topology_nodes = xml.xpathEval('//host/cpu/topology')
+        topology_nodes = xml.findall('.//host/cpu/topology')
         topology = dict()
         if topology_nodes:
-            topology_node = topology_nodes[0].get_properties()
-            while topology_node:
-                name = topology_node.get_name()
-                topology[name] = topology_node.getContent()
-                topology_node = topology_node.get_next()
+            topology_node = topology_nodes[0]
 
             keys = ['cores', 'sockets', 'threads']
-            tkeys = topology.keys()
+            tkeys = topology_node.keys()
             if set(tkeys) != set(keys):
                 ks = ', '.join(keys)
                 reason = _("topology (%(topology)s) must have %(ks)s")
                 raise exception.InvalidCPUInfo(reason=reason % locals())
+            for key in keys:
+                topology[key] = topology_node.get(key)
 
-        feature_nodes = xml.xpathEval('//host/cpu/feature')
+        feature_nodes = xml.findall('.//host/cpu/feature')
         features = list()
         for nodes in feature_nodes:
-            features.append(nodes.get_properties().getContent())
+            features.append(nodes.get('name'))
 
         cpu_info['topology'] = topology
         cpu_info['features'] = features
@@ -2046,9 +2003,8 @@ class LibvirtConnection(driver.ComputeDriver):
             # create backing file in case of qcow2.
             instance_disk = os.path.join(instance_dir, base)
             if not info['backing_file']:
-                utils.execute('qemu-img', 'create', '-f', info['type'],
-                              instance_disk, info['local_gb'])
-
+                libvirt_utils.create_image(info['type'], instance_disk,
+                                           info['local_gb'])
             else:
                 # Creating backing file follows same way as spawning instances.
                 backing_file = os.path.join(FLAGS.instances_path,
@@ -2065,9 +2021,7 @@ class LibvirtConnection(driver.ComputeDriver):
                         project_id=instance_ref['project_id'],
                         size=instance_ref['local_gb'])
 
-                utils.execute('qemu-img', 'create', '-f', info['type'],
-                          '-o', 'backing_file=%s' % backing_file,
-                          instance_disk, info['local_gb'])
+                libvirt_utils.create_cow_image(backing_file, instance_disk)
 
         # if image has kernel and ramdisk, just download
         # following normal way.
@@ -2075,13 +2029,13 @@ class LibvirtConnection(driver.ComputeDriver):
             user = manager.AuthManager().get_user(instance_ref['user_id'])
             project = manager.AuthManager().get_project(
                 instance_ref['project_id'])
-            self._fetch_image(nova_context.get_admin_context(),
+            libvirt_utils.fetch_image(nova_context.get_admin_context(),
                               os.path.join(instance_dir, 'kernel'),
                               instance_ref['kernel_id'],
                               user,
                               project)
             if instance_ref['ramdisk_id']:
-                self._fetch_image(nova_context.get_admin_context(),
+                libvirt_utils.fetch_image(nova_context.get_admin_context(),
                                   os.path.join(instance_dir, 'ramdisk'),
                                   instance_ref['ramdisk_id'],
                                   user,
@@ -2135,38 +2089,26 @@ class LibvirtConnection(driver.ComputeDriver):
 
         virt_dom = self._lookup_by_name(instance_ref.name)
         xml = virt_dom.XMLDesc(0)
-        doc = libxml2.parseDoc(xml)
-        disk_nodes = doc.xpathEval('//devices/disk')
-        path_nodes = doc.xpathEval('//devices/disk/source')
-        driver_nodes = doc.xpathEval('//devices/disk/driver')
+        doc = ElementTree.fromstring(xml)
+        disk_nodes = doc.findall('.//devices/disk')
+        path_nodes = doc.findall('.//devices/disk/source')
+        driver_nodes = doc.findall('.//devices/disk/driver')
 
         for cnt, path_node in enumerate(path_nodes):
-            disk_type = disk_nodes[cnt].get_properties().getContent()
-            path = path_node.get_properties().getContent()
+            disk_type = disk_nodes[cnt].get('type')
+            path = path_node.get('file')
 
             if disk_type != 'file':
                 LOG.debug(_('skipping %(path)s since it looks like volume') %
                           locals())
                 continue
 
-            # In case of libvirt.xml, disk type can be obtained
-            # by the below statement.
-            # -> disk_type = driver_nodes[cnt].get_properties().getContent()
-            # but this xml is generated by kvm, format is slightly different.
-            disk_type = \
-                driver_nodes[cnt].get_properties().get_next().getContent()
+            disk_type = driver_nodes[cnt].get('type')
+            size = libvirt_utils.get_disk_size(path)
             if disk_type == 'raw':
-                size = int(os.path.getsize(path))
                 backing_file = ""
             else:
-                out, err = utils.execute('qemu-img', 'info', path)
-                size = [i.split('(')[1].split()[0] for i in out.split('\n')
-                    if i.strip().find('virtual size') >= 0]
-                size = int(size[0])
-
-                backing_file = [i.split('actual path:')[1].strip()[:-1]
-                    for i in out.split('\n') if 0 <= i.find('backing file')]
-                backing_file = os.path.basename(backing_file[0])
+                backing_file = libvirt_utils.get_backing_file(path)
 
             # block migration needs same/larger size of empty image on the
             # destination host. since qemu-img creates bit smaller size image
@@ -2193,19 +2135,22 @@ class LibvirtConnection(driver.ComputeDriver):
                                                network_info=network_info)
 
     def update_host_status(self):
-        """Update the status info of the host, and return those values
-            to the calling program."""
-        return self.HostState.update_status()
+        """Retrieve status info from libvirt.
+
+        Query libvirt to get the state of the compute node, such
+        as memory and disk usage.
+        """
+        return self.host_state.update_status()
 
     def get_host_stats(self, refresh=False):
-        """Return the current state of the host. If 'refresh' is
-           True, run the update first."""
-        print 'Updating!'
-        return self.HostState.get_host_stats(refresh=refresh)
+        """Return the current state of the host.
+
+        If 'refresh' is True, run update the stats first."""
+        return self.host_state.get_host_stats(refresh=refresh)
 
     def host_power_action(self, host, action):
         """Reboots, shuts down or powers up the host."""
-        pass
+        raise NotImplementedError()
 
     def set_host_enabled(self, host, enabled):
         """Sets the specified host's ability to accept new instances."""
@@ -2213,9 +2158,7 @@ class LibvirtConnection(driver.ComputeDriver):
 
 
 class HostState(object):
-    """Manages information about the XenServer host this compute
-    node is running on.
-    """
+    """Manages information about the compute node through libvirt"""
     def __init__(self, read_only):
         super(HostState, self).__init__()
         self.read_only = read_only
@@ -2224,9 +2167,9 @@ class HostState(object):
         self.update_status()
 
     def get_host_stats(self, refresh=False):
-        """Return the current state of the host. If 'refresh' is
-        True, run the update first.
-        """
+        """Return the current state of the host.
+
+        If 'refresh' is True, run update the stats first."""
         if refresh:
             self.update_status()
         return self._stats
@@ -2245,7 +2188,7 @@ class HostState(object):
         data = {}
         data["vcpus"] = self.connection.get_vcpu_total()
         data["vcpus_used"] = self.connection.get_vcpu_used()
-        data["cpu_info"] = self.connection.get_cpu_info()
+        data["cpu_info"] = utils.loads(self.connection.get_cpu_info())
         data["cpu_arch"] = FLAGS.cpu_arch
         data["xpus"] = FLAGS.xpus
         data["xpu_arch"] = FLAGS.xpu_arch
@@ -2264,9 +2207,6 @@ class HostState(object):
         data["hypervisor_type"] = self.connection.get_hypervisor_type()
         data["hypervisor_version"] = self.connection.get_hypervisor_version()
 
-        # Add user-defined capabilities
-        caps = FLAGS.extra_node_capabilities
-        for cap in caps:
-            key, value = cap.split('=')
-            data[key] = value
         self._stats = data
+
+        return data

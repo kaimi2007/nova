@@ -124,12 +124,12 @@ def require_context(f):
 def require_instance_exists(f):
     """Decorator to require the specified instance to exist.
 
-    Requres the wrapped function to use context and instance_id as
+    Requires the wrapped function to use context and instance_id as
     their first two arguments.
     """
 
     def wrapper(context, instance_id, *args, **kwargs):
-        db.api.instance_get(context, instance_id)
+        db.instance_get(context, instance_id)
         return f(context, instance_id, *args, **kwargs)
     wrapper.__name__ = f.__name__
     return wrapper
@@ -138,12 +138,12 @@ def require_instance_exists(f):
 def require_volume_exists(f):
     """Decorator to require the specified volume to exist.
 
-    Requres the wrapped function to use context and volume_id as
+    Requires the wrapped function to use context and volume_id as
     their first two arguments.
     """
 
     def wrapper(context, volume_id, *args, **kwargs):
-        db.api.volume_get(context, volume_id)
+        db.volume_get(context, volume_id)
         return f(context, volume_id, *args, **kwargs)
     wrapper.__name__ = f.__name__
     return wrapper
@@ -367,12 +367,13 @@ def compute_node_get(context, compute_id, session=None):
 
 
 @require_admin_context
-def compute_node_get_all(context, disabled=False):
-    session = get_session()
-    return session.query(models.ComputeNode).\
-                   filter_by(deleted=can_read_deleted(context)).\
-                   all()
+def compute_node_get_all(context, session=None):
+    if not session:
+        session = get_session()
 
+    return session.query(models.ComputeNode).\
+                    options(joinedload('service')).\
+                    filter_by(deleted=can_read_deleted(context))
 
 @require_admin_context
 def compute_node_get_all_by_arch(context, cpu_arch, xpu_arch, session=None):
@@ -711,15 +712,12 @@ def floating_ip_get_all_by_project(context, project_id):
     authorize_project_context(context, project_id)
     session = get_session()
     # TODO(tr3buchet): why do we not want auto_assigned floating IPs here?
-    floating_ip_refs = session.query(models.FloatingIp).\
-                               options(joinedload_all('fixed_ip.instance')).\
-                               filter_by(project_id=project_id).\
-                               filter_by(auto_assigned=False).\
-                               filter_by(deleted=False).\
-                               all()
-    if not floating_ip_refs:
-        raise exception.FloatingIpNotFoundForProject(project_id=project_id)
-    return floating_ip_refs
+    return session.query(models.FloatingIp).\
+                         options(joinedload_all('fixed_ip.instance')).\
+                         filter_by(project_id=project_id).\
+                         filter_by(auto_assigned=False).\
+                         filter_by(deleted=False).\
+                         all()
 
 
 @require_context
@@ -849,6 +847,16 @@ def fixed_ip_create(_context, values):
     fixed_ip_ref.update(values)
     fixed_ip_ref.save()
     return fixed_ip_ref['address']
+
+
+@require_context
+def fixed_ip_bulk_create(_context, ips):
+    session = get_session()
+    with session.begin():
+        for ip in ips:
+            model = models.FixedIp()
+            model.update(ip)
+            session.add(model)
 
 
 @require_context
@@ -1011,7 +1019,7 @@ def fixed_ip_update(context, address, values):
 
 @require_context
 def virtual_interface_create(context, values):
-    """Create a new virtual interface record in teh database.
+    """Create a new virtual interface record in the database.
 
     :param values: = dict containing column values
     """
@@ -1107,7 +1115,7 @@ def virtual_interface_get_by_fixed_ip(context, fixed_ip_id):
 def virtual_interface_get_by_instance(context, instance_id):
     """Gets all virtual interfaces for instance.
 
-    :param instance_id: = id of the instance to retreive vifs for
+    :param instance_id: = id of the instance to retrieve vifs for
     """
     session = get_session()
     vif_refs = session.query(models.VirtualInterface).\
@@ -1136,7 +1144,7 @@ def virtual_interface_get_by_instance_and_network(context, instance_id,
 def virtual_interface_get_by_network(context, network_id):
     """Gets all virtual_interface on network.
 
-    :param network_id: = network to retreive vifs for
+    :param network_id: = network to retrieve vifs for
     """
     session = get_session()
     vif_refs = session.query(models.VirtualInterface).\
@@ -1149,7 +1157,7 @@ def virtual_interface_get_by_network(context, network_id):
 
 @require_context
 def virtual_interface_delete(context, vif_id):
-    """Delete virtual interface record from teh database.
+    """Delete virtual interface record from the database.
 
     :param vif_id: = id of vif to delete
     """
@@ -1301,12 +1309,13 @@ def _build_instance_get(context, session=None):
         session = get_session()
 
     partial = session.query(models.Instance).\
-                     options(joinedload_all('fixed_ips.floating_ips')).\
-                     options(joinedload_all('fixed_ips.network')).\
-                     options(joinedload_all('security_groups.rules')).\
-                     options(joinedload('volumes')).\
-                     options(joinedload('metadata')).\
-                     options(joinedload('instance_type'))
+            options(joinedload_all('fixed_ips.floating_ips')).\
+            options(joinedload_all('fixed_ips.network')).\
+            options(joinedload_all('fixed_ips.virtual_interface')).\
+            options(joinedload_all('security_groups.rules')).\
+            options(joinedload('volumes')).\
+            options(joinedload('metadata')).\
+            options(joinedload('instance_type'))
 
     if is_admin_context(context):
         partial = partial.filter_by(deleted=can_read_deleted(context))
@@ -1371,10 +1380,13 @@ def instance_get_all_by_filters(context, filters):
 
     session = get_session()
     query_prefix = session.query(models.Instance).\
-                   options(joinedload('security_groups')).\
-                   options(joinedload('metadata')).\
-                   options(joinedload('instance_type')).\
-                   order_by(desc(models.Instance.created_at))
+            options(joinedload_all('fixed_ips.floating_ips')).\
+            options(joinedload_all('fixed_ips.network')).\
+            options(joinedload_all('fixed_ips.virtual_interface')).\
+            options(joinedload('security_groups')).\
+            options(joinedload('metadata')).\
+            options(joinedload('instance_type')).\
+            order_by(desc(models.Instance.created_at))
 
     # Make a copy of the filters dictionary to use going forward, as we'll
     # be modifying it and we shouldn't affect the caller's use of it.
@@ -1499,6 +1511,7 @@ def instance_get_all_by_user(context, user_id):
 @require_admin_context
 def instance_get_all_by_host(context, host):
     session = get_session()
+    read_deleted = can_read_deleted(context)
     return session.query(models.Instance).\
                    options(joinedload_all('fixed_ips.floating_ips')).\
                    options(joinedload('security_groups')).\
@@ -1506,7 +1519,7 @@ def instance_get_all_by_host(context, host):
                    options(joinedload('metadata')).\
                    options(joinedload('instance_type')).\
                    filter_by(host=host).\
-                   filter_by(deleted=can_read_deleted(context)).\
+                   filter_by(deleted=read_deleted).\
                    all()
 
 
@@ -1613,31 +1626,50 @@ def instance_get_floating_address(context, instance_id):
     return fixed_ip_refs[0].floating_ips[0]['address']
 
 
+@require_admin_context
+def instance_get_all_hung_in_rebooting(context, reboot_window, session=None):
+    reboot_window = datetime.datetime.utcnow() - datetime.timedelta(
+            seconds=reboot_window)
+
+    if not session:
+        session = get_session()
+
+    results = session.query(models.Instance).\
+            filter(models.Instance.updated_at <= reboot_window).\
+            filter_by(task_state="rebooting").all()
+
+    return results
+
+
 @require_context
 def instance_update(context, instance_id, values):
     session = get_session()
+
+    if utils.is_uuid_like(instance_id):
+        instance_ref = instance_get_by_uuid(context, instance_id,
+                                            session=session)
+    else:
+        instance_ref = instance_get(context, instance_id, session=session)
+
     metadata = values.get('metadata')
     if metadata is not None:
         instance_metadata_update(context,
-                                 instance_id,
+                                 instance_ref['id'],
                                  values.pop('metadata'),
                                  delete=True)
     with session.begin():
-        if utils.is_uuid_like(instance_id):
-            instance_ref = instance_get_by_uuid(context, instance_id,
-                                                session=session)
-        else:
-            instance_ref = instance_get(context, instance_id, session=session)
         instance_ref.update(values)
         instance_ref.save(session=session)
-        return instance_ref
+
+    return instance_ref
 
 
-def instance_add_security_group(context, instance_id, security_group_id):
+def instance_add_security_group(context, instance_uuid, security_group_id):
     """Associate the given security group with the given instance"""
     session = get_session()
     with session.begin():
-        instance_ref = instance_get(context, instance_id, session=session)
+        instance_ref = instance_get_by_uuid(context, instance_uuid,
+                                            session=session)
         security_group_ref = security_group_get(context,
                                                 security_group_id,
                                                 session=session)
@@ -1646,12 +1678,13 @@ def instance_add_security_group(context, instance_id, security_group_id):
 
 
 @require_context
-def instance_remove_security_group(context, instance_id, security_group_id):
+def instance_remove_security_group(context, instance_uuid, security_group_id):
     """Disassociate the given security group from the given instance"""
     session = get_session()
-
+    instance_ref = instance_get_by_uuid(context, instance_uuid,
+                                        session=session)
     session.query(models.SecurityGroupInstanceAssociation).\
-                filter_by(instance_id=instance_id).\
+                filter_by(instance_id=instance_ref['id']).\
                 filter_by(security_group_id=security_group_id).\
                 update({'deleted': True,
                         'deleted_at': utils.utcnow(),
@@ -1769,7 +1802,7 @@ def network_associate(context, project_id, force=False):
     or if force is True
 
     force solves race condition where a fresh project has multiple instance
-    builds simultaneosly picked up by multiple network hosts which attempt
+    builds simultaneously picked up by multiple network hosts which attempt
     to associate the project with multiple networks
     force should only be used as a direct consequence of user request
     all automated requests should not use force
@@ -1789,7 +1822,7 @@ def network_associate(context, project_id, force=False):
             network_ref = network_query(project_id)
 
         if force or not network_ref:
-            # in force mode or project doesn't have a network so assocaite
+            # in force mode or project doesn't have a network so associate
             # with a new network
 
             # get new network
@@ -1847,6 +1880,7 @@ def network_count_reserved_ips(context, network_id):
 @require_admin_context
 def network_create_safe(context, values):
     network_ref = models.Network()
+    network_ref['uuid'] = str(utils.gen_uuid())
     network_ref.update(values)
     try:
         network_ref.save()
@@ -1926,8 +1960,8 @@ def network_get_all_by_uuids(context, network_uuids, project_id=None):
     #check if host is set to all of the networks
     # returned in the result
     for network in result:
-            if network['host'] is None:
-                raise exception.NetworkHostNotSet(network_id=network['id'])
+        if network['host'] is None:
+            raise exception.NetworkHostNotSet(network_id=network['id'])
 
     #check if the result contains all the networks
     #we are looking for
@@ -3437,7 +3471,7 @@ def instance_type_get(context, id):
                     first()
 
     if not inst_type:
-        raise exception.InstanceTypeNotFound(instance_type=id)
+        raise exception.InstanceTypeNotFound(instance_type_id=id)
     else:
         return _dict_with_extra_specs(inst_type)
 
@@ -3457,13 +3491,8 @@ def instance_type_get_by_name(context, name):
 
 
 @require_context
-def instance_type_get_by_flavor_id(context, id):
+def instance_type_get_by_flavor_id(context, flavor_id):
     """Returns a dict describing specific flavor_id"""
-    try:
-        flavor_id = int(id)
-    except ValueError:
-        raise exception.FlavorNotFound(flavor_id=id)
-
     session = get_session()
     inst_type = session.query(models.InstanceTypes).\
                                     options(joinedload('extra_specs')).\
@@ -4077,4 +4106,191 @@ def vsa_get_all_by_project(context, project_id):
                    all()
 
 
-    ####################
+####################
+
+
+def s3_image_get(context, image_id):
+    """Find local s3 image represented by the provided id"""
+    session = get_session()
+    res = session.query(models.S3Image)\
+                 .filter_by(id=image_id)\
+                 .first()
+
+    if not res:
+        raise exception.ImageNotFound(image_id=image_id)
+
+    return res
+
+
+def s3_image_get_by_uuid(context, image_uuid):
+    """Find local s3 image represented by the provided uuid"""
+    session = get_session()
+    res = session.query(models.S3Image)\
+                 .filter_by(uuid=image_uuid)\
+                 .first()
+
+    if not res:
+        raise exception.ImageNotFound(image_id=image_uuid)
+
+    return res
+
+
+def s3_image_create(context, image_uuid):
+    """Create local s3 image represented by provided uuid"""
+    try:
+        s3_image_ref = models.S3Image()
+        s3_image_ref.update({'uuid': image_uuid})
+        s3_image_ref.save()
+    except Exception, e:
+        raise exception.DBError(e)
+
+    return s3_image_ref
+
+
+####################
+
+
+@require_admin_context
+def sm_backend_conf_create(context, values):
+    backend_conf = models.SMBackendConf()
+    backend_conf.update(values)
+    backend_conf.save()
+    return backend_conf
+
+
+@require_admin_context
+def sm_backend_conf_update(context, sm_backend_id, values):
+    session = get_session()
+    backend_conf = session.query(models.SMBackendConf).\
+                           filter_by(id=sm_backend_id).first()
+    if not backend_conf:
+        raise exception.NotFound(_("No backend config with id "\
+                                   "%(sm_backend_id)s") % locals())
+    backend_conf.update(values)
+    backend_conf.save(session=session)
+    return backend_conf
+
+
+@require_admin_context
+def sm_backend_conf_delete(context, sm_backend_id):
+    session = get_session()
+    with session.begin():
+        session.query(models.SMBackendConf).\
+                filter_by(id=sm_backend_id).\
+                delete()
+
+
+@require_admin_context
+def sm_backend_conf_get(context, sm_backend_id):
+    session = get_session()
+    result = session.query(models.SMBackendConf).\
+                     filter_by(id=sm_backend_id).first()
+    if not result:
+        raise exception.NotFound(_("No backend config with id "\
+                                   "%(sm_backend_id)s") % locals())
+    return result
+
+
+@require_admin_context
+def sm_backend_conf_get_by_sr(context, sr_uuid):
+    session = get_session()
+    result = session.query(models.SMBackendConf).filter_by(sr_uuid=sr_uuid)
+    return result
+
+
+@require_admin_context
+def sm_backend_conf_get_all(context):
+    session = get_session()
+    return session.query(models.SMBackendConf).all()
+
+
+####################
+
+
+@require_admin_context
+def sm_flavor_create(context, values):
+    sm_flavor = models.SMFlavors()
+    sm_flavor.update(values)
+    sm_flavor.save()
+    return sm_flavor
+
+
+@require_admin_context
+def sm_flavor_update(context, sm_flavor_label, values):
+    session = get_session()
+    sm_flavor = session.query(models.SMFlavors).\
+                        filter_by(label=sm_flavor_label)
+    if not sm_flavor:
+        raise exception.NotFound(_("No sm_flavor with id "\
+                                   "%(sm_flavor_id)s") % locals())
+    sm_flavor.update(values)
+    sm_flavor.save()
+    return sm_flavor
+
+
+@require_admin_context
+def sm_flavor_delete(context, sm_flavor_label):
+    session = get_session()
+    with session.begin():
+        session.query(models.SMFlavors).\
+                filter_by(label=sm_flavor_label).\
+                delete()
+
+
+@require_admin_context
+def sm_flavor_get(context, sm_flavor):
+    session = get_session()
+    result = session.query(models.SMFlavors).filter_by(label=sm_flavor)
+    if not result:
+        raise exception.NotFound(_("No sm_flavor called %(sm_flavor)s") \
+                                 % locals())
+    return result
+
+
+@require_admin_context
+def sm_flavor_get_all(context):
+    session = get_session()
+    return session.query(models.SMFlavors).all()
+
+
+###############################
+
+
+def sm_volume_create(context, values):
+    sm_volume = models.SMVolume()
+    sm_volume.update(values)
+    sm_volume.save()
+    return sm_volume
+
+
+def sm_volume_update(context, volume_id, values):
+    session = get_session()
+    sm_volume = session.query(models.SMVolume).filter_by(id=volume_id).first()
+    if not sm_volume:
+        raise exception.NotFound(_("No sm_volume with id %(volume_id)s") \
+                                 % locals())
+    sm_volume.update(values)
+    sm_volume.save()
+    return sm_volume
+
+
+def sm_volume_delete(context, volume_id):
+    session = get_session()
+    with session.begin():
+        session.query(models.SMVolume).\
+                filter_by(id=volume_id).\
+                delete()
+
+
+def sm_volume_get(context, volume_id):
+    session = get_session()
+    result = session.query(models.SMVolume).filter_by(id=volume_id).first()
+    if not result:
+        raise exception.NotFound(_("No sm_volume with id %(volume_id)s") \
+                                 % locals())
+    return result
+
+
+def sm_volume_get_all(context):
+    session = get_session()
+    return session.query(models.SMVolume).all()

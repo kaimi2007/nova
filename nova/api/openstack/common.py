@@ -16,9 +16,10 @@
 #    under the License.
 
 import functools
-from lxml import etree
+import os
 import re
 import urlparse
+
 import webob
 from xml.dom import minidom
 
@@ -26,10 +27,9 @@ from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova.compute import vm_states
 from nova.compute import task_states
-from nova import exception
 from nova import flags
+from nova import ipv6
 from nova import log as logging
-import nova.network
 from nova import quota
 
 
@@ -37,7 +37,6 @@ LOG = logging.getLogger('nova.api.openstack.common')
 FLAGS = flags.FLAGS
 
 
-XML_NS_V10 = 'http://docs.rackspacecloud.com/servers/api/v1.0'
 XML_NS_V11 = 'http://docs.openstack.org/compute/api/v1.1'
 
 
@@ -45,6 +44,7 @@ _STATE_MAP = {
     vm_states.ACTIVE: {
         'default': 'ACTIVE',
         task_states.REBOOTING: 'REBOOT',
+        task_states.REBOOTING_HARD: 'HARD_REBOOT',
         task_states.UPDATING_PASSWORD: 'PASSWORD',
         task_states.RESIZE_VERIFY: 'VERIFY_RESIZE',
     },
@@ -114,19 +114,29 @@ def get_pagination_params(request):
 
     """
     params = {}
-    for param in ['marker', 'limit']:
-        if not param in request.GET:
-            continue
-        try:
-            params[param] = int(request.GET[param])
-        except ValueError:
-            msg = _('%s param must be an integer') % param
-            raise webob.exc.HTTPBadRequest(explanation=msg)
-        if params[param] < 0:
-            msg = _('%s param must be positive') % param
-            raise webob.exc.HTTPBadRequest(explanation=msg)
-
+    if 'limit' in request.GET:
+        params['limit'] = _get_limit_param(request)
+    if 'marker' in request.GET:
+        params['marker'] = _get_marker_param(request)
     return params
+
+
+def _get_limit_param(request):
+    """Extract integer limit from request or fail"""
+    try:
+        limit = int(request.GET['limit'])
+    except ValueError:
+        msg = _('limit param must be an integer')
+        raise webob.exc.HTTPBadRequest(explanation=msg)
+    if limit < 0:
+        msg = _('limit param must be positive')
+        raise webob.exc.HTTPBadRequest(explanation=msg)
+    return limit
+
+
+def _get_marker_param(request):
+    """Extract marker id from request or fail"""
+    return request.GET['marker']
 
 
 def limited(items, request, max_limit=FLAGS.osapi_max_limit):
@@ -179,7 +189,7 @@ def limited_by_marker(items, request, max_limit=FLAGS.osapi_max_limit):
     if marker:
         start_index = -1
         for i, item in enumerate(items):
-            if item['id'] == marker:
+            if item['id'] == marker or item.get('uuid') == marker:
                 start_index = i + 1
                 break
         if start_index < 0:
@@ -213,8 +223,14 @@ def remove_version_from_href(href):
 
     """
     parsed_url = urlparse.urlsplit(href)
-    new_path = re.sub(r'^/v[0-9]+\.[0-9]+(/|$)', r'\1', parsed_url.path,
-                      count=1)
+    url_parts = parsed_url.path.split('/', 2)
+
+    # NOTE: this should match vX.X or vX
+    expression = re.compile(r'^v([0-9]+|[0-9]+\.[0-9]+)(/.*|$)')
+    if expression.match(url_parts[1]):
+        del url_parts[1]
+
+    new_path = '/'.join(url_parts)
 
     if new_path == parsed_url.path:
         msg = _('href %s does not contain version') % href
@@ -240,15 +256,10 @@ def get_version_from_href(href):
 
     """
     try:
-        #finds the first instance that matches /v#.#/
-        version = re.findall(r'[/][v][0-9]+\.[0-9]+[/]', href)
-        #if no version was found, try finding /v#.# at the end of the string
-        if not version:
-            version = re.findall(r'[/][v][0-9]+\.[0-9]+$', href)
-        version = re.findall(r'[0-9]+\.[0-9]', version[0])[0]
+        expression = r'/v([0-9]+|[0-9]+\.[0-9]+)(/|$)'
+        return re.findall(expression, href)[0][0]
     except IndexError:
-        version = '1.0'
-    return version
+        return '2'
 
 
 def check_img_metadata_quota_limit(context, metadata):
@@ -276,7 +287,7 @@ def get_networks_for_instance(context, instance):
     """Returns a prepared nw_info list for passing into the view
     builders
 
-    We end up with a datastructure like:
+    We end up with a data structure like:
     {'public': {'ips': [{'addr': '10.0.0.1', 'version': 4},
                         {'addr': '2001::1', 'version': 6}],
                 'floating_ips': [{'addr': '172.16.0.1', 'version': 4},
@@ -284,40 +295,42 @@ def get_networks_for_instance(context, instance):
      ...}
     """
 
-    network_api = nova.network.API()
-
-    def _get_floats(ip):
-        return network_api.get_floating_ips_by_fixed_address(context, ip)
-
     def _emit_addr(ip, version):
         return {'addr': ip, 'version': version}
 
-    nw_info = network_api.get_instance_nw_info(context, instance)
-
     networks = {}
-    for net, info in nw_info:
-        if not info:
+    fixed_ips = instance['fixed_ips']
+    ipv6_addrs_seen = {}
+    for fixed_ip in fixed_ips:
+        fixed_addr = fixed_ip['address']
+        network = fixed_ip['network']
+        vif = fixed_ip.get('virtual_interface')
+        if not network or not vif:
+            name = instance['name']
+            ip = fixed_ip['address']
+            LOG.warn(_("Instance %(name)s has stale IP "
+                    "address: %(ip)s (no network or vif)") % locals())
             continue
-        try:
-            network = {'ips': []}
-            network['floating_ips'] = []
-            for ip in info['ips']:
-                network['ips'].append(_emit_addr(ip['ip'], 4))
-                floats = [_emit_addr(addr, 4)
-                        for addr in _get_floats(ip['ip'])]
-                network['floating_ips'].extend(floats)
-            if FLAGS.use_ipv6 and 'ip6s' in info:
-                network['ips'].extend([_emit_addr(ip['ip'], 6)
-                        for ip in info['ip6s']])
-        # NOTE(comstud): These exception checks are for lp830817
-        # (Restoring them after a refactoring removed)
-        except TypeError:
-            raise
+        label = network.get('label', None)
+        if label is None:
             continue
-        except KeyError:
-            raise
-            continue
-        networks[info['label']] = network
+        if label not in networks:
+            networks[label] = {'ips': [], 'floating_ips': []}
+        nw_dict = networks[label]
+        cidr_v6 = network.get('cidr_v6')
+        if FLAGS.use_ipv6 and cidr_v6:
+            ipv6_addr = ipv6.to_global(cidr_v6, vif['address'],
+                    network['project_id'])
+            # Only add same IPv6 address once.  It's possible we've
+            # seen it before if there was a previous fixed_ip with
+            # same network and vif as this one
+            if not ipv6_addrs_seen.get(ipv6_addr):
+                nw_dict['ips'].append(_emit_addr(ipv6_addr, 6))
+                ipv6_addrs_seen[ipv6_addr] = True
+        nw_dict['ips'].append(_emit_addr(fixed_addr, 4))
+        for floating_ip in fixed_ip.get('floating_ips', []):
+            float_addr = floating_ip['address']
+            nw_dict['floating_ips'].append(_emit_addr(float_addr, 4))
     return networks
 
 
@@ -357,52 +370,51 @@ class MetadataHeadersSerializer(wsgi.ResponseHeadersSerializer):
         response.status_int = 204
 
 
-class MetadataXMLSerializer(wsgi.XMLDictSerializer):
+metadata_nsmap = {None: xmlutil.XMLNS_V11}
 
-    NSMAP = {None: xmlutil.XMLNS_V11}
 
-    def __init__(self, xmlns=wsgi.XMLNS_V11):
-        super(MetadataXMLSerializer, self).__init__(xmlns=xmlns)
+class MetaItemTemplate(xmlutil.TemplateBuilder):
+    def construct(self):
+        sel = xmlutil.Selector('meta', xmlutil.get_items, 0)
+        root = xmlutil.TemplateElement('meta', selector=sel)
+        root.set('key', 0)
+        root.text = 1
+        return xmlutil.MasterTemplate(root, 1, nsmap=metadata_nsmap)
 
-    def populate_metadata(self, metadata_elem, meta_dict):
-        for (key, value) in meta_dict.items():
-            elem = etree.SubElement(metadata_elem, 'meta')
-            elem.set('key', str(key))
-            elem.text = value
 
-    def _populate_meta_item(self, meta_elem, meta_item_dict):
-        """Populate a meta xml element from a dict."""
-        (key, value) = meta_item_dict.items()[0]
-        meta_elem.set('key', str(key))
-        meta_elem.text = value
+class MetadataTemplateElement(xmlutil.TemplateElement):
+    def will_render(self, datum):
+        return True
 
-    def index(self, metadata_dict):
-        metadata = etree.Element('metadata', nsmap=self.NSMAP)
-        self.populate_metadata(metadata, metadata_dict.get('metadata', {}))
-        return self._to_xml(metadata)
 
-    def create(self, metadata_dict):
-        metadata = etree.Element('metadata', nsmap=self.NSMAP)
-        self.populate_metadata(metadata, metadata_dict.get('metadata', {}))
-        return self._to_xml(metadata)
+class MetadataTemplate(xmlutil.TemplateBuilder):
+    def construct(self):
+        root = MetadataTemplateElement('metadata', selector='metadata')
+        elem = xmlutil.SubTemplateElement(root, 'meta',
+                                          selector=xmlutil.get_items)
+        elem.set('key', 0)
+        elem.text = 1
+        return xmlutil.MasterTemplate(root, 1, nsmap=metadata_nsmap)
 
-    def update_all(self, metadata_dict):
-        metadata = etree.Element('metadata', nsmap=self.NSMAP)
-        self.populate_metadata(metadata, metadata_dict.get('metadata', {}))
-        return self._to_xml(metadata)
 
-    def show(self, meta_item_dict):
-        meta = etree.Element('meta', nsmap=self.NSMAP)
-        self._populate_meta_item(meta, meta_item_dict['meta'])
-        return self._to_xml(meta)
+class MetadataXMLSerializer(xmlutil.XMLTemplateSerializer):
+    def index(self):
+        return MetadataTemplate()
 
-    def update(self, meta_item_dict):
-        meta = etree.Element('meta', nsmap=self.NSMAP)
-        self._populate_meta_item(meta, meta_item_dict['meta'])
-        return self._to_xml(meta)
+    def create(self):
+        return MetadataTemplate()
 
-    def default(self, *args, **kwargs):
-        return ''
+    def update_all(self):
+        return MetadataTemplate()
+
+    def show(self):
+        return MetaItemTemplate()
+
+    def update(self):
+        return MetaItemTemplate()
+
+    def default(self):
+        return xmlutil.MasterTemplate(None, 1)
 
 
 def check_snapshots_enabled(f):
@@ -415,3 +427,56 @@ def check_snapshots_enabled(f):
             raise webob.exc.HTTPBadRequest(explanation=msg)
         return f(*args, **kwargs)
     return inner
+
+
+class ViewBuilder(object):
+    """Model API responses as dictionaries."""
+
+    _collection_name = None
+
+    def _get_links(self, request, identifier):
+        return [{
+            "rel": "self",
+            "href": self._get_href_link(request, identifier),
+        },
+        {
+            "rel": "bookmark",
+            "href": self._get_bookmark_link(request, identifier),
+        }]
+
+    def _get_next_link(self, request, identifier):
+        """Return href string with proper limit and marker params."""
+        params = request.params.copy()
+        params["marker"] = identifier
+        url = os.path.join(request.application_url,
+                           request.environ["nova.context"].project_id,
+                           self._collection_name)
+        return "%s?%s" % (url, dict_to_query_str(params))
+
+    def _get_href_link(self, request, identifier):
+        """Return an href string pointing to this object."""
+        return os.path.join(request.application_url,
+                            request.environ["nova.context"].project_id,
+                            self._collection_name,
+                            str(identifier))
+
+    def _get_bookmark_link(self, request, identifier):
+        """Create a URL that refers to a specific resource."""
+        base_url = remove_version_from_href(request.application_url)
+        return os.path.join(base_url,
+                            request.environ["nova.context"].project_id,
+                            self._collection_name,
+                            str(identifier))
+
+    def _get_collection_links(self, request, items):
+        """Retrieve 'next' link, if applicable."""
+        links = []
+        limit = int(request.params.get("limit", 0))
+        if limit and limit == len(items):
+            last_item = items[-1]
+            last_item_id = last_item.get("uuid", last_item["id"])
+            links.append({
+                "rel": "next",
+                "href": self._get_next_link(request, last_item_id),
+            })
+        return links

@@ -80,8 +80,11 @@ class VolumeManager(manager.SchedulerDependentManager):
     def init_host(self):
         """Do any initialization that needs to be run if this is a
            standalone service."""
-        self.driver.check_for_setup_error()
+
         ctxt = context.get_admin_context()
+        self.driver.do_setup(ctxt)
+        self.driver.check_for_setup_error()
+
         volumes = self.db.volume_get_all_by_host(ctxt, self.host)
         LOG.debug(_("Re-exporting %s volumes"), len(volumes))
         for volume in volumes:
@@ -123,11 +126,10 @@ class VolumeManager(manager.SchedulerDependentManager):
             if model_update:
                 self.db.volume_update(context, volume_ref['id'], model_update)
         except Exception:
-            exc_info = sys.exc_info()
-            self.db.volume_update(context,
-                                  volume_ref['id'], {'status': 'error'})
-            self._notify_vsa(context, volume_ref, 'error')
-            raise exc_info
+            with utils.save_and_reraise_exception():
+                self.db.volume_update(context,
+                                      volume_ref['id'], {'status': 'error'})
+                self._notify_vsa(context, volume_ref, 'error')
 
         now = utils.utcnow()
         self.db.volume_update(context,
@@ -179,11 +181,10 @@ class VolumeManager(manager.SchedulerDependentManager):
                                   {'status': 'available'})
             return True
         except Exception:
-            exc_info = sys.exc_info()
-            self.db.volume_update(context,
-                                  volume_ref['id'],
-                                  {'status': 'error_deleting'})
-            raise exc_info
+            with utils.save_and_reraise_exception():
+                self.db.volume_update(context,
+                                      volume_ref['id'],
+                                      {'status': 'error_deleting'})
 
         self.db.volume_destroy(context, volume_id)
         LOG.debug(_("volume %s: deleted successfully"), volume_ref['name'])
@@ -204,9 +205,10 @@ class VolumeManager(manager.SchedulerDependentManager):
                                         model_update)
 
         except Exception:
-            self.db.snapshot_update(context,
-                                    snapshot_ref['id'], {'status': 'error'})
-            raise
+            with utils.save_and_reraise_exception():
+                self.db.snapshot_update(context,
+                                        snapshot_ref['id'],
+                                        {'status': 'error'})
 
         self.db.snapshot_update(context,
                                 snapshot_ref['id'], {'status': 'available',
@@ -223,10 +225,10 @@ class VolumeManager(manager.SchedulerDependentManager):
             LOG.debug(_("snapshot %s: deleting"), snapshot_ref['name'])
             self.driver.delete_snapshot(snapshot_ref)
         except Exception:
-            self.db.snapshot_update(context,
-                                    snapshot_ref['id'],
-                                    {'status': 'error_deleting'})
-            raise
+            with utils.save_and_reraise_exception():
+                self.db.snapshot_update(context,
+                                        snapshot_ref['id'],
+                                        {'status': 'error_deleting'})
 
         self.db.snapshot_destroy(context, snapshot_id)
         LOG.debug(_("snapshot %s: deleted successfully"), snapshot_ref['name'])

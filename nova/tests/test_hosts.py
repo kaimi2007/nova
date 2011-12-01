@@ -13,7 +13,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import stubout
 import webob.exc
 
 from nova import context
@@ -21,7 +20,7 @@ from nova import exception
 from nova import flags
 from nova import log as logging
 from nova import test
-from nova.api.openstack.contrib import hosts as os_hosts
+from nova.api.openstack.v2.contrib import hosts as os_hosts
 from nova.scheduler import api as scheduler_api
 
 
@@ -94,14 +93,17 @@ class HostTestCase(test.TestCase):
         self.assertEqual(result_c2["status"], "disabled")
 
     def test_host_startup(self):
+        self.flags(allow_admin_api=True)
         result = self.controller.startup(self.req, "host_c1")
         self.assertEqual(result["power_action"], "startup")
 
     def test_host_shutdown(self):
+        self.flags(allow_admin_api=True)
         result = self.controller.shutdown(self.req, "host_c1")
         self.assertEqual(result["power_action"], "shutdown")
 
     def test_host_reboot(self):
+        self.flags(allow_admin_api=True)
         result = self.controller.reboot(self.req, "host_c1")
         self.assertEqual(result["power_action"], "reboot")
 

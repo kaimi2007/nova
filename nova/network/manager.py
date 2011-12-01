@@ -48,10 +48,13 @@ import datetime
 import itertools
 import math
 import netaddr
+import random
 import re
 import socket
 from eventlet import greenpool
 
+from nova.compute import api as compute_api
+from nova.compute import instance_types
 from nova import context
 from nova import db
 from nova import exception
@@ -59,12 +62,10 @@ from nova import flags
 from nova import ipv6
 from nova import log as logging
 from nova import manager
+from nova.network import api as network_api
 from nova import quota
 from nova import utils
 from nova import rpc
-from nova.network import api as network_api
-from nova.compute import api as compute_api
-import random
 
 
 LOG = logging.getLogger("nova.network.manager")
@@ -94,6 +95,7 @@ flags.DEFINE_string('floating_range', '4.4.4.0/24',
                     'Floating IP address block')
 flags.DEFINE_string('fixed_range', '10.0.0.0/8', 'Fixed IP address block')
 flags.DEFINE_string('fixed_range_v6', 'fd00::/48', 'Fixed IPv6 address block')
+flags.DEFINE_string('gateway', None, 'Default IPv4 gateway')
 flags.DEFINE_string('gateway_v6', None, 'Default IPv6 gateway')
 flags.DEFINE_integer('cnt_vpn_clients', 0,
                      'Number of addresses reserved for vpn clients')
@@ -178,7 +180,7 @@ class RPCAllocateFixedIP(object):
         perform network lookup on the far side of rpc.
         """
         network = self.db.network_get(context, network_id)
-        self.allocate_fixed_ip(context, instance_id, network, **kwargs)
+        return self.allocate_fixed_ip(context, instance_id, network, **kwargs)
 
 
 class FloatingIP(object):
@@ -249,7 +251,10 @@ class FloatingIP(object):
         LOG.debug(_("floating IP deallocation for instance |%s|"), instance_id,
                                                                context=context)
 
-        fixed_ips = self.db.fixed_ip_get_by_instance(context, instance_id)
+        try:
+            fixed_ips = self.db.fixed_ip_get_by_instance(context, instance_id)
+        except exception.FixedIpNotFoundForInstance:
+            fixed_ips = []
         # add to kwargs so we can pass to super to save a db lookup there
         kwargs['fixed_ips'] = fixed_ips
         for fixed_ip in fixed_ips:
@@ -288,7 +293,7 @@ class FloatingIP(object):
             LOG.warn(_('Quota exceeded for %s, tried to allocate '
                        'address'),
                      context.project_id)
-            raise quota.QuotaError(_('Address quota exceeded. You cannot '
+            raise exception.QuotaError(_('Address quota exceeded. You cannot '
                                      'allocate any more addresses'))
         # TODO(vish): add floating ips through manage command
         return self.db.floating_ip_allocate_address(context,
@@ -487,6 +492,10 @@ class NetworkManager(manager.SchedulerDependentManager):
                                                    network_id,
                                                    host=host)
 
+    def get_dhcp_leases(self, ctxt, network_ref):
+        """Broker the request to the driver to fetch the dhcp leases"""
+        return self.driver.get_dhcp_leases(ctxt, network_ref)
+
     def init_host(self):
         """Do any initialization that needs to be run if this is a
         standalone service.
@@ -508,7 +517,7 @@ class NetworkManager(manager.SchedulerDependentManager):
                                                                self.host,
                                                                time)
             if num:
-                LOG.debug(_('Dissassociated %s stale fixed ip(s)'), num)
+                LOG.debug(_('Disassociated %s stale fixed ip(s)'), num)
 
     def set_network_host(self, context, network_ref):
         """Safely sets the host of the network."""
@@ -647,7 +656,7 @@ class NetworkManager(manager.SchedulerDependentManager):
                              instance_type_id, host):
         """Creates network info list for instance.
 
-        called by allocate_for_instance and netowrk_api
+        called by allocate_for_instance and network_api
         context needs to be elevated
         :returns: network info list [(network,info),(network,info)...]
         where network = dict containing pertinent data from a network db object
@@ -661,7 +670,7 @@ class NetworkManager(manager.SchedulerDependentManager):
             fixed_ips = []
 
         vifs = self.db.virtual_interface_get_by_instance(context, instance_id)
-        flavor = self.db.instance_type_get(context, instance_type_id)
+        instance_type = instance_types.get_instance_type(instance_type_id)
         network_info = []
         # a vif has an address, instance_id, and network_id
         # it is also joined to the instance and network given by those IDs
@@ -689,6 +698,15 @@ class NetworkManager(manager.SchedulerDependentManager):
                                          network['project_id']),
                     'netmask': network['netmask_v6'],
                     'enabled': '1'}
+
+            def rxtx_cap(instance_type, network):
+                try:
+                    rxtx_factor = instance_type['rxtx_factor']
+                    rxtx_base = network['rxtx_base']
+                    return rxtx_factor * rxtx_base
+                except (KeyError, TypeError):
+                    return 0
+
             network_dict = {
                 'bridge': network['bridge'],
                 'id': network['id'],
@@ -711,7 +729,7 @@ class NetworkManager(manager.SchedulerDependentManager):
                 'broadcast': network['broadcast'],
                 'mac': vif['address'],
                 'vif_uuid': vif['uuid'],
-                'rxtx_cap': flavor['rxtx_cap'],
+                'rxtx_cap': rxtx_cap(instance_type, network),
                 'dns': [],
                 'ips': [ip_dict(ip) for ip in network_IPs],
                 'should_create_bridge': self.SHOULD_CREATE_BRIDGE,
@@ -859,7 +877,7 @@ class NetworkManager(manager.SchedulerDependentManager):
                 self._setup_network(context, network_ref)
 
     def create_networks(self, context, label, cidr, multi_host, num_networks,
-                        network_size, cidr_v6, gateway_v6, bridge,
+                        network_size, cidr_v6, gateway, gateway_v6, bridge,
                         bridge_interface, dns1=None, dns2=None, **kwargs):
         """Create networks based on parameters."""
         # NOTE(jkoelker): these are dummy values to make sure iter works
@@ -943,7 +961,7 @@ class NetworkManager(manager.SchedulerDependentManager):
             if cidr and subnet_v4:
                 net['cidr'] = str(subnet_v4)
                 net['netmask'] = str(subnet_v4.netmask)
-                net['gateway'] = str(subnet_v4[1])
+                net['gateway'] = gateway or str(subnet_v4[1])
                 net['broadcast'] = str(subnet_v4.broadcast)
                 net['dhcp_start'] = str(subnet_v4[2])
 
@@ -967,7 +985,7 @@ class NetworkManager(manager.SchedulerDependentManager):
                 net['vlan'] = vlan
                 net['bridge'] = 'br%s' % vlan
 
-                # NOTE(vish): This makes ports unique accross the cloud, a more
+                # NOTE(vish): This makes ports unique across the cloud, a more
                 #             robust solution would be to make them uniq per ip
                 net['vpn_public_port'] = kwargs['vpn_start'] + index
 
@@ -983,9 +1001,14 @@ class NetworkManager(manager.SchedulerDependentManager):
                 self._create_fixed_ips(context, network['id'])
         return networks
 
-    def delete_network(self, context, fixed_range, require_disassociated=True):
+    def delete_network(self, context, fixed_range, uuid,
+            require_disassociated=True):
 
-        network = db.network_get_by_cidr(context, fixed_range)
+        # Prefer uuid but we'll also take cidr for backwards compatibility
+        if uuid:
+            network = db.network_get_by_uuid(context.elevated(), uuid)
+        elif fixed_range:
+            network = db.network_get_by_cidr(context.elevated(), fixed_range)
 
         if require_disassociated and network.project_id is not None:
             raise ValueError(_('Network must be disassociated from project %s'
@@ -1011,15 +1034,18 @@ class NetworkManager(manager.SchedulerDependentManager):
         top_reserved = self._top_reserved_ips
         project_net = netaddr.IPNetwork(network['cidr'])
         num_ips = len(project_net)
+        ips = []
         for index in range(num_ips):
             address = str(project_net[index])
-            if index < bottom_reserved or num_ips - index < top_reserved:
+            if index < bottom_reserved or num_ips - index <= top_reserved:
                 reserved = True
             else:
                 reserved = False
-            self.db.fixed_ip_create(context, {'network_id': network_id,
-                                              'address': address,
-                                              'reserved': reserved})
+
+            ips.append({'network_id': network_id,
+                        'address': address,
+                        'reserved': reserved})
+        self.db.fixed_ip_bulk_create(context, ips)
 
     def _allocate_fixed_ips(self, context, instance_id, host, networks,
                             **kwargs):
@@ -1200,6 +1226,7 @@ class VlanManager(RPCAllocateFixedIP, FloatingIP, NetworkManager):
             self.db.fixed_ip_associate(context,
                                        address,
                                        instance_id,
+                                       network['id'],
                                        reserved=True)
         else:
             address = kwargs.get('address', None)

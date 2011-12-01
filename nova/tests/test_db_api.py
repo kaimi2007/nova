@@ -123,3 +123,72 @@ class DbApiTestCase(test.TestCase):
         results = db.migration_get_all_unconfirmed(ctxt, 10)
         self.assertEqual(0, len(results))
         db.migration_update(ctxt, migration.id, {"status": "CONFIRMED"})
+
+    def test_instance_get_all_hung_in_rebooting(self):
+        ctxt = context.get_admin_context()
+
+        # Ensure no instances are returned.
+        results = db.instance_get_all_hung_in_rebooting(ctxt, 10)
+        self.assertEqual(0, len(results))
+
+        # Ensure one rebooting instance with updated_at older than 10 seconds
+        # is returned.
+        updated_at = datetime.datetime(2000, 01, 01, 12, 00, 00)
+        values = {"task_state": "rebooting", "updated_at": updated_at}
+        instance = db.instance_create(ctxt, values)
+        results = db.instance_get_all_hung_in_rebooting(ctxt, 10)
+        self.assertEqual(1, len(results))
+        db.instance_update(ctxt, instance.id, {"task_state": None})
+
+        # Ensure the newly rebooted instance is not returned.
+        updated_at = datetime.datetime.utcnow()
+        values = {"task_state": "rebooting", "updated_at": updated_at}
+        instance = db.instance_create(ctxt, values)
+        results = db.instance_get_all_hung_in_rebooting(ctxt, 10)
+        self.assertEqual(0, len(results))
+        db.instance_update(ctxt, instance.id, {"task_state": None})
+
+    def test_network_create_safe(self):
+        ctxt = context.get_admin_context()
+        values = {'host': 'localhost', 'project_id': 'project1'}
+        network = db.network_create_safe(ctxt, values)
+        self.assertNotEqual(None, network.uuid)
+        self.assertEqual(36, len(network.uuid))
+        db_network = db.network_get(ctxt, network.id)
+        self.assertEqual(network.uuid, db_network.uuid)
+
+    def test_instance_update_with_instance_id(self):
+        """ test instance_update() works when an instance id is passed """
+        ctxt = context.get_admin_context()
+
+        # Create an instance with some metadata
+        metadata = {'host': 'foo'}
+        values = {'metadata': metadata}
+        instance = db.instance_create(ctxt, values)
+
+        # Update the metadata
+        metadata = {'host': 'bar'}
+        values = {'metadata': metadata}
+        db.instance_update(ctxt, instance.id, values)
+
+        # Retrieve the metadata to ensure it was successfully updated
+        instance_meta = db.instance_metadata_get(ctxt, instance.id)
+        self.assertEqual('bar', instance_meta['host'])
+
+    def test_instance_update_with_instance_uuid(self):
+        """ test instance_update() works when an instance UUID is passed """
+        ctxt = context.get_admin_context()
+
+        # Create an instance with some metadata
+        metadata = {'host': 'foo'}
+        values = {'metadata': metadata}
+        instance = db.instance_create(ctxt, values)
+
+        # Update the metadata
+        metadata = {'host': 'bar'}
+        values = {'metadata': metadata}
+        db.instance_update(ctxt, instance.uuid, values)
+
+        # Retrieve the metadata to ensure it was successfully updated
+        instance_meta = db.instance_metadata_get(ctxt, instance.id)
+        self.assertEqual('bar', instance_meta['host'])

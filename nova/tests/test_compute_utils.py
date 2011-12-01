@@ -19,11 +19,7 @@
 Tests For misc util methods used with compute.
 """
 
-from datetime import datetime
-from datetime import timedelta
-
 from nova import db
-from nova import exception
 from nova import flags
 from nova import context
 from nova import test
@@ -85,15 +81,16 @@ class UsageInfoTestCase(test.TestCase):
         payload = msg['payload']
         self.assertEquals(payload['tenant_id'], self.project_id)
         self.assertEquals(payload['user_id'], self.user_id)
-        self.assertEquals(payload['instance_id'], instance_id)
+        self.assertEquals(payload['instance_id'], instance.uuid)
         self.assertEquals(payload['instance_type'], 'm1.tiny')
         type_id = instance_types.get_instance_type_by_name('m1.tiny')['id']
         self.assertEquals(str(payload['instance_type_id']), str(type_id))
         for attr in ('display_name', 'created_at', 'launched_at',
                      'state', 'state_description', 'fixed_ips',
-                     'bandwidth', 'audit_period_begining',
+                     'bandwidth', 'audit_period_beginning',
                      'audit_period_ending'):
             self.assertTrue(attr in payload,
                             msg="Key %s not in payload" % attr)
-        self.assertEquals(payload['image_ref'], '1')
-        self.compute.terminate_instance(self.context, instance_id)
+        image_ref_url = "%s/images/1" % utils.generate_glance_url()
+        self.assertEquals(payload['image_ref_url'], image_ref_url)
+        self.compute.terminate_instance(self.context, instance['uuid'])

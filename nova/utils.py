@@ -19,6 +19,7 @@
 
 """Utilities and helper functions."""
 
+import contextlib
 import datetime
 import functools
 import inspect
@@ -36,6 +37,7 @@ import time
 import types
 import uuid
 import pyclbr
+import netaddr
 from xml.sax import saxutils
 
 from eventlet import event
@@ -151,6 +153,8 @@ def execute(*cmd, **kwargs):
     delay_on_retry = kwargs.pop('delay_on_retry', True)
     attempts = kwargs.pop('attempts', 1)
     run_as_root = kwargs.pop('run_as_root', False)
+    shell = kwargs.pop('shell', False)
+
     if len(kwargs):
         raise exception.Error(_('Got unknown keyword args '
                                 'to utils.execute: %r') % kwargs)
@@ -168,7 +172,8 @@ def execute(*cmd, **kwargs):
                                    stdin=_PIPE,
                                    stdout=_PIPE,
                                    stderr=_PIPE,
-                                   close_fds=True)
+                                   close_fds=True,
+                                   shell=shell)
             result = None
             if process_input is not None:
                 result = obj.communicate(process_input)
@@ -332,17 +337,20 @@ def current_audit_period(unit=None):
 
 
 def usage_from_instance(instance_ref, **kw):
+    image_ref_url = "%s/images/%s" % (generate_glance_url(),
+            instance_ref['image_ref'])
+
     usage_info = dict(
           tenant_id=instance_ref['project_id'],
           user_id=instance_ref['user_id'],
-          instance_id=instance_ref['id'],
+          instance_id=instance_ref['uuid'],
           instance_type=instance_ref['instance_type']['name'],
           instance_type_id=instance_ref['instance_type_id'],
           display_name=instance_ref['display_name'],
           created_at=str(instance_ref['created_at']),
           launched_at=str(instance_ref['launched_at']) \
                       if instance_ref['launched_at'] else '',
-          image_ref=instance_ref['image_ref'],
+          image_ref_url=image_ref_url,
           state=instance_ref['vm_state'],
           state_description=instance_ref['task_state'] \
                              if instance_ref['task_state'] else '',
@@ -870,7 +878,7 @@ def gen_uuid():
 
 
 def is_uuid_like(val):
-    """For our purposes, a UUID is a string in canoical form:
+    """For our purposes, a UUID is a string in canonical form:
 
         aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
     """
@@ -906,9 +914,29 @@ def is_valid_ipv4(address):
     return True
 
 
+def is_valid_cidr(address):
+    """Check if the provided ipv4 or ipv6 address is a valid
+    CIDR address or not"""
+    try:
+        # Validate the correct CIDR Address
+        netaddr.IPNetwork(address)
+    except netaddr.core.AddrFormatError:
+        return False
+
+    # Prior validation partially verify /xx part
+    # Verify it here
+    ip_segment = address.split('/')
+
+    if (len(ip_segment) <= 1 or
+        ip_segment[1] == ''):
+        return False
+
+    return True
+
+
 def monkey_patch():
     """  If the Flags.monkey_patch set as True,
-    this functuion patches a decorator
+    this function patches a decorator
     for all functions in specified modules.
     You can set decorators for each modules
     using FLAGS.monkey_patch_modules.
@@ -974,3 +1002,77 @@ def generate_glance_url():
     # TODO(jk0): This will eventually need to take SSL into consideration
     # when supported in glance.
     return "http://%s:%d" % (FLAGS.glance_host, FLAGS.glance_port)
+
+
+@contextlib.contextmanager
+def save_and_reraise_exception():
+    """Save current exception, run some code and then re-raise.
+
+    In some cases the exception context can be cleared, resulting in None
+    being attempted to be reraised after an exception handler is run. This
+    can happen when eventlet switches greenthreads or when running an
+    exception handler, code raises and catches and exception. In both
+    cases the exception context will be cleared.
+
+    To work around this, we save the exception state, run handler code, and
+    then re-raise the original exception. If another exception occurs, the
+    saved exception is logged and the new exception is reraised.
+    """
+    type_, value, traceback = sys.exc_info()
+    try:
+        yield
+    except:
+        LOG.exception(_('Original exception being dropped'),
+                      exc_info=(type_, value, traceback))
+        raise
+    raise type_, value, traceback
+
+
+@contextlib.contextmanager
+def logging_error(message):
+    """Catches exception, write message to the log, re-raise.
+    This is a common refinement of save_and_reraise that writes a specific
+    message to the log.
+    """
+    try:
+        yield
+    except Exception as error:
+        with save_and_reraise_exception():
+            LOG.exception(message)
+
+
+def make_dev_path(dev, partition=None, base='/dev'):
+    """Return a path to a particular device.
+
+    >>> make_dev_path('xvdc')
+    /dev/xvdc
+
+    >>> make_dev_path('xvdc', 1)
+    /dev/xvdc1
+    """
+    path = os.path.join(base, dev)
+    if partition:
+        path += str(partition)
+    return path
+
+
+def total_seconds(td):
+    """Local total_seconds implementation for compatibility with python 2.6"""
+    if hasattr(td, 'total_seconds'):
+        return td.total_seconds()
+    else:
+        return ((td.days * 86400 + td.seconds) * 10 ** 6 +
+                td.microseconds) / 10.0 ** 6
+
+
+def sanitize_hostname(hostname):
+    """Return a hostname which conforms to RFC-952 and RFC-1123 specs."""
+    if isinstance(hostname, unicode):
+        hostname = hostname.encode('latin-1', 'ignore')
+
+    hostname = re.sub('[ _]', '-', hostname)
+    hostname = re.sub('[^\w.-]+', '', hostname)
+    hostname = hostname.lower()
+    hostname = hostname.strip('.-')
+
+    return hostname

@@ -20,6 +20,15 @@
 
 The underlying driver is loaded as a :class:`LazyPluggable`.
 
+Functions in this module are imported into the nova.db namespace. Call these
+functions from nova.db namespace, not the nova.db.api namespace.
+
+All functions in this module return objects that implement a dictionary-like
+interface. Currently, many of these objects are sqlalchemy objects that
+implement a dictionary interface. However, a future goal is to have all of
+these objects be simple dictionaries.
+
+
 **Related Flags**
 
 :db_backend:  string to lookup in the list of LazyPluggable backends.
@@ -158,10 +167,9 @@ def compute_node_get(context, compute_id, session=None):
     return IMPL.compute_node_get(context, compute_id)
 
 
-def compute_node_get_all(context, disabled=False):
-    """Get all services."""
-    return IMPL.compute_node_get_all(context, disabled)
-
+def compute_node_get_all(context, session=None):
+    """Get all computeNodes."""
+    return IMPL.compute_node_get_all(context)
 
 def compute_node_get_all_by_arch(context, cpu_arch, xpu_arch, session=None):
     """Get all computeNodes by cpu_arch and xpu_arch
@@ -376,6 +384,11 @@ def fixed_ip_associate_pool(context, network_id, instance_id=None, host=None):
 def fixed_ip_create(context, values):
     """Create a fixed ip from the values dictionary."""
     return IMPL.fixed_ip_create(context, values)
+
+
+def fixed_ip_bulk_create(context, ips):
+    """Create a lot of fixed ips from the values dictionary."""
+    return IMPL.fixed_ip_bulk_create(context, ips)
 
 
 def fixed_ip_disassociate(context, address):
@@ -606,9 +619,10 @@ def instance_get_project_vpn(context, project_id):
     return IMPL.instance_get_project_vpn(context, project_id)
 
 
-def instance_set_state(context, instance_id, state, description=None):
-    """Set the state of an instance."""
-    return IMPL.instance_set_state(context, instance_id, state, description)
+def instance_get_all_hung_in_rebooting(context, reboot_window, session=None):
+    """Get all instances stuck in a rebooting state."""
+    return IMPL.instance_get_all_hung_in_rebooting(context, reboot_window,
+            session)
 
 
 def instance_update(context, instance_id, values):
@@ -1608,3 +1622,110 @@ def vsa_get_all(context):
 def vsa_get_all_by_project(context, project_id):
     """Get all Virtual Storage Array records by project ID."""
     return IMPL.vsa_get_all_by_project(context, project_id)
+
+
+###################
+
+
+def s3_image_get(context, image_id):
+    """Find local s3 image represented by the provided id"""
+    return IMPL.s3_image_get(context, image_id)
+
+
+def s3_image_get_by_uuid(context, image_uuid):
+    """Find local s3 image represented by the provided uuid"""
+    return IMPL.s3_image_get_by_uuid(context, image_uuid)
+
+
+def s3_image_create(context, image_uuid):
+    """Create local s3 image represented by provided uuid"""
+    return IMPL.s3_image_create(context, image_uuid)
+
+
+####################
+
+
+def sm_backend_conf_create(context, values):
+    """Create a new SM Backend Config entry."""
+    return IMPL.sm_backend_conf_create(context, values)
+
+
+def sm_backend_conf_update(context, sm_backend_conf_id, values):
+    """Update a SM Backend Config entry."""
+    return IMPL.sm_backend_conf_update(context, sm_backend_conf_id, values)
+
+
+def sm_backend_conf_delete(context, sm_backend_conf_id):
+    """Delete a SM Backend Config."""
+    return IMPL.sm_backend_conf_delete(context, sm_backend_conf_id)
+
+
+def sm_backend_conf_get(context, sm_backend_conf_id):
+    """Get a specific SM Backend Config."""
+    return IMPL.sm_backend_conf_get(context, sm_backend_conf_id)
+
+
+def sm_backend_conf_get_by_sr(context, sr_uuid):
+    """Get a specific SM Backend Config."""
+    return IMPL.sm_backend_conf_get(context, sr_uuid)
+
+
+def sm_backend_conf_get_all(context):
+    """Get all SM Backend Configs."""
+    return IMPL.sm_backend_conf_get_all(context)
+
+
+####################
+
+
+def sm_flavor_create(context, values):
+    """Create a new SM Flavor entry."""
+    return IMPL.sm_flavor_create(context, values)
+
+
+def sm_flavor_update(context, sm_flavor_id, values):
+    """Update a SM Flavor entry."""
+    return IMPL.sm_flavor_update(context, values)
+
+
+def sm_flavor_delete(context, sm_flavor_id):
+    """Delete a SM Flavor."""
+    return IMPL.sm_flavor_delete(context, sm_flavor_id)
+
+
+def sm_flavor_get(context, sm_flavor):
+    """Get a specific SM Flavor."""
+    return IMPL.sm_flavor_get(context, sm_flavor)
+
+
+def sm_flavor_get_all(context):
+    """Get all SM Flavors."""
+    return IMPL.sm_flavor_get_all(context)
+
+
+####################
+
+
+def sm_volume_create(context, values):
+    """Create a new child Zone entry."""
+    return IMPL.sm_volume_create(context, values)
+
+
+def sm_volume_update(context, volume_id, values):
+    """Update a child Zone entry."""
+    return IMPL.sm_volume_update(context, values)
+
+
+def sm_volume_delete(context, volume_id):
+    """Delete a child Zone."""
+    return IMPL.sm_volume_delete(context, volume_id)
+
+
+def sm_volume_get(context, volume_id):
+    """Get a specific child Zone."""
+    return IMPL.sm_volume_get(context, volume_id)
+
+
+def sm_volume_get_all(context):
+    """Get all child Zones."""
+    return IMPL.sm_volume_get_all(context)

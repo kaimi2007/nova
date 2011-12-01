@@ -255,7 +255,7 @@ class Instance(BASE, NovaBase):
     access_ip_v4 = Column(String(255))
     access_ip_v6 = Column(String(255))
 
-    managed_disk = Column(Boolean())
+    auto_disk_config = Column(Boolean())
     progress = Column(Integer)
 
 
@@ -303,10 +303,10 @@ class InstanceTypes(BASE, NovaBase):
     memory_mb = Column(Integer)
     vcpus = Column(Integer)
     local_gb = Column(Integer)
-    flavorid = Column(Integer, unique=True)
+    flavorid = Column(String(255), unique=True)
     swap = Column(Integer, nullable=False, default=0)
-    rxtx_quota = Column(Integer, nullable=False, default=0)
-    rxtx_cap = Column(Integer, nullable=False, default=0)
+    rxtx_factor = Column(Float, nullable=False, default=1)
+    vcpu_weight = Column(Integer, nullable=True)
 
     instances = relationship(Instance,
                            backref=backref('instance_type', uselist=False),
@@ -632,6 +632,8 @@ class Network(BASE, NovaBase):
     vpn_private_address = Column(String(255))
     dhcp_start = Column(String(255))
 
+    rxtx_base = Column(Integer)
+
     project_id = Column(String(255))
     priority = Column(Integer)
     host = Column(String(255))  # , ForeignKey('hosts.id'))
@@ -872,6 +874,39 @@ class BandwidthUsage(BASE, NovaBase):
     bw_out = Column(BigInteger)
 
 
+class S3Image(BASE, NovaBase):
+    """Compatibility layer for the S3 image service talking to Glance"""
+    __tablename__ = 's3_images'
+    id = Column(Integer, primary_key=True, nullable=False, autoincrement=True)
+    uuid = Column(String(36), nullable=False)
+
+
+class SMFlavors(BASE, NovaBase):
+    """Represents a flavor for SM volumes."""
+    __tablename__ = 'sm_flavors'
+    id = Column(Integer(), primary_key=True)
+    label = Column(String(255))
+    description = Column(String(255))
+
+
+class SMBackendConf(BASE, NovaBase):
+    """Represents the connection to the backend for SM."""
+    __tablename__ = 'sm_backend_config'
+    id = Column(Integer(), primary_key=True)
+    flavor_id = Column(Integer, ForeignKey('sm_flavors.id'), nullable=False)
+    sr_uuid = Column(String(255))
+    sr_type = Column(String(255))
+    config_params = Column(String(2047))
+
+
+class SMVolume(BASE, NovaBase):
+    __tablename__ = 'sm_volume'
+    id = Column(Integer(), ForeignKey(Volume.id), primary_key=True)
+    backend_id = Column(Integer, ForeignKey('sm_backend_config.id'),
+                        nullable=False)
+    vdi_uuid = Column(String(255))
+
+
 def register_models():
     """Register Models and create metadata.
 
@@ -887,7 +922,7 @@ def register_models():
               Project, Certificate, ConsolePool, Console, Zone,
               VolumeMetadata, VolumeTypes, VolumeTypeExtraSpecs,
               AgentBuild, InstanceMetadata, InstanceTypeExtraSpecs, Migration,
-              VirtualStorageArray)
+              VirtualStorageArray, SMFlavors, SMBackendConf, SMVolume)
     engine = create_engine(FLAGS.sql_connection, echo=False)
     for model in models:
         model.metadata.create_all(engine)

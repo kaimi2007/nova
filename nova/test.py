@@ -34,7 +34,6 @@ import nose.plugins.skip
 import nova.image.fake
 import shutil
 import stubout
-from eventlet import greenthread
 
 from nova import fakerabbit
 from nova import flags
@@ -69,7 +68,7 @@ class skip_test(object):
 
 
 class skip_if(object):
-    """Decorator that skips a test if contition is true."""
+    """Decorator that skips a test if condition is true."""
     def __init__(self, condition, msg):
         self.condition = condition
         self.message = msg
@@ -128,7 +127,6 @@ class TestCase(unittest.TestCase):
         # because it screws with our generators
         self.mox = mox.Mox()
         self.stubs = stubout.StubOutForTesting()
-        self.flag_overrides = {}
         self.injected = []
         self._services = []
         self._original_flags = FLAGS.FlagValuesDict()
@@ -153,7 +151,7 @@ class TestCase(unittest.TestCase):
             if FLAGS.image_service == 'nova.image.fake.FakeImageService':
                 nova.image.fake.FakeImageService_reset()
 
-            # Reset any overriden flags
+            # Reset any overridden flags
             self.reset_flags()
 
             # Stop any timers
@@ -173,9 +171,6 @@ class TestCase(unittest.TestCase):
     def flags(self, **kw):
         """Override flag variables for a test."""
         for k, v in kw.iteritems():
-            # Store original flag value if it's not been overriden yet
-            if k not in self.flag_overrides:
-                self.flag_overrides[k] = getattr(FLAGS, k)
             setattr(FLAGS, k, v)
 
     def reset_flags(self):

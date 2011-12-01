@@ -96,18 +96,15 @@ class ServersTest(integrated_helpers._IntegratedTestBase):
         self.assertRaises(client.OpenStackApiException,
                           self.api.post_server, post)
 
-        # Add a valid imageId/imageRef
-        server['imageId'] = good_server.get('imageId')
+        # Add a valid imageRef
         server['imageRef'] = good_server.get('imageRef')
 
-        # Without flavorId, this throws 500
+        # Without flavorRef, this throws 500
         # TODO(justinsb): Check whatever the spec says should be thrown here
         self.assertRaises(client.OpenStackApiException,
                           self.api.post_server, post)
 
-        # Set a valid flavorId/flavorRef
         server['flavorRef'] = good_server.get('flavorRef')
-        server['flavorId'] = good_server.get('flavorId')
 
         # Without a name, this throws 500
         # TODO(justinsb): Check whatever the spec says should be thrown here
@@ -295,10 +292,6 @@ class ServersTest(integrated_helpers._IntegratedTestBase):
         self.assertTrue(created_server['id'])
         created_server_id = created_server['id']
 
-        # Reenable when bug fixed
-        self.assertEqual(metadata, created_server.get('metadata'))
-        # Check it's there
-
         found_server = self.api.get_server(created_server_id)
         self.assertEqual(created_server_id, found_server['id'])
         self.assertEqual(metadata, found_server.get('metadata'))
@@ -339,7 +332,7 @@ class ServersTest(integrated_helpers._IntegratedTestBase):
         # rebuild the server with metadata
         post = {}
         post['rebuild'] = {
-            "imageRef": "https://localhost/v1.1/32278/images/3",
+            "imageRef": "c905cedb-7281-47e4-8a62-f26bc5fc4c77",
             "name": "blah",
         }
 
@@ -351,7 +344,8 @@ class ServersTest(integrated_helpers._IntegratedTestBase):
         self.assertEqual(created_server_id, found_server['id'])
         self.assertEqual({}, found_server.get('metadata'))
         self.assertEqual('blah', found_server.get('name'))
-        self.assertEqual('3', found_server.get('image')['id'])
+        self.assertEqual(post['rebuild']['imageRef'],
+                         found_server.get('image')['id'])
 
         # Cleanup
         self._delete_server(created_server_id)
@@ -373,7 +367,7 @@ class ServersTest(integrated_helpers._IntegratedTestBase):
         # rebuild the server with metadata
         post = {}
         post['rebuild'] = {
-            "imageRef": "https://localhost/v1.1/32278/images/2",
+            "imageRef": "76fa36fc-c930-4bf3-8c8a-ea2a2420deb6",
             "name": "blah",
         }
 
@@ -419,7 +413,7 @@ class ServersTest(integrated_helpers._IntegratedTestBase):
         # rebuild the server with metadata
         post = {}
         post['rebuild'] = {
-            "imageRef": "https://localhost/v1.1/32278/images/2",
+            "imageRef": "76fa36fc-c930-4bf3-8c8a-ea2a2420deb6",
             "name": "blah",
         }
 

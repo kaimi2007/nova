@@ -21,8 +21,6 @@
 Scheduler base class that all Schedulers should inherit from
 """
 
-import datetime
-
 from nova import db
 from nova import exception
 from nova import flags
@@ -38,7 +36,7 @@ from nova.api.ec2 import ec2utils
 FLAGS = flags.FLAGS
 LOG = logging.getLogger('nova.scheduler.driver')
 flags.DEFINE_integer('service_down_time', 60,
-                     'maximum time since last checkin for up service')
+                     'maximum time since last check-in for up service')
 flags.DECLARE('instances_path', 'nova.compute.manager')
 
 
@@ -117,18 +115,8 @@ def encode_instance(instance, local=True):
         return instance
 
 
-class NoValidHost(exception.Error):
-    """There is no valid host for the command."""
-    pass
-
-
-class WillNotSchedule(exception.Error):
-    """The specified host is not up or doesn't exist."""
-    pass
-
-
 class Scheduler(object):
-    """The base class that all Scheduler clases should inherit from."""
+    """The base class that all Scheduler classes should inherit from."""
 
     def __init__(self):
         self.zone_manager = None
@@ -143,8 +131,8 @@ class Scheduler(object):
         """Check whether a service is up based on last heartbeat."""
         last_heartbeat = service['updated_at'] or service['created_at']
         # Timestamps in DB are UTC.
-        elapsed = utils.utcnow() - last_heartbeat
-        return elapsed < datetime.timedelta(seconds=FLAGS.service_down_time)
+        elapsed = utils.total_seconds(utils.utcnow() - last_heartbeat)
+        return abs(elapsed) <= FLAGS.service_down_time
 
     def hosts_up(self, context, topic):
         """Return the list of hosts that have a running service for topic."""
@@ -157,6 +145,9 @@ class Scheduler(object):
     def create_instance_db_entry(self, context, request_spec):
         """Create instance DB entry based on request_spec"""
         base_options = request_spec['instance_properties']
+        if base_options.get('id'):
+            # Instance was already created before calling scheduler
+            return db.instance_get(context, base_options['id'])
         image = request_spec['image']
         instance_type = request_spec.get('instance_type')
         security_group = request_spec.get('security_group', 'default')
@@ -384,7 +375,8 @@ class Scheduler(object):
         if avail <= mem_inst:
             instance_id = ec2utils.id_to_ec2_id(instance_ref['id'])
             reason = _("Unable to migrate %(instance_id)s to %(dest)s: "
-                       "Lack of disk(host:%(avail)s <= instance:%(mem_inst)s)")
+                       "Lack of memory(host:%(avail)s <= "
+                       "instance:%(mem_inst)s)")
             raise exception.MigrationError(reason=reason % locals())
 
     def assert_compute_node_has_enough_disk(self, context,
@@ -419,7 +411,7 @@ class Scheduler(object):
             raise exception.MigrationError(reason=reason % locals())
 
     def _get_compute_info(self, context, host, key):
-        """get compute node's infomation specified by key
+        """get compute node's information specified by key
 
         :param context: security context
         :param host: hostname(must be compute node)

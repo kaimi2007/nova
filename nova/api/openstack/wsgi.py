@@ -15,13 +15,11 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import json
 from lxml import etree
 import webob
 from xml.dom import minidom
 from xml.parsers import expat
 
-import faults
 from nova import exception
 from nova import log as logging
 from nova import utils
@@ -449,7 +447,8 @@ class ResponseSerializer(object):
         self.headers_serializer = headers_serializer or \
                                     ResponseHeadersSerializer()
 
-    def serialize(self, response_data, content_type, action='default'):
+    def serialize(self, request, response_data, content_type,
+                  action='default'):
         """Serialize a dict into a string and wrap in a wsgi.Request object.
 
         :param response_data: dict produced by the Controller
@@ -458,17 +457,29 @@ class ResponseSerializer(object):
         """
         response = webob.Response()
         self.serialize_headers(response, response_data, action)
-        self.serialize_body(response, response_data, content_type, action)
+        self.serialize_body(request, response, response_data, content_type,
+                            action)
         return response
 
     def serialize_headers(self, response, data, action):
         self.headers_serializer.serialize(response, data, action)
 
-    def serialize_body(self, response, data, content_type, action):
+    def serialize_body(self, request, response, data, content_type, action):
         response.headers['Content-Type'] = content_type
         if data is not None:
             serializer = self.get_body_serializer(content_type)
-            response.body = serializer.serialize(data, action)
+            lazy_serialize = request.environ.get('nova.lazy_serialize', False)
+            if lazy_serialize:
+                response.body = utils.dumps(data)
+                request.environ['nova.serializer'] = serializer
+                request.environ['nova.action'] = action
+                if (hasattr(serializer, 'get_template') and
+                    'nova.template' not in request.environ):
+
+                    template = serializer.get_template(action)
+                    request.environ['nova.template'] = template
+            else:
+                response.body = serializer.serialize(data, action)
 
     def get_body_serializer(self, content_type):
         try:
@@ -476,6 +487,31 @@ class ResponseSerializer(object):
             return self.body_serializers[ctype]
         except (KeyError, TypeError):
             raise exception.InvalidContentType(content_type=content_type)
+
+
+class LazySerializationMiddleware(wsgi.Middleware):
+    """Lazy serialization middleware."""
+    @webob.dec.wsgify(RequestClass=Request)
+    def __call__(self, req):
+        # Request lazy serialization
+        req.environ['nova.lazy_serialize'] = True
+
+        response = req.get_response(self.application)
+
+        # See if there's a serializer...
+        serializer = req.environ.get('nova.serializer')
+        if serializer is None:
+            return response
+
+        # OK, build up the arguments for the serialize() method
+        kwargs = dict(action=req.environ['nova.action'])
+        if 'nova.template' in req.environ:
+            kwargs['template'] = req.environ['nova.template']
+
+        # Re-serialize the body
+        response.body = serializer.serialize(utils.loads(response.body),
+                                             **kwargs)
+        return response
 
 
 class Resource(wsgi.Application):
@@ -488,6 +524,9 @@ class Resource(wsgi.Application):
     method must also accept a 'body' argument (the deserialized request body).
     They may raise a webob.exc exception or return a dict, which will be
     serialized by requested content type.
+
+    Exceptions derived from webob.exc.HTTPException will be automatically
+    wrapped in Fault() to provide API friendly error responses.
 
     """
 
@@ -515,10 +554,10 @@ class Resource(wsgi.Application):
             action, args, accept = self.deserializer.deserialize(request)
         except exception.InvalidContentType:
             msg = _("Unsupported Content-Type")
-            return faults.Fault(webob.exc.HTTPBadRequest(explanation=msg))
+            return Fault(webob.exc.HTTPBadRequest(explanation=msg))
         except exception.MalformedRequestBody:
             msg = _("Malformed request body")
-            return faults.Fault(webob.exc.HTTPBadRequest(explanation=msg))
+            return Fault(webob.exc.HTTPBadRequest(explanation=msg))
 
         project_id = args.pop("project_id", None)
         if 'nova.context' in request.environ and project_id:
@@ -526,12 +565,16 @@ class Resource(wsgi.Application):
 
         try:
             action_result = self.dispatch(request, action, args)
+        except Fault as ex:
+            LOG.info(_("Fault thrown: %s"), unicode(ex))
+            action_result = ex
         except webob.exc.HTTPException as ex:
             LOG.info(_("HTTP exception thrown: %s"), unicode(ex))
-            action_result = faults.Fault(ex)
+            action_result = Fault(ex)
 
         if type(action_result) is dict or action_result is None:
-            response = self.serializer.serialize(action_result,
+            response = self.serializer.serialize(request,
+                                                 action_result,
                                                  accept,
                                                  action=action)
         else:
@@ -556,4 +599,107 @@ class Resource(wsgi.Application):
             return controller_method(req=request, **action_args)
         except TypeError as exc:
             LOG.exception(exc)
-            return faults.Fault(webob.exc.HTTPBadRequest())
+            return Fault(webob.exc.HTTPBadRequest())
+
+
+class Controller(object):
+    """Default controller."""
+
+    _view_builder_class = None
+
+    def __init__(self, view_builder=None):
+        """Initialize controller with a view builder instance."""
+        self._view_builder = view_builder or self._view_builder_class()
+
+
+class Fault(webob.exc.HTTPException):
+    """Wrap webob.exc.HTTPException to provide API friendly response."""
+
+    _fault_names = {
+            400: "badRequest",
+            401: "unauthorized",
+            403: "resizeNotAllowed",
+            404: "itemNotFound",
+            405: "badMethod",
+            409: "inProgress",
+            413: "overLimit",
+            415: "badMediaType",
+            501: "notImplemented",
+            503: "serviceUnavailable"}
+
+    def __init__(self, exception):
+        """Create a Fault for the given webob.exc.exception."""
+        self.wrapped_exc = exception
+        self.status_int = exception.status_int
+
+    @webob.dec.wsgify(RequestClass=Request)
+    def __call__(self, req):
+        """Generate a WSGI response based on the exception passed to ctor."""
+        # Replace the body with fault details.
+        code = self.wrapped_exc.status_int
+        fault_name = self._fault_names.get(code, "cloudServersFault")
+        fault_data = {
+            fault_name: {
+                'code': code,
+                'message': self.wrapped_exc.explanation}}
+        if code == 413:
+            retry = self.wrapped_exc.headers['Retry-After']
+            fault_data[fault_name]['retryAfter'] = retry
+
+        # 'code' is an attribute on the fault tag itself
+        metadata = {'attributes': {fault_name: 'code'}}
+
+        xml_serializer = XMLDictSerializer(metadata, XMLNS_V11)
+
+        content_type = req.best_match_content_type()
+        serializer = {
+            'application/xml': xml_serializer,
+            'application/json': JSONDictSerializer(),
+        }[content_type]
+
+        self.wrapped_exc.body = serializer.serialize(fault_data)
+        self.wrapped_exc.content_type = content_type
+
+        return self.wrapped_exc
+
+    def __str__(self):
+        return self.wrapped_exc.__str__()
+
+
+class OverLimitFault(webob.exc.HTTPException):
+    """
+    Rate-limited request response.
+    """
+
+    def __init__(self, message, details, retry_time):
+        """
+        Initialize new `OverLimitFault` with relevant information.
+        """
+        self.wrapped_exc = webob.exc.HTTPRequestEntityTooLarge()
+        self.content = {
+            "overLimitFault": {
+                "code": self.wrapped_exc.status_int,
+                "message": message,
+                "details": details,
+            },
+        }
+
+    @webob.dec.wsgify(RequestClass=Request)
+    def __call__(self, request):
+        """
+        Return the wrapped exception with a serialized body conforming to our
+        error format.
+        """
+        content_type = request.best_match_content_type()
+        metadata = {"attributes": {"overLimitFault": "code"}}
+
+        xml_serializer = XMLDictSerializer(metadata, XMLNS_V11)
+        serializer = {
+            'application/xml': xml_serializer,
+            'application/json': JSONDictSerializer(),
+        }[content_type]
+
+        content = serializer.serialize(self.content)
+        self.wrapped_exc.body = content
+
+        return self.wrapped_exc

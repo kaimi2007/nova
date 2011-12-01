@@ -21,12 +21,10 @@ Tests For Scheduler
 
 import datetime
 import mox
-import stubout
 
 from novaclient import v1_1 as novaclient
 from novaclient import exceptions as novaclient_exceptions
 
-from mox import IgnoreArg
 from nova import context
 from nova import db
 from nova import exception
@@ -35,13 +33,10 @@ from nova import service
 from nova import test
 from nova import rpc
 from nova import utils
-from nova.db.sqlalchemy import models
 from nova.scheduler import api
 from nova.scheduler import driver
 from nova.scheduler import manager
-from nova.scheduler import multi
 from nova.scheduler.simple import SimpleScheduler
-from nova.scheduler.zone import ZoneScheduler
 from nova.compute import power_state
 from nova.compute import vm_states
 
@@ -61,7 +56,7 @@ def _create_instance_dict(**kwargs):
     inst = {}
     # NOTE(jk0): If an integer is passed as the image_ref, the image
     # service will use the default image service (in this case, the fake).
-    inst['image_ref'] = '1'
+    inst['image_ref'] = 'cedef40a-ed67-4d10-800e-17455edce175'
     inst['reservation_id'] = 'r-fakeres'
     inst['user_id'] = kwargs.get('user_id', 'admin')
     inst['project_id'] = kwargs.get('project_id', 'fake')
@@ -84,7 +79,7 @@ def _create_volume():
     """Create a test volume"""
     vol = {}
     vol['size'] = 1
-    vol['availability_zone'] = 'test'
+    vol['availability_zone'] = 'nova'
     ctxt = context.get_admin_context()
     return db.volume_create(ctxt, vol)['id']
 
@@ -116,7 +111,7 @@ def _fake_cast_to_volume_host(context, host, method, **kwargs):
 def _fake_create_instance_db_entry(simple_self, context, request_spec):
     instance = _create_instance_from_spec(request_spec)
     global instance_ids
-    instance_ids.append(instance['id'])
+    instance_ids.append((instance['id'], instance['uuid']))
     return instance
 
 
@@ -136,6 +131,9 @@ class TestDriver(driver.Scheduler):
         host = 'named_host'
         method = 'named_method'
         driver.cast_to_host(context, topic, host, method, num=num)
+
+    def schedule_failing_method(self, context, instance_id):
+        raise exception.NoValidHost(reason="")
 
 
 class SchedulerTestCase(test.TestCase):
@@ -249,76 +247,20 @@ class SchedulerTestCase(test.TestCase):
         db.instance_destroy(ctxt, i_ref1['id'])
         db.instance_destroy(ctxt, i_ref2['id'])
 
+    def test_exception_puts_instance_in_error_state(self):
+        """Test that an exception from the scheduler puts an instance
+        in the ERROR state."""
 
-class ZoneSchedulerTestCase(test.TestCase):
-    """Test case for zone scheduler"""
-    def setUp(self):
-        super(ZoneSchedulerTestCase, self).setUp()
-        self.flags(
-            scheduler_driver='nova.scheduler.multi.MultiScheduler',
-            compute_scheduler_driver='nova.scheduler.zone.ZoneScheduler',
-            volume_scheduler_driver='nova.scheduler.zone.ZoneScheduler')
-
-    def _create_service_model(self, **kwargs):
-        service = db.sqlalchemy.models.Service()
-        service.host = kwargs['host']
-        service.disabled = False
-        service.deleted = False
-        service.report_count = 0
-        service.binary = 'nova-compute'
-        service.topic = 'compute'
-        service.id = kwargs['id']
-        service.availability_zone = kwargs['zone']
-        service.created_at = utils.utcnow()
-        return service
-
-    def test_with_two_zones(self):
         scheduler = manager.SchedulerManager()
-        ctxt = context.RequestContext('user', 'project')
-        service_list = [self._create_service_model(id=1,
-                                                   host='host1',
-                                                   zone='zone1'),
-                        self._create_service_model(id=2,
-                                                   host='host2',
-                                                   zone='zone2'),
-                        self._create_service_model(id=3,
-                                                   host='host3',
-                                                   zone='zone2'),
-                        self._create_service_model(id=4,
-                                                   host='host4',
-                                                   zone='zone2'),
-                        self._create_service_model(id=5,
-                                                   host='host5',
-                                                   zone='zone2')]
+        ctxt = context.get_admin_context()
+        inst = _create_instance()
+        self.assertRaises(Exception, scheduler._schedule,
+                          'failing_method', ctxt, 'scheduler',
+                          instance_id=inst['uuid'])
 
-        request_spec = _create_request_spec(availability_zone='zone1')
-
-        fake_instance = _create_instance_dict(
-                    **request_spec['instance_properties'])
-        fake_instance['id'] = 100
-        fake_instance['uuid'] = FAKE_UUID
-
-        self.mox.StubOutWithMock(db, 'service_get_all_by_topic')
-        self.mox.StubOutWithMock(db, 'instance_update')
-        # Assumes we're testing with MultiScheduler
-        compute_sched_driver = scheduler.driver.drivers['compute']
-        self.mox.StubOutWithMock(compute_sched_driver,
-                'create_instance_db_entry')
-        self.mox.StubOutWithMock(rpc, 'cast', use_mock_anything=True)
-
-        arg = IgnoreArg()
-        db.service_get_all_by_topic(arg, arg).AndReturn(service_list)
-        compute_sched_driver.create_instance_db_entry(arg,
-                request_spec).AndReturn(fake_instance)
-        db.instance_update(arg, 100, {'host': 'host1', 'scheduled_at': arg})
-        rpc.cast(arg,
-                 'compute.host1',
-                 {'method': 'run_instance',
-                  'args': {'instance_id': 100}})
-        self.mox.ReplayAll()
-        scheduler.run_instance(ctxt,
-                               'compute',
-                               request_spec=request_spec)
+        # Refresh the instance
+        inst = db.instance_get(ctxt, inst['id'])
+        self.assertEqual(inst['vm_state'], vm_states.ERROR)
 
 
 class SimpleDriverTestCase(test.TestCase):
@@ -361,6 +303,25 @@ class SimpleDriverTestCase(test.TestCase):
         dic['hypervisor_version'] = kwargs.get('hypervisor_version', 12003)
         db.compute_node_create(self.context, dic)
         return db.service_get(self.context, s_ref['id'])
+
+    def test_regular_user_can_schedule(self):
+        """Ensures a non-admin can run an instance"""
+        compute1 = service.Service('host1',
+                                   'nova-compute',
+                                   'compute',
+                                   FLAGS.compute_manager)
+        compute1.start()
+        _create_instance()
+        ctxt = context.RequestContext('fake', 'fake', False)
+        global instance_ids
+        instance_ids = []
+        self.stubs.Set(SimpleScheduler,
+                'create_instance_db_entry', _fake_create_instance_db_entry)
+        self.stubs.Set(driver,
+                'cast_to_compute_host', _fake_cast_to_compute_host)
+        request_spec = _create_request_spec()
+        self.scheduler.driver.schedule_run_instance(ctxt, request_spec)
+        compute1.kill()
 
     def test_doesnt_report_disabled_hosts_as_up_no_queue(self):
         """Ensures driver doesn't find hosts before they are enabled"""
@@ -419,8 +380,9 @@ class SimpleDriverTestCase(test.TestCase):
 
         global instance_ids
         instance_ids = []
-        instance_ids.append(_create_instance()['id'])
-        compute1.run_instance(self.context, instance_ids[0])
+        instance = _create_instance()
+        instance_ids.append((instance['id'], instance['uuid']))
+        compute1.run_instance(self.context, instance_ids[0][0])
 
         self.stubs.Set(SimpleScheduler,
                 'create_instance_db_entry', _fake_create_instance_db_entry)
@@ -438,13 +400,13 @@ class SimpleDriverTestCase(test.TestCase):
         self.assertEqual(len(instances), 1)
         self.assertEqual(instances[0].get('_is_precooked', False), False)
 
-        compute1.terminate_instance(self.context, instance_ids[0])
-        compute2.terminate_instance(self.context, instance_ids[1])
+        compute1.terminate_instance(self.context, instance_ids[0][1])
+        compute2.terminate_instance(self.context, instance_ids[1][1])
         compute1.kill()
         compute2.kill()
 
     def test_specific_host_gets_instance_no_queue(self):
-        """Ensures if you set availability_zone it launches on that zone"""
+        """Ensures if you set zone:host it launches on that host"""
         compute1 = service.Service('host1',
                                    'nova-compute',
                                    'compute',
@@ -458,8 +420,9 @@ class SimpleDriverTestCase(test.TestCase):
 
         global instance_ids
         instance_ids = []
-        instance_ids.append(_create_instance()['id'])
-        compute1.run_instance(self.context, instance_ids[0])
+        instance = _create_instance()
+        instance_ids.append((instance['id'], instance['uuid']))
+        compute1.run_instance(self.context, instance_ids[0][0])
 
         self.stubs.Set(SimpleScheduler,
                 'create_instance_db_entry', _fake_create_instance_db_entry)
@@ -469,13 +432,12 @@ class SimpleDriverTestCase(test.TestCase):
                 'cast_to_compute_host', _fake_cast_to_compute_host)
 
         request_spec = _create_request_spec(availability_zone='nova:host1')
-        instances = self.scheduler.driver.schedule_run_instance(
-                self.context, request_spec)
+        self.scheduler.driver.schedule_run_instance(self.context, request_spec)
         self.assertEqual(_picked_host, 'host1')
         self.assertEqual(len(instance_ids), 2)
 
-        compute1.terminate_instance(self.context, instance_ids[0])
-        compute1.terminate_instance(self.context, instance_ids[1])
+        compute1.terminate_instance(self.context, instance_ids[0][1])
+        compute1.terminate_instance(self.context, instance_ids[1][1])
         compute1.kill()
         compute2.kill()
 
@@ -501,7 +463,7 @@ class SimpleDriverTestCase(test.TestCase):
                 'cast_to_compute_host', _fake_cast_to_compute_host)
 
         request_spec = _create_request_spec(availability_zone='nova:host1')
-        self.assertRaises(driver.WillNotSchedule,
+        self.assertRaises(exception.WillNotSchedule,
                           self.scheduler.driver.schedule_run_instance,
                           self.context,
                           request_spec)
@@ -526,12 +488,83 @@ class SimpleDriverTestCase(test.TestCase):
                 'cast_to_compute_host', _fake_cast_to_compute_host)
 
         request_spec = _create_request_spec(availability_zone='nova:host1')
-        instances = self.scheduler.driver.schedule_run_instance(
-                self.context, request_spec)
+        self.scheduler.driver.schedule_run_instance(self.context, request_spec)
         self.assertEqual(_picked_host, 'host1')
         self.assertEqual(len(instance_ids), 1)
-        compute1.terminate_instance(self.context, instance_ids[0])
+        compute1.terminate_instance(self.context, instance_ids[0][1])
         compute1.kill()
+
+    def test_specific_zone_gets_instance_no_queue(self):
+        """Ensures if you set availability_zone it launches on that zone"""
+        self.flags(node_availability_zone='zone1')
+        compute1 = service.Service('host1',
+                                   'nova-compute',
+                                   'compute',
+                                   FLAGS.compute_manager)
+        compute1.start()
+        self.flags(node_availability_zone='zone2')
+        compute2 = service.Service('host2',
+                                   'nova-compute',
+                                   'compute',
+                                   FLAGS.compute_manager)
+        compute2.start()
+
+        global instance_ids
+        instance_ids = []
+        instance = _create_instance()
+        instance_ids.append((instance['id'], instance['uuid']))
+        compute1.run_instance(self.context, instance_ids[0][0])
+
+        self.stubs.Set(SimpleScheduler,
+                'create_instance_db_entry', _fake_create_instance_db_entry)
+        global _picked_host
+        _picked_host = None
+        self.stubs.Set(driver,
+                'cast_to_compute_host', _fake_cast_to_compute_host)
+
+        request_spec = _create_request_spec(availability_zone='zone1')
+        self.scheduler.driver.schedule_run_instance(self.context, request_spec)
+        self.assertEqual(_picked_host, 'host1')
+        self.assertEqual(len(instance_ids), 2)
+
+        compute1.terminate_instance(self.context, instance_ids[0][1])
+        compute1.terminate_instance(self.context, instance_ids[1][1])
+        compute1.kill()
+        compute2.kill()
+
+    def test_bad_instance_zone_fails(self):
+        self.flags(node_availability_zone='zone1')
+        compute1 = service.Service('host1',
+                                   'nova-compute',
+                                   'compute',
+                                   FLAGS.compute_manager)
+        compute1.start()
+        request_spec = _create_request_spec(availability_zone='zone2')
+        try:
+            self.assertRaises(exception.NoValidHost,
+                              self.scheduler.driver.schedule_run_instance,
+                              self.context,
+                              request_spec)
+        finally:
+            compute1.kill()
+
+    def test_bad_volume_zone_fails(self):
+        self.flags(node_availability_zone='zone1')
+        volume1 = service.Service('host1',
+                                  'nova-volume',
+                                  'volume',
+                                   FLAGS.volume_manager)
+        volume1.start()
+        # uses 'nova' for zone
+        volume_id = _create_volume()
+        try:
+            self.assertRaises(exception.NoValidHost,
+                              self.scheduler.driver.schedule_create_volume,
+                              self.context,
+                              volume_id)
+        finally:
+            db.volume_destroy(self.context, volume_id)
+            volume1.kill()
 
     def test_too_many_cores_no_queue(self):
         """Ensures we don't go over max cores"""
@@ -548,21 +581,21 @@ class SimpleDriverTestCase(test.TestCase):
         instance_ids1 = []
         instance_ids2 = []
         for index in xrange(FLAGS.max_cores):
-            instance_id = _create_instance()['id']
-            compute1.run_instance(self.context, instance_id)
-            instance_ids1.append(instance_id)
-            instance_id = _create_instance()['id']
-            compute2.run_instance(self.context, instance_id)
-            instance_ids2.append(instance_id)
+            instance = _create_instance()
+            compute1.run_instance(self.context, instance['id'])
+            instance_ids1.append((instance['id'], instance['uuid']))
+            instance = _create_instance()
+            compute2.run_instance(self.context, instance['id'])
+            instance_ids2.append((instance['id'], instance['uuid']))
         request_spec = _create_request_spec()
-        self.assertRaises(driver.NoValidHost,
+        self.assertRaises(exception.NoValidHost,
                           self.scheduler.driver.schedule_run_instance,
                           self.context,
                           request_spec)
-        for instance_id in instance_ids1:
-            compute1.terminate_instance(self.context, instance_id)
-        for instance_id in instance_ids2:
-            compute2.terminate_instance(self.context, instance_id)
+        for (_, instance_uuid) in instance_ids1:
+            compute1.terminate_instance(self.context, instance_uuid)
+        for (_, instance_uuid) in instance_ids2:
+            compute2.terminate_instance(self.context, instance_uuid)
         compute1.kill()
         compute2.kill()
 
@@ -622,8 +655,9 @@ class SimpleDriverTestCase(test.TestCase):
 
         global instance_ids
         instance_ids = []
-        instance_ids.append(_create_instance()['id'])
-        compute1.run_instance(self.context, instance_ids[0])
+        instance = _create_instance()
+        instance_ids.append((instance['id'], instance['uuid']))
+        compute1.run_instance(self.context, instance_ids[0][0])
 
         self.stubs.Set(SimpleScheduler,
                 'create_instance_db_entry', _fake_create_instance_db_entry)
@@ -633,13 +667,12 @@ class SimpleDriverTestCase(test.TestCase):
                 'cast_to_compute_host', _fake_cast_to_compute_host)
 
         request_spec = _create_request_spec()
-        instances = self.scheduler.driver.schedule_run_instance(
-                self.context, request_spec)
+        self.scheduler.driver.schedule_run_instance(self.context, request_spec)
         self.assertEqual(_picked_host, 'host2')
         self.assertEqual(len(instance_ids), 2)
 
-        compute1.terminate_instance(self.context, instance_ids[0])
-        compute2.terminate_instance(self.context, instance_ids[1])
+        compute1.terminate_instance(self.context, instance_ids[0][1])
+        compute2.terminate_instance(self.context, instance_ids[1][1])
         compute1.kill()
         compute2.kill()
 
@@ -650,8 +683,9 @@ class SimpleDriverTestCase(test.TestCase):
 
         global instance_ids
         instance_ids = []
-        instance_ids.append(_create_instance()['id'])
-        compute1.run_instance(self.context, instance_ids[0])
+        instance = _create_instance()
+        instance_ids.append((instance['id'], instance['uuid']))
+        compute1.run_instance(self.context, instance_ids[0][0])
 
         self.stubs.Set(SimpleScheduler,
                 'create_instance_db_entry', _fake_create_instance_db_entry)
@@ -661,13 +695,12 @@ class SimpleDriverTestCase(test.TestCase):
                 'cast_to_compute_host', _fake_cast_to_compute_host)
 
         request_spec = _create_request_spec(availability_zone='nova:host1')
-        instances = self.scheduler.driver.schedule_run_instance(
-                self.context, request_spec)
+        self.scheduler.driver.schedule_run_instance(self.context, request_spec)
         self.assertEqual(_picked_host, 'host1')
         self.assertEqual(len(instance_ids), 2)
 
-        compute1.terminate_instance(self.context, instance_ids[0])
-        compute1.terminate_instance(self.context, instance_ids[1])
+        compute1.terminate_instance(self.context, instance_ids[0][1])
+        compute1.terminate_instance(self.context, instance_ids[1][1])
         compute1.kill()
         compute2.kill()
 
@@ -679,7 +712,7 @@ class SimpleDriverTestCase(test.TestCase):
         past = now - delta
         db.service_update(self.context, s1['id'], {'updated_at': past})
         request_spec = _create_request_spec(availability_zone='nova:host1')
-        self.assertRaises(driver.WillNotSchedule,
+        self.assertRaises(exception.WillNotSchedule,
                           self.scheduler.driver.schedule_run_instance,
                           self.context,
                           request_spec)
@@ -700,11 +733,10 @@ class SimpleDriverTestCase(test.TestCase):
                 'cast_to_compute_host', _fake_cast_to_compute_host)
 
         request_spec = _create_request_spec(availability_zone='nova:host1')
-        instances = self.scheduler.driver.schedule_run_instance(
-                self.context, request_spec)
+        self.scheduler.driver.schedule_run_instance(self.context, request_spec)
         self.assertEqual(_picked_host, 'host1')
         self.assertEqual(len(instance_ids), 1)
-        compute1.terminate_instance(self.context, instance_ids[0])
+        compute1.terminate_instance(self.context, instance_ids[0][1])
         compute1.kill()
 
     def test_too_many_cores(self):
@@ -714,12 +746,12 @@ class SimpleDriverTestCase(test.TestCase):
         instance_ids1 = []
         instance_ids2 = []
         for index in xrange(FLAGS.max_cores):
-            instance_id = _create_instance()['id']
-            compute1.run_instance(self.context, instance_id)
-            instance_ids1.append(instance_id)
-            instance_id = _create_instance()['id']
-            compute2.run_instance(self.context, instance_id)
-            instance_ids2.append(instance_id)
+            instance = _create_instance()
+            compute1.run_instance(self.context, instance['id'])
+            instance_ids1.append((instance['id'], instance['uuid']))
+            instance = _create_instance()
+            compute2.run_instance(self.context, instance['id'])
+            instance_ids2.append((instance['id'], instance['uuid']))
 
         def _create_instance_db_entry(simple_self, context, request_spec):
             self.fail(_("Shouldn't try to create DB entry when at "
@@ -734,14 +766,14 @@ class SimpleDriverTestCase(test.TestCase):
 
         request_spec = _create_request_spec()
 
-        self.assertRaises(driver.NoValidHost,
+        self.assertRaises(exception.NoValidHost,
                           self.scheduler.driver.schedule_run_instance,
                           self.context,
                           request_spec)
-        for instance_id in instance_ids1:
-            compute1.terminate_instance(self.context, instance_id)
-        for instance_id in instance_ids2:
-            compute2.terminate_instance(self.context, instance_id)
+        for (_, instance_uuid) in instance_ids1:
+            compute1.terminate_instance(self.context, instance_uuid)
+        for (_, instance_uuid) in instance_ids2:
+            compute2.terminate_instance(self.context, instance_uuid)
         compute1.kill()
         compute2.kill()
 
@@ -780,7 +812,7 @@ class SimpleDriverTestCase(test.TestCase):
             volume2.create_volume(self.context, volume_id)
             volume_ids2.append(volume_id)
         volume_id = _create_volume()
-        self.assertRaises(driver.NoValidHost,
+        self.assertRaises(exception.NoValidHost,
                           self.scheduler.driver.schedule_create_volume,
                           self.context,
                           volume_id)
@@ -914,7 +946,7 @@ class SimpleDriverTestCase(test.TestCase):
         db.service_destroy(self.context, s_ref['id'])
 
     def test_live_migration_dest_check_service_same_host(self):
-        """Confirms exceptioin raises in case dest and src is same host."""
+        """Confirms exception raises in case dest and src is same host."""
         instance_id = _create_instance()['id']
         i_ref = db.instance_get(self.context, instance_id)
         s_ref = self._create_compute_service(host=i_ref['host'])
