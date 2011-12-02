@@ -86,138 +86,120 @@ def upgrade(migrate_engine):
                                           extra_specs=dict(
                                             cpu_arch="x86_64"))
 
-            compute.instance_types.create(name="cg1.small",
-                                          memory=2048,
-                                          vcpus=1,
-                                          local_gb=20,
-                                          flavorid=100,
+            db.api.instance_type_extra_specs_update_or_create(
+                                          context.get_admin_context(),
+                                          100, # cg1.small
                                           extra_specs=dict(
                                             cpu_arch="x86_64",
                                             xpu_arch="fermi",
                                             xpus=1))
-            compute.instance_types.create(name="cg1.medium",
-                                          memory=4096,
-                                          vcpus=2,
-                                          local_gb=40,
-                                          flavorid=101,
+
+            db.api.instance_type_extra_specs_update_or_create(
+                                          context.get_admin_context(),
+                                          101, # cg1.medium
                                           extra_specs=dict(
                                             cpu_arch="x86_64",
                                             xpu_arch="fermi",
                                             xpus=1))
-            compute.instance_types.create(name="cg1.large",
-                                          memory=8192,
-                                          vcpus=4,
-                                          local_gb=80,
-                                          flavorid=102,
+
+            db.api.instance_type_extra_specs_update_or_create(
+                                          context.get_admin_context(),
+                                          102, # cg1.large
                                           extra_specs=dict(
                                             cpu_arch="x86_64",
                                             xpu_arch="fermi",
                                             xpus=1))
-            compute.instance_types.create(name="cg1.xlarge",
-                                          memory=16384,
-                                          vcpus=8,
-                                          local_gb=160,
-                                          flavorid=103,
+
+            db.api.instance_type_extra_specs_update_or_create(
+                                          context.get_admin_context(),
+                                          103, # cg1.xlarge
                                           extra_specs=dict(
                                             cpu_arch="x86_64",
                                             xpu_arch="fermi",
                                             xpus=1))
-            compute.instance_types.create(name="cg1.2xlarge",
-                                          memory=16384,
-                                          vcpus=8,
-                                          local_gb=320,
-                                          flavorid=104,
+
+            db.api.instance_type_extra_specs_update_or_create(
+                                          context.get_admin_context(),
+                                          104, # cg1.2xlarge
                                           extra_specs=dict(
                                             cpu_arch="x86_64",
                                             xpu_arch="fermi",
                                             xpus=2))
-            compute.instance_types.create(name="cg1.4xlarge",
-                                          memory=22000,
-                                          vcpus=8,
-                                          local_gb=1690,
-                                          flavorid=105,
+
+            db.api.instance_type_extra_specs_update_or_create(
+                                          context.get_admin_context(),
+                                          105, # cg1.4xlarge
                                           extra_specs=dict(
                                             cpu_arch="x86_64",
                                             xpu_arch="fermi",
                                             xpus=2))
-            compute.instance_types.create(name="sh1.small",
-                                          memory=2048,
-                                          vcpus=1,
-                                          local_gb=20,
-                                          flavorid=200,
-                                          extra_specs=dict(
-                                            cpu_arch="x86_64",
-                                            system_type="UV"))
-            compute.instance_types.create(name="sh1.medium",
-                                          memory=4096,
-                                          vcpus=2,
-                                          local_gb=40,
-                                          flavorid=201,
-                                          extra_specs=dict(
-                                            cpu_arch="x86_64",
-                                            system_type="UV"))
-            compute.instance_types.create(name="sh1.large",
-                                          memory=8192,
-                                          vcpus=4,
-                                          local_gb=80,
-                                          flavorid=202,
-                                          extra_specs=dict(
-                                            cpu_arch="x86_64",
-                                            system_type="UV"))
-            compute.instance_types.create(name="sh1.xlarge",
-                                          memory=16384,
-                                          vcpus=8,
-                                          local_gb=160,
-                                          flavorid=203,
-                                          extra_specs=dict(
-                                            cpu_arch="x86_64",
-                                            system_type="UV"))
-            compute.instance_types.create(name="sh1.2xlarge",
-                                          memory=32768,
-                                          vcpus=16,
-                                          local_gb=320,
-                                          flavorid=204,
-                                          extra_specs=dict(
-                                            cpu_arch="x86_64",
-                                            system_type="UV"))
-            compute.instance_types.create(name="sh1.4xlarge",
-                                          memory=65536,
-                                          vcpus=32,
-                                          local_gb=320,
-                                          flavorid=205,
-                                          extra_specs=dict(
-                                            cpu_arch="x86_64",
-                                            system_type="UV"))
-            compute.instance_types.create(name="sh1.8xlarge",
-                                          memory=131072,
-                                          vcpus=64,
-                                          local_gb=500,
-                                          flavorid=206,
-                                          extra_specs=dict(
-                                            cpu_arch="x86_64",
-                                            system_type="UV"))
-            compute.instance_types.create(name="sh1.16xlarge",
-                                          memory=262144,
-                                          vcpus=128,
-                                          local_gb=500,
-                                          flavorid=207,
-                                          extra_specs=dict(
-                                            cpu_arch="x86_64",
-                                            system_type="UV"))
-            compute.instance_types.create(name="sh1.32xlarge",
-                                          memory=524288,
-                                          vcpus=256,
-                                          local_gb=1000,
-                                          flavorid=208,
+
+            db.api.instance_type_extra_specs_update_or_create(
+                                          context.get_admin_context(),
+                                          200, # sh1.small
                                           extra_specs=dict(
                                             cpu_arch="x86_64",
                                             system_type="UV"))
 
-            compute.instance_types.create(name="tp64.8x8",
-                                          memory=16384,
-                                          vcpus=1,
-                                          local_gb=1000,
-                                          flavorid=302,
+            db.api.instance_type_extra_specs_update_or_create(
+                                          context.get_admin_context(),
+                                          201, # sh1.medium
+                                          extra_specs=dict(
+                                            cpu_arch="x86_64",
+                                            system_type="UV"))
+
+            db.api.instance_type_extra_specs_update_or_create(
+                                          context.get_admin_context(),
+                                          202, # sh1.large
+                                          extra_specs=dict(
+                                            cpu_arch="x86_64",
+                                            system_type="UV"))
+
+            db.api.instance_type_extra_specs_update_or_create(
+                                          context.get_admin_context(),
+                                          203, # sh1.xlarge
+                                          extra_specs=dict(
+                                            cpu_arch="x86_64",
+                                            system_type="UV"))
+
+            db.api.instance_type_extra_specs_update_or_create(
+                                          context.get_admin_context(),
+                                          204, # sh1.2xlarge
+                                          extra_specs=dict(
+                                            cpu_arch="x86_64",
+                                            system_type="UV"))
+
+            db.api.instance_type_extra_specs_update_or_create(
+                                          context.get_admin_context(),
+                                          205, # sh1.4xlarge
+                                          extra_specs=dict(
+                                            cpu_arch="x86_64",
+                                            system_type="UV"))
+
+            db.api.instance_type_extra_specs_update_or_create(
+                                          context.get_admin_context(),
+                                          206, # sh1.8xlarge
+                                          extra_specs=dict(
+                                            cpu_arch="x86_64",
+                                            system_type="UV"))
+
+            db.api.instance_type_extra_specs_update_or_create(
+                                          context.get_admin_context(),
+                                          207, # sh1.16xlarge
+                                          extra_specs=dict(
+                                            cpu_arch="x86_64",
+                                            system_type="UV"))
+
+            db.api.instance_type_extra_specs_update_or_create(
+                                          context.get_admin_context(),
+                                          208, # sh1.32xlarge
+                                          extra_specs=dict(
+                                            cpu_arch="x86_64",
+                                            system_type="UV"))
+
+            db.api.instance_type_extra_specs_update_or_create(
+                                          context.get_admin_context(),
+                                          302, # tp64.8x8
                                           extra_specs=dict(
                                             cpu_arch='tilepro64'))
 
