@@ -31,7 +31,7 @@ LOG = logging.getLogger('nova.instance_types')
 
 
 def create(name, memory, vcpus, local_gb, flavorid, swap=0,
-           rxtx_factor=1):
+           rxtx_factor=1, extra_specs={}):
     """Creates instance types."""
     kwargs = {
         'memory_mb': memory,
@@ -60,7 +60,7 @@ def create(name, memory, vcpus, local_gb, flavorid, swap=0,
 
     kwargs['name'] = name
     kwargs['flavorid'] = flavorid
-
+    kwargs['extra_specs'] = extra_specs
     try:
         return db.instance_type_create(context.get_admin_context(), kwargs)
     except exception.DBError, e:
