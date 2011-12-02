@@ -1059,7 +1059,6 @@ def virtual_interface_get(context, vif_id, session=None):
 
     vif_ref = session.query(models.VirtualInterface).\
                       filter_by(id=vif_id).\
-                      options(joinedload('network')).\
                       options(joinedload('fixed_ips')).\
                       first()
     return vif_ref
@@ -1074,7 +1073,6 @@ def virtual_interface_get_by_address(context, address):
     session = get_session()
     vif_ref = session.query(models.VirtualInterface).\
                       filter_by(address=address).\
-                      options(joinedload('network')).\
                       options(joinedload('fixed_ips')).\
                       first()
     return vif_ref
@@ -1089,7 +1087,6 @@ def virtual_interface_get_by_uuid(context, vif_uuid):
     session = get_session()
     vif_ref = session.query(models.VirtualInterface).\
                       filter_by(uuid=vif_uuid).\
-                      options(joinedload('network')).\
                       options(joinedload('fixed_ips')).\
                       first()
     return vif_ref
@@ -1104,7 +1101,6 @@ def virtual_interface_get_by_fixed_ip(context, fixed_ip_id):
     session = get_session()
     vif_ref = session.query(models.VirtualInterface).\
                       filter_by(fixed_ip_id=fixed_ip_id).\
-                      options(joinedload('network')).\
                       options(joinedload('fixed_ips')).\
                       first()
     return vif_ref
@@ -1120,7 +1116,6 @@ def virtual_interface_get_by_instance(context, instance_id):
     session = get_session()
     vif_refs = session.query(models.VirtualInterface).\
                        filter_by(instance_id=instance_id).\
-                       options(joinedload('network')).\
                        options(joinedload('fixed_ips')).\
                        all()
     return vif_refs
@@ -1134,7 +1129,6 @@ def virtual_interface_get_by_instance_and_network(context, instance_id,
     vif_ref = session.query(models.VirtualInterface).\
                       filter_by(instance_id=instance_id).\
                       filter_by(network_id=network_id).\
-                      options(joinedload('network')).\
                       options(joinedload('fixed_ips')).\
                       first()
     return vif_ref
@@ -1149,7 +1143,6 @@ def virtual_interface_get_by_network(context, network_id):
     session = get_session()
     vif_refs = session.query(models.VirtualInterface).\
                        filter_by(network_id=network_id).\
-                       options(joinedload('network')).\
                        options(joinedload('fixed_ips')).\
                        all()
     return vif_refs
@@ -1184,7 +1177,6 @@ def virtual_interface_get_all(context):
     """Get all vifs"""
     session = get_session()
     vif_refs = session.query(models.VirtualInterface).\
-                       options(joinedload('network')).\
                        options(joinedload('fixed_ips')).\
                        all()
     return vif_refs
