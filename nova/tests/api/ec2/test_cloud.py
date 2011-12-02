@@ -1130,16 +1130,17 @@ class CloudTestCase(test.TestCase):
         #              for unit tests.
         rv = self.cloud.terminate_instances(self.context, [instance_id])
 
-    def test_extended_features(self):
-        instance_type = FLAGS.default_instance_type
-        instance_type = instance_type + ';xpu_arch=fermi;xpus=1'
-        max_count = 1
-        kwargs = {'image_id': 'ami-1',
-                  'instance_type': instance_type,
-                  'max_count': max_count}
-        rv = self.cloud.run_instances(self.context, **kwargs)
-        greenthread.sleep(0.3)
-        instance_id = rv['instancesSet'][0]['instanceId']
+#    Obsolete test
+#    def test_extended_features(self):
+#        instance_type = FLAGS.default_instance_type
+#        instance_type = instance_type + ';xpu_arch=fermi;xpus=1'
+#        max_count = 1
+#        kwargs = {'image_id': 'ami-1',
+#                  'instance_type': instance_type,
+#                  'max_count': max_count}
+#        rv = self.cloud.run_instances(self.context, **kwargs)
+#        greenthread.sleep(0.3)
+#        instance_id = rv['instancesSet'][0]['instanceId']
 
     def test_ajax_console(self):
         instance_id = self._run_instance(image_id='ami-1')
