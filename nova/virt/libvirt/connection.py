@@ -172,6 +172,7 @@ if FLAGS.connection_type == 'gpu':
     gpus_assigned = {}
     vcpus_used = 0
 
+
 def get_connection(read_only):
     # These are loaded late so that there's no need to install these
     # libraries when not using libvirt.

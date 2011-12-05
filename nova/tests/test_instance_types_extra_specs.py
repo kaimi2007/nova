@@ -28,11 +28,11 @@ class InstanceTypeExtraSpecsTestCase(test.TestCase):
     def setUp(self):
         super(InstanceTypeExtraSpecsTestCase, self).setUp()
         self.context = context.get_admin_context()
-        values = { 'name':"cg1.testxlarge",
-             'memory_mb':22000,
-             'vcpus':8,
-             'local_gb':1690,
-             'flavorid':999}
+        values = {'name': "cg1.testxlarge",
+             'memory_mb': 22000,
+             'vcpus': 8,
+             'local_gb': 1690,
+             'flavorid': 999}
         specs = dict(cpu_arch="x86_64",
                         cpu_model="Nehalem",
                         xpu_arch="fermi",

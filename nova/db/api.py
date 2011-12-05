@@ -171,6 +171,7 @@ def compute_node_get_all(context, session=None):
     """Get all computeNodes."""
     return IMPL.compute_node_get_all(context)
 
+
 def compute_node_get_all_by_arch(context, cpu_arch, xpu_arch, session=None):
     """Get all computeNodes by cpu_arch and xpu_arch
         or raise if it does not exist."""

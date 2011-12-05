@@ -73,9 +73,12 @@ def upgrade(migrate_engine):
     'sh1.xlarge': dict(memory_mb=16384, vcpus=8, local_gb=160, flavorid=204),
     'sh1.2xlarge': dict(memory_mb=32768, vcpus=16, local_gb=320, flavorid=205),
     'sh1.4xlarge': dict(memory_mb=65536, vcpus=32, local_gb=320, flavorid=206),
-    'sh1.8xlarge': dict(memory_mb=131072, vcpus=64, local_gb=500, flavorid=207),
-    'sh1.16xlarge': dict(memory_mb=262144, vcpus=128, local_gb=500, flavorid=208),
-    'sh1.32xlarge': dict(memory_mb=524288, vcpus=256, local_gb=1000, flavorid=209),
+    'sh1.8xlarge': dict(memory_mb=131072, vcpus=64, local_gb=500,
+                         flavorid=207),
+    'sh1.16xlarge': dict(memory_mb=262144, vcpus=128, local_gb=500,
+                         flavorid=208),
+    'sh1.32xlarge': dict(memory_mb=524288, vcpus=256, local_gb=1000,
+                         flavorid=209),
     'tp64.8x8': dict(memory_mb=16384, vcpus=1, local_gb=1000, flavorid=302)
     }
 

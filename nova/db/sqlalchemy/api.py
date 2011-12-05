@@ -375,6 +375,7 @@ def compute_node_get_all(context, session=None):
                     options(joinedload('service')).\
                     filter_by(deleted=can_read_deleted(context))
 
+
 @require_admin_context
 def compute_node_get_all_by_arch(context, cpu_arch, xpu_arch, session=None):
     if not session:
