@@ -34,6 +34,10 @@ from nova.virt.libvirt import connection as libvirt_conn
 LOG = logging.getLogger("nova.virt.connection")
 FLAGS = flags.FLAGS
 
+"""
+In case of baremetal (FLAGS.connection_type),
+specific driver is set by FLAGS.baremetal_driver
+"""
 if FLAGS.connection_type == 'baremetal':
     from nova.virt.baremetal import proxy
 

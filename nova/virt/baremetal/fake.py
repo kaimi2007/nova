@@ -57,7 +57,7 @@ class BareMetalNodes(object):
         """
         return False
 
-    def find_ip_w_id(self, id):
+    def get_ip_by_id(self, id):
         """
         Returns default IP address of the given node
         """

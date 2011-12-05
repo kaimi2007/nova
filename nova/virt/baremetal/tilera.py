@@ -52,6 +52,11 @@ from nova.virt import disk
 from nova.virt import driver
 from nova.virt import images
 
+flags.DEFINE_string('tile_monitor', '/usr/local/TileraMDE/bin/tile-monitor',
+                    'Tilera command line program for Bare-metal driver')
+
+FLAGS = flags.FLAGS
+
 LOG = logging.getLogger('nova.virt.tilera')
 
 
@@ -178,7 +183,7 @@ class BareMetalNodes(object):
                 return item['node_id']
         raise exception.NotFound("No free nodes available")
 
-    def find_ip_w_id(self, id):
+    def get_ip_by_id(self, id):
         """
         Returns default IP address of the given node
         """
@@ -219,7 +224,7 @@ class BareMetalNodes(object):
         /tftpboot/fs_x directory is a NFS of node#x
         /tftpboot/root_x file is an file system image of node#x
         """
-        node_ip = self.find_ip_w_id(node_id)
+        node_ip = self.get_ip_by_id(node_id)
         LOG.debug(_("deactivate_node is called for \
                node_id = %(id)s node_ip = %(ip)s"),
                {'id': str(node_id), 'ip': node_ip})
@@ -244,11 +249,13 @@ class BareMetalNodes(object):
             based on the given ip_address and mac_address from nova
             so that user can access the bare-metal node using ssh
         """
-        utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
-            '--resume', '--net', node_ip, '--run', '-', \
-            'ifconfig', 'xgbe0', 'hw', 'ether', mac_address, '-', \
-            '--wait', '--run', '-', 'ifconfig', 'xgbe0', ip_address, \
-            '-', '--wait', '--quit')
+        cmd = FLAGS.tile_monitor + \
+            " --resume --net " + node_ip + " --run - " + \
+            "ifconfig xgbe0 hw ether " + mac_address + \
+            " - --wait --run - ifconfig xgbe0 " + ip_address + \
+            " - --wait --quit"
+        subprocess.Popen(cmd, shell=True)
+        self.sleep_mgr(5)
 
     def iptables_set(self, node_ip, user_data):
         """
@@ -307,9 +314,11 @@ class BareMetalNodes(object):
         """
         Sets and Runs sshd in the node
         """
-        utils.execute('/usr/local/TileraMDE/bin/tile-monitor', \
-            '--resume', '--net', node_ip, '--run', '-', \
-            '/usr/sbin/sshd', '-', '--wait', '--quit')
+        cmd = FLAGS.tile_monitor + \
+            " --resume --net " + node_ip + " --run - " + \
+            "/usr/sbin/sshd - --wait --quit"
+        subprocess.Popen(cmd, shell=True)
+        self.sleep_mgr(5)
 
     def activate_node(self, node_id, node_ip, name, mac_address, \
                       ip_address, user_data):
@@ -320,7 +329,7 @@ class BareMetalNodes(object):
 
         self.power_mgr(node_id, 2)
         self.power_mgr(node_id, 3)
-        self.sleep_mgr(90)
+        self.sleep_mgr(100)
 
         chk_act = self.check_activated(node_id, node_ip)
         if chk_act == 1:
@@ -335,9 +344,9 @@ class BareMetalNodes(object):
         """
         Gets console output of the given node
         """
-        node_ip = self.find_ip_w_id(node_id)
+        node_ip = self.get_ip_by_id(node_id)
         log_path = "/tftpboot/log_" + str(node_id)
-        kmsg_cmd = "/usr/local/TileraMDE/bin/tile-monitor" + \
+        kmsg_cmd = FLAGS.tile_monitor + \
                    " --resume --net " + node_ip + \
                    " -- dmesg > " + log_path
         subprocess.Popen(kmsg_cmd, shell=True)
@@ -357,7 +366,7 @@ class BareMetalNodes(object):
     def set_image(self, bpath, node_id):
         """
         Sets the PXE bare-metal file system from the instance path
-            after euca key is injected
+            after ssh key is injected
         /tftpboot/fs_x directory is a NFS of node#x
         /tftpboot/root_x file is an file system image of node#x
         """

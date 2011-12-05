@@ -27,6 +27,7 @@ from nova.compute import power_state
 from nova import context
 from nova import db
 from nova.tests import fake_utils
+from nova import exception
 
 from nova.virt.baremetal import proxy
 from nova.virt.baremetal import dom
@@ -35,17 +36,14 @@ FLAGS = flags.FLAGS
 FLAGS.baremetal_driver = 'fake'
 
 
+# Same fake_domains is used by different classes,
+# but different fake_file is used by different classes for unit test.
 fake_domains = [{'status': 1, 'name': 'instance-00000001',
                  'memory_kb': 16777216, 'kernel_id': '1896115634',
                  'ramdisk_id': '', 'image_id': '1552326678',
                  'vcpus': 1, 'node_id': 6,
                  'mac_address': '02:16:3e:01:4e:c9',
                  'ip_address': '10.5.1.2'}]
-
-
-def json_equal(x, y):
-    """Check if two json strings represent the equivalent Python object"""
-    return utils.loads(x) == utils.loads(y)
 
 
 class DomainReadWriteTestCase(test.TestCase):
@@ -101,11 +99,16 @@ class DomainReadWriteTestCase(test.TestCase):
 
             self.mox.ReplayAll()
 
-            self.assertRaises(IOError, dom.read_domains,
+            self.assertRaises(exception.NotFound, dom.read_domains,
                        '/tftpboot/test_fake_dom_file')
 
         finally:
             self.mox.UnsetStubs()
+
+    def assertJSONEquals(self, x, y):
+        """Check if two json strings represent the equivalent Python object"""
+        self.assertEquals(utils.loads(x), utils.loads(y))
+        return utils.loads(x) == utils.loads(y)
 
     def test_write_domain(self):
         """Write the domain to file"""
@@ -123,7 +126,7 @@ class DomainReadWriteTestCase(test.TestCase):
             # Python object as expected_json
             # We can't do an exact string comparison
             # because of ordering and whitespace
-            mock_file.write(mox.Func(functools.partial(json_equal,\
+            mock_file.write(mox.Func(functools.partial(self.assertJSONEquals,\
                 expected_json)))
             mock_file.close()
 

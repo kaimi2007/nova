@@ -51,11 +51,14 @@ LOG = logging.getLogger('nova.virt.baremetal.dom')
 
 
 def read_domains(fname):
-    f = open(fname, 'r')
-    json = f.read()
-    f.close()
-    domains = utils.loads(json)
-    return domains
+    try:
+        f = open(fname, 'r')
+        json = f.read()
+        f.close()
+        domains = utils.loads(json)
+        return domains
+    except IOError:
+        raise exception.NotFound()
 
 
 def write_domains(fname, domains):
@@ -146,7 +149,7 @@ class BareMetalDom(object):
         fd = self.find_domain(name)
         if fd == []:
             raise exception.NotFound("No such domain (%s)" % name)
-        node_ip = self.baremetal_nodes.find_ip_w_id(fd['node_id'])
+        node_ip = self.baremetal_nodes.get_ip_by_id(fd['node_id'])
 
         try:
             self.baremetal_nodes.deactivate_node(fd['node_id'])
@@ -202,7 +205,7 @@ class BareMetalDom(object):
         LOG.debug(_("create_domain: before get_idle_node"))
 
         node_id = self.baremetal_nodes.get_idle_node()
-        node_ip = self.baremetal_nodes.find_ip_w_id(node_id)
+        node_ip = self.baremetal_nodes.get_ip_by_id(node_id)
 
         new_dom = {'node_id': node_id,
                     'name': xml_dict['name'],

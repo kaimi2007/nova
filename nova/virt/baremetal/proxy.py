@@ -200,22 +200,6 @@ class ProxyConnection(driver.ComputeDriver):
         return timer.start(interval=0.5, now=True)
 
     @exception.wrap_exception
-    def pause(self, instance, callback):
-        raise exception.ApiError("pause not supported for baremetal.")
-
-    @exception.wrap_exception
-    def unpause(self, instance, callback):
-        raise exception.ApiError("unpause not supported for baremetal.")
-
-    @exception.wrap_exception
-    def suspend(self, instance, callback):
-        raise exception.ApiError("suspend not supported for baremetal")
-
-    @exception.wrap_exception
-    def resume(self, instance, callback):
-        raise exception.ApiError("resume not supported for baremetal")
-
-    @exception.wrap_exception
     def rescue(self, context, instance, callback, network_info):
         """Loads a VM using rescue images.
 
@@ -304,9 +288,6 @@ class ProxyConnection(driver.ComputeDriver):
         timer.f = _wait_for_boot
 
         return timer.start(interval=0.5, now=True)
-
-    def _flush_xen_console(self, virsh_output):
-        raise NotImplementedError()
 
     def _dump_file(self, fpath):
         fp = open(fpath, 'r+')
@@ -402,9 +383,6 @@ class ProxyConnection(driver.ComputeDriver):
         # NOTE(vish): No need add the suffix to console.log
         os.close(os.open(basepath('console.log', ''),
                          os.O_CREAT | os.O_WRONLY, 0660))
-
-        # bp = basepath(suffix='')
-        # self.baremetal_nodes.get_image(bp)
 
         if not disk_images:
             disk_images = {'image_id': inst['image_ref'],
@@ -541,10 +519,7 @@ class ProxyConnection(driver.ComputeDriver):
         inst_type_id = instance['instance_type_id']
         inst_type = instance_types.get_instance_type(inst_type_id)
 
-        if FLAGS.use_cow_images:
-            driver_type = 'qcow2'
-        else:
-            driver_type = 'raw'
+        driver_type = 'raw'
 
         xml_info = {'type': FLAGS.baremetal_type,
                     'name': instance['name'],
