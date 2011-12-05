@@ -27,6 +27,10 @@ meta = MetaData()
 # actual definitions of instances or services.
 instance_types = Table('instance_types', meta,
         Column('id', Integer(), primary_key=True, nullable=False),
+        Column('name',
+               String(length=255, convert_unicode=False, assert_unicode=None,
+                      unicode_error=None, _warn_on_bytestring=False),
+                      unique=True),
         )
 
 #
@@ -55,153 +59,52 @@ def upgrade(migrate_engine):
     # Upgrade operations go here. Don't create your own engine;
     # bind migrate_engine to your metadata
     meta.bind = migrate_engine
+
     for table in (instance_type_extra_specs_table, ):
         try:
             table.create()
-            # We're using a helper method here instead of direct table
-            # manipulation
-            db.api.instance_type_extra_specs_update_or_create(
-                                          context.get_admin_context(),
-                                          1,  # m1.tiny
-                                          extra_specs=dict(
-                                            cpu_arch="x86_64"))
-            db.api.instance_type_extra_specs_update_or_create(
-                                          context.get_admin_context(),
-                                          2,  # m1.small
-                                          extra_specs=dict(
-                                            cpu_arch="x86_64"))
-            db.api.instance_type_extra_specs_update_or_create(
-                                          context.get_admin_context(),
-                                          3,  # m1.medium
-                                          extra_specs=dict(
-                                            cpu_arch="x86_64"))
-            db.api.instance_type_extra_specs_update_or_create(
-                                          context.get_admin_context(),
-                                          4,  # m1.large
-                                          extra_specs=dict(
-                                            cpu_arch="x86_64"))
-            db.api.instance_type_extra_specs_update_or_create(
-                                          context.get_admin_context(),
-                                          5,  # m1.xlarge
-                                          extra_specs=dict(
-                                            cpu_arch="x86_64"))
 
-            db.api.instance_type_extra_specs_update_or_create(
-                                          context.get_admin_context(),
-                                          100, # cg1.small
-                                          extra_specs=dict(
-                                            cpu_arch="x86_64",
-                                            xpu_arch="fermi",
-                                            xpus=1))
+            #
+            instance_type_rows = list(instance_types.select().execute())
+            for instance_type in instance_type_rows:
+                id = instance_type.id
+                name = instance_type.name
+                if (name == 'm1.tiny') or \
+                   (name == 'm1.small') or \
+                   (name == 'm1.medium') or \
+                   (name == 'm1.large') or \
+                   (name == 'm1.xlarge'):
+                    extra_specs=dict(cpu_arch='x86_64')
+                elif (name == 'cg1.small') or \
+                     (name == 'cg1.medium') or \
+                     (name == 'cg1.large') or  \
+                     (name == 'cg1.xlarge') or \
+                     (name == 'cg1.2xlarge') or \
+                     (name == 'cg1.4xlarge'):
+                    extra_specs=dict( 
+                                      cpu_arch='x86_64',
+                                      xpu_arch='fermi',
+                                      xpus=1)
+                elif (name == 'sh1.small') or  \
+                     (name == 'sh1.medium') or \
+                     (name == 'sh1.large') or \
+                     (name == 'sh1.xlarge') or \
+                     (name == 'sh1.2xlarge') or \
+                     (name == 'sh1.4xlarge') or \
+                     (name == 'sh1.8xlarge') or \
+                     (name == 'sh1.16xlarge') or \
+                     (name == 'sh1.32xlarge'):
+                    extra_specs=dict(
+                                      cpu_arch='x86_64',
+                                      system_type='UV')
+                elif (name == 'tp64.8x8'):
+                    extra_specs=dict(
+                                      cpu_arch='tilepro64')
 
-            db.api.instance_type_extra_specs_update_or_create(
+                db.api.instance_type_extra_specs_update_or_create(
                                           context.get_admin_context(),
-                                          101, # cg1.medium
-                                          extra_specs=dict(
-                                            cpu_arch="x86_64",
-                                            xpu_arch="fermi",
-                                            xpus=1))
-
-            db.api.instance_type_extra_specs_update_or_create(
-                                          context.get_admin_context(),
-                                          102, # cg1.large
-                                          extra_specs=dict(
-                                            cpu_arch="x86_64",
-                                            xpu_arch="fermi",
-                                            xpus=1))
-
-            db.api.instance_type_extra_specs_update_or_create(
-                                          context.get_admin_context(),
-                                          103, # cg1.xlarge
-                                          extra_specs=dict(
-                                            cpu_arch="x86_64",
-                                            xpu_arch="fermi",
-                                            xpus=1))
-
-            db.api.instance_type_extra_specs_update_or_create(
-                                          context.get_admin_context(),
-                                          104, # cg1.2xlarge
-                                          extra_specs=dict(
-                                            cpu_arch="x86_64",
-                                            xpu_arch="fermi",
-                                            xpus=2))
-
-            db.api.instance_type_extra_specs_update_or_create(
-                                          context.get_admin_context(),
-                                          105, # cg1.4xlarge
-                                          extra_specs=dict(
-                                            cpu_arch="x86_64",
-                                            xpu_arch="fermi",
-                                            xpus=2))
-
-            db.api.instance_type_extra_specs_update_or_create(
-                                          context.get_admin_context(),
-                                          200, # sh1.small
-                                          extra_specs=dict(
-                                            cpu_arch="x86_64",
-                                            system_type="UV"))
-
-            db.api.instance_type_extra_specs_update_or_create(
-                                          context.get_admin_context(),
-                                          201, # sh1.medium
-                                          extra_specs=dict(
-                                            cpu_arch="x86_64",
-                                            system_type="UV"))
-
-            db.api.instance_type_extra_specs_update_or_create(
-                                          context.get_admin_context(),
-                                          202, # sh1.large
-                                          extra_specs=dict(
-                                            cpu_arch="x86_64",
-                                            system_type="UV"))
-
-            db.api.instance_type_extra_specs_update_or_create(
-                                          context.get_admin_context(),
-                                          203, # sh1.xlarge
-                                          extra_specs=dict(
-                                            cpu_arch="x86_64",
-                                            system_type="UV"))
-
-            db.api.instance_type_extra_specs_update_or_create(
-                                          context.get_admin_context(),
-                                          204, # sh1.2xlarge
-                                          extra_specs=dict(
-                                            cpu_arch="x86_64",
-                                            system_type="UV"))
-
-            db.api.instance_type_extra_specs_update_or_create(
-                                          context.get_admin_context(),
-                                          205, # sh1.4xlarge
-                                          extra_specs=dict(
-                                            cpu_arch="x86_64",
-                                            system_type="UV"))
-
-            db.api.instance_type_extra_specs_update_or_create(
-                                          context.get_admin_context(),
-                                          206, # sh1.8xlarge
-                                          extra_specs=dict(
-                                            cpu_arch="x86_64",
-                                            system_type="UV"))
-
-            db.api.instance_type_extra_specs_update_or_create(
-                                          context.get_admin_context(),
-                                          207, # sh1.16xlarge
-                                          extra_specs=dict(
-                                            cpu_arch="x86_64",
-                                            system_type="UV"))
-
-            db.api.instance_type_extra_specs_update_or_create(
-                                          context.get_admin_context(),
-                                          208, # sh1.32xlarge
-                                          extra_specs=dict(
-                                            cpu_arch="x86_64",
-                                            system_type="UV"))
-
-            db.api.instance_type_extra_specs_update_or_create(
-                                          context.get_admin_context(),
-                                          302, # tp64.8x8
-                                          extra_specs=dict(
-                                            cpu_arch='tilepro64'))
+                                          id,
+                                          extra_specs)
 
         except Exception:
             logging.info(repr(table))

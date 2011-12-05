@@ -109,7 +109,6 @@ class BaseTestCase(test.TestCase):
         self.user_id = 'fake'
         self.project_id = 'fake'
         self.context = context.RequestContext(self.user_id, self.project_id)
-        self.invalid_flavorid = 999
         test_notifier.NOTIFICATIONS = []
 
         def fake_show(meh, context, id):
@@ -1836,9 +1835,18 @@ class ComputeAPITestCase(BaseTestCase):
         """Test searching instances by image"""
 
         c = context.get_admin_context()
-        instance1 = self._create_fake_instance({'instance_type_id': 1})
-        instance2 = self._create_fake_instance({'instance_type_id': 2})
-        instance3 = self._create_fake_instance({'instance_type_id': 2})
+        instance_type = db.instance_type_get_by_name(
+                            self.context,
+                            "m1.medium")
+        instance1 = self._create_fake_instance(
+                        {'instance_type_id': instance_type['id']})
+        instance_type = db.instance_type_get_by_name(
+                            self.context,
+                            "m1.tiny")
+        instance2 = self._create_fake_instance(
+                        {'instance_type_id': instance_type['id']})
+        instance3 = self._create_fake_instance(
+                        {'instance_type_id': instance_type['id']})
 
         # NOTE(comstud): Migrations set up the instance_types table
         # for us.  Therefore, we assume the following is true for
@@ -1848,7 +1856,11 @@ class ComputeAPITestCase(BaseTestCase):
         # instance_type_id 3 == flavor 4
         # instance_type_id 4 == flavor 5
         # instance_type_id 5 == flavor 2
-
+        # NOTE (dkang): instance_type_id can be arbitrary.
+        # Using instance name is safer than used instance_type_id.
+        # The followings are set at 008_add_instance_types.py:
+        # m1.tiny: flavor 1
+        # m1.medium: flavor 3
         instances = self.compute_api.get_all(c,
                 search_opts={'flavor': 5})
         self.assertEqual(len(instances), 0)
@@ -1857,10 +1869,12 @@ class ComputeAPITestCase(BaseTestCase):
                 self.compute_api.get_all,
                 c, search_opts={'flavor': 99})
 
+        # m1.medium's flavorid == 3
         instances = self.compute_api.get_all(c, search_opts={'flavor': 3})
         self.assertEqual(len(instances), 1)
         self.assertEqual(instances[0]['id'], instance1['id'])
 
+        # m1.tiny's flavorid == 1
         instances = self.compute_api.get_all(c, search_opts={'flavor': 1})
         self.assertEqual(len(instances), 2)
         instance_uuids = [instance['uuid'] for instance in instances]

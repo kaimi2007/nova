@@ -19,7 +19,6 @@ Unit Tests for instance types extra specs code
 from nova import context
 from nova import db
 from nova import test
-from nova.compute import instance_types
 from nova.db.sqlalchemy.session import get_session
 from nova.db.sqlalchemy import models
 
@@ -29,12 +28,11 @@ class InstanceTypeExtraSpecsTestCase(test.TestCase):
     def setUp(self):
         super(InstanceTypeExtraSpecsTestCase, self).setUp()
         self.context = context.get_admin_context()
-        values = {
-             'name':"cg1.4xlarge",
+        values = { 'name':"cg1.testxlarge",
              'memory_mb':22000,
              'vcpus':8,
              'local_gb':1690,
-             'flavorid':105}
+             'flavorid':999}
         specs = dict(cpu_arch="x86_64",
                         cpu_model="Nehalem",
                         xpu_arch="fermi",
@@ -47,7 +45,7 @@ class InstanceTypeExtraSpecsTestCase(test.TestCase):
 
     def tearDown(self):
         # Remove the instance type from the database
-        db.instance_type_purge(self.context, "cg1.4xlarge")
+        db.instance_type_purge(self.context, "cg1.testxlarge")
         super(InstanceTypeExtraSpecsTestCase, self).tearDown()
 
     def test_instance_type_specs_get(self):
@@ -117,16 +115,16 @@ class InstanceTypeExtraSpecsTestCase(test.TestCase):
                                xpu_arch="fermi",
                                xpus="2",
                                xpu_model="Tesla 2050"))
-        instance_type = db.instance_type_get(
+        instance_type = db.instance_type_get_by_name(
                             self.context,
-                            5)
+                            "m1.small")
         self.assertEquals(instance_type['extra_specs'],
                           dict(cpu_arch="x86_64"))
 
     def test_instance_type_get_by_name_with_extra_specs(self):
         instance_type = db.instance_type_get_by_name(
                             self.context,
-                            "cg1.100xlarge")
+                            "cg1.testxlarge")
         self.assertEquals(instance_type['extra_specs'],
                           dict(cpu_arch="x86_64",
                                cpu_model="Nehalem",
@@ -143,7 +141,7 @@ class InstanceTypeExtraSpecsTestCase(test.TestCase):
     def test_instance_type_get_by_flavor_id_with_extra_specs(self):
         instance_type = db.instance_type_get_by_flavor_id(
                             self.context,
-                            106)
+                            999)
         self.assertEquals(instance_type['extra_specs'],
                           dict(cpu_arch="x86_64",
                                cpu_model="Nehalem",
@@ -171,6 +169,6 @@ class InstanceTypeExtraSpecsTestCase(test.TestCase):
             name = instance_type['name']
             name2specs[name] = instance_type['extra_specs']
 
-        self.assertEquals(name2specs['cg1.100xlarge'], specs)
+        self.assertEquals(name2specs['cg1.testxlarge'], specs)
         self.assertEquals(name2specs['m1.small'],
                           dict(cpu_arch="x86_64"))
