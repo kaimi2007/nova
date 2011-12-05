@@ -495,6 +495,8 @@ DEFINE_bool('allow_resize_to_same_host', False,
 DEFINE_string('stub_network', False,
               'Stub network related code')
 
+DEFINE_string('user', 'root', 'default user within Openstack images.')
+
 DEFINE_integer('reclaim_instance_interval', 0,
                'Interval in seconds for reclaiming deleted instances')
 
