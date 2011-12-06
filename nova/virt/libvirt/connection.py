@@ -570,22 +570,8 @@ class LibvirtConnection(driver.ComputeDriver):
             LOG.info(_('attach_volume: cmd(%s)') % cmd)
             subprocess.Popen(cmd, shell=True)
 
-            # pass the numbers to the LXC instance
-            # run lxc-attach:
-            # sudo lxc-attach -n pid -- mknod -m 777
-            #                 <mountpoint> b <major #> <minor #>
             cmd_lxc = 'sudo lxc-attach -n %s -- ' % init_pid
             # check if 'mountpoint' already exists
-            #cmd = '/bin/ls %s' % mountpoint
-            #if subprocess.call(cmd, shell=True) == 0: # not new
-            #    postfix = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', \
-            #               'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', \
-            #               's', 't', 'u', 'v', 'w', 'x', 'y', 'z']
-            #    for t in range (len(postfix)):
-            #        n_mountpoint = mountpoint + postfix[t]
-            #        cmd = '/bin/ls %s' % n_mountpoint
-            #        if subprocess.call(cmd, shell=True) <> 0: # new
-            #            break;
 
             LOG.info(_('attach_volume: mountpoint(%s)') % mountpoint)
             dev_key = init_pid + mountpoint
@@ -597,23 +583,13 @@ class LibvirtConnection(driver.ComputeDriver):
                             % mountpoint)
 
             # create device(s) for mount
+            # sudo lxc-attach -n pid -- mknod -m 777
+            #                 <mountpoint> b <major #> <minor #>
             cmd = '/bin/mknod -m 777 %s b %d %d '\
                  % (mountpoint, major_num, minor_num)
             cmd = cmd_lxc + cmd
             LOG.info(_('attach_volume: cmd (%s)') % cmd)
             subprocess.call(cmd, shell=True)
-
-            # Allow the disk
-            #perm = "b %d:%d rwm" % (major_num, minor_num)
-            #cmd = "echo %s | sudo tee -a %s" % (perm, dev_whitelist)
-            #LOG.info(_('attach_volume: cmd(%s)') % cmd)
-            #subprocess.call(cmd, shell=True)
-
-            #cmd = '/bin/mknod -m 777 %s b %d %d ' \
-            #     % (mountpoint, major_num, minor_num)
-            #cmd = cmd_lxc + cmd
-            #LOG.info(_('attach_volume: cmd (%s)') % cmd)
-            #subprocess.call(cmd, shell=True)
 
             # create a directory for mount
             found = 0
