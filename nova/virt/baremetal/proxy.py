@@ -61,6 +61,7 @@ from nova.virt import images
 from nova.virt.libvirt import netutils
 from nova.virt.baremetal import nodes
 from nova.virt.baremetal import dom
+from nova.virt.libvirt import utils as libvirt_utils
 
 
 Template = None
@@ -200,7 +201,7 @@ class ProxyConnection(driver.ComputeDriver):
         return timer.start(interval=0.5, now=True)
 
     @exception.wrap_exception
-    def rescue(self, context, instance, callback, network_info):
+    def rescue(self, context, instance, network_info):
         """Loads a VM using rescue images.
 
         A rescue is normally performed when something goes wrong with the
@@ -233,7 +234,7 @@ class ProxyConnection(driver.ComputeDriver):
         return timer.start(interval=0.5, now=True)
 
     @exception.wrap_exception
-    def unrescue(self, instance):
+    def unrescue(self, instance, network_info):
         """Reboot the VM which is being rescued back into primary images.
 
         Because reboot destroys and re-creates instances, unresue should
@@ -242,11 +243,7 @@ class ProxyConnection(driver.ComputeDriver):
         """
         self.reboot(instance)
 
-    @exception.wrap_exception
-    def poll_rescued_instances(self, timeout):
-        pass
-
-    def spawn(self, context, instance, network_info,
+    def spawn(self, context, instance, image_meta, network_info,
               block_device_info=None):
         LOG.debug(_("<============= spawn of baremetal =============>"))
 
@@ -289,18 +286,11 @@ class ProxyConnection(driver.ComputeDriver):
 
         return timer.start(interval=0.5, now=True)
 
-    def _dump_file(self, fpath):
-        fp = open(fpath, 'r+')
-        contents = fp.read()
-        LOG.info(_('Contents of file %(fpath)s: %(contents)r') % locals())
-        return contents
-
     def get_console_output(self, instance):
         console_log = os.path.join(FLAGS.instances_path, instance['name'],
                                    'console.log')
 
-        utils.execute('sudo', 'chown', os.getuid(), console_log,
-                       run_as_root=False)
+        libvirt_utils.chown(console_log, os.getuid())
 
         fd = self._conn.find_domain(instance['name'])
 
@@ -308,7 +298,7 @@ class ProxyConnection(driver.ComputeDriver):
 
         fpath = console_log
 
-        return self._dump_file(fpath)
+        return libvirt_utils.load_file(fpath)
 
     @exception.wrap_exception
     def get_ajax_console(self, instance):
@@ -336,7 +326,7 @@ class ProxyConnection(driver.ComputeDriver):
         if not os.path.exists(target):
             base_dir = os.path.join(FLAGS.instances_path, '_base')
             if not os.path.exists(base_dir):
-                os.mkdir(base_dir)
+                libvirt_utils.ensure_tree(base_dir)
             base = os.path.join(base_dir, fname)
 
             @utils.synchronized(fname)
@@ -347,11 +337,9 @@ class ProxyConnection(driver.ComputeDriver):
             call_if_not_exists(base, fn, *args, **kwargs)
 
             if cow:
-                utils.execute('qemu-img', 'create', '-f', 'qcow2', '-o',
-                              'cluster_size=2M,backing_file=%s' % base,
-                              target)
+                libvirt_utils.create_cow_image(base, target)
             else:
-                utils.execute('cp', base, target)
+                libvirt_utils.copy_image(base, target)
 
     def _fetch_image(self, context, target, image_id, user_id, project_id,
                      size=None):
@@ -371,18 +359,17 @@ class ProxyConnection(driver.ComputeDriver):
                                 fname + suffix)
 
         # ensure directories exist and are writable
-        utils.execute('mkdir', '-p', basepath(suffix=''))
+        libvirt_utils.ensure_tree(basepath(suffix=''))
         utils.execute('chmod', '0777', basepath(suffix=''))
 
         LOG.info(_('instance %s: Creating image'), inst['name'])
 
         if FLAGS.baremetal_type == 'lxc':
             container_dir = '%s/rootfs' % basepath(suffix='')
-            utils.execute('mkdir', '-p', container_dir)
+            libvirt_utils.ensure_tree(container_dir)
 
         # NOTE(vish): No need add the suffix to console.log
-        os.close(os.open(basepath('console.log', ''),
-                         os.O_CREAT | os.O_WRONLY, 0660))
+        libvirt_utils.write_to_file(basepath('console.log', ''), '', 007)
 
         if not disk_images:
             disk_images = {'image_id': inst['image_ref'],
@@ -390,8 +377,8 @@ class ProxyConnection(driver.ComputeDriver):
                            'ramdisk_id': inst['ramdisk_id']}
 
         if disk_images['kernel_id']:
-            fname = '%08x' % int(disk_images['kernel_id'])
-            self._cache_image(fn=self._fetch_image,
+            fname = disk_images['kernel_id']
+            self._cache_image(fn=libvirt_utils.fetch_image,
                               context=context,
                               target=basepath('kernel'),
                               fname=fname,
@@ -400,8 +387,8 @@ class ProxyConnection(driver.ComputeDriver):
                               user_id=inst['user_id'],
                               project_id=inst['project_id'])
             if disk_images['ramdisk_id']:
-                fname = '%08x' % int(disk_images['ramdisk_id'])
-                self._cache_image(fn=self._fetch_image,
+                fname = disk_images['ramdisk_id']
+                self._cache_image(fn=libvirt_utils.fetch_image,
                                   context=context,
                                   target=basepath('ramdisk'),
                                   fname=fname,
@@ -410,7 +397,7 @@ class ProxyConnection(driver.ComputeDriver):
                                   user_id=inst['user_id'],
                                   project_id=inst['project_id'])
 
-        root_fname = hashlib.sha1(disk_images['image_id']).hexdigest()
+        root_fname = hashlib.sha1(str(disk_images['image_id'])).hexdigest()
         size = FLAGS.minimum_root_size
 
         inst_type_id = inst['instance_type_id']
@@ -419,7 +406,7 @@ class ProxyConnection(driver.ComputeDriver):
             size = None
             root_fname += "_sm"
 
-        self._cache_image(fn=self._fetch_image,
+        self._cache_image(fn=libvirt_utils.fetch_image,
                           context=context,
                           target=basepath('root'),
                           fname=root_fname,
