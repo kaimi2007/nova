@@ -310,7 +310,7 @@ class ComputeManager(manager.SchedulerDependentManager):
     def _run_instance(self, context, instance_uuid,
                       requested_networks=None,
                       injected_files=[],
-                      admin_pass=None,
+                      admin_password=None,
                       **kwargs):
         """Launch a new instance with specified options."""
         context = context.elevated()
@@ -325,7 +325,7 @@ class ComputeManager(manager.SchedulerDependentManager):
                 block_device_info = self._prep_block_device(context, instance)
                 instance = self._spawn(context, instance, image_meta,
                                        network_info, block_device_info,
-                                       injected_files, admin_pass)
+                                       injected_files, admin_password)
             except:
                 with utils.save_and_reraise_exception():
                     self._deallocate_network(context, instance)
@@ -1079,6 +1079,8 @@ class ComputeManager(manager.SchedulerDependentManager):
         migration_ref = self.db.migration_get(context, migration_id)
         instance_ref = self.db.instance_get_by_uuid(context,
                 migration_ref.instance_uuid)
+        instance_type_ref = self.db.instance_type_get(context,
+                migration_ref.new_instance_type_id)
 
         self.db.migration_update(context,
                                  migration_id,
@@ -1086,7 +1088,8 @@ class ComputeManager(manager.SchedulerDependentManager):
 
         try:
             disk_info = self.driver.migrate_disk_and_power_off(
-                    context, instance_ref, migration_ref['dest_host'])
+                    context, instance_ref, migration_ref['dest_host'],
+                    instance_type_ref)
         except exception.MigrationError, error:
             LOG.error(_('%s. Setting instance vm_state to ERROR') % (error,))
             self._instance_update(context,
