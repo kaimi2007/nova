@@ -11,5 +11,6 @@ nova.egg-info
 .nova-venv
 *.sqlite
 *.log
+po/*.pot
 bin/nova.conf
 networks/*

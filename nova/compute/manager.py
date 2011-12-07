@@ -980,7 +980,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         network_info = self._get_instance_nw_info(context, instance_ref)
         self.driver.destroy(instance_ref, network_info)
         topic = self.db.queue_get_for(context, FLAGS.compute_topic,
-                instance_ref['host'])
+                migration_ref['source_compute'])
         rpc.cast(context, topic,
                 {'method': 'finish_revert_resize',
                  'args': {'instance_uuid': instance_ref['uuid'],
@@ -1090,12 +1090,13 @@ class ComputeManager(manager.SchedulerDependentManager):
             disk_info = self.driver.migrate_disk_and_power_off(
                     context, instance_ref, migration_ref['dest_host'],
                     instance_type_ref)
-        except exception.MigrationError, error:
-            LOG.error(_('%s. Setting instance vm_state to ERROR') % (error,))
-            self._instance_update(context,
-                                  instance_uuid,
-                                  vm_state=vm_states.ERROR)
-            return
+        except Exception, error:
+            with utils.save_and_reraise_exception():
+                msg = _('%s. Setting instance vm_state to ERROR')
+                LOG.error(msg % error)
+                self._instance_update(context,
+                                      instance_uuid,
+                                      vm_state=vm_states.ERROR)
 
         self.db.migration_update(context,
                                  migration_id,
@@ -1146,9 +1147,17 @@ class ComputeManager(manager.SchedulerDependentManager):
         # Have to look up image here since we depend on disk_format later
         image_meta = _get_image_meta(context, instance_ref['image_ref'])
 
-        self.driver.finish_migration(context, migration_ref, instance_ref,
-                                     disk_info, network_info, image_meta,
-                                     resize_instance)
+        try:
+            self.driver.finish_migration(context, migration_ref, instance_ref,
+                                         disk_info, network_info, image_meta,
+                                         resize_instance)
+        except Exception, error:
+            with utils.save_and_reraise_exception():
+                msg = _('%s. Setting instance vm_state to ERROR')
+                LOG.error(msg % error)
+                self._instance_update(context,
+                                      instance_uuid,
+                                      vm_state=vm_states.ERROR)
 
         self._instance_update(context,
                               instance_uuid,
