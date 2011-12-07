@@ -144,7 +144,8 @@ class ProxyConnection(driver.ComputeDriver):
             infos.append(info)
         return infos
 
-    def destroy(self, instance, cleanup=True):
+    def destroy(self, instance, network_info, block_device_info=None,
+                cleanup=True):
         timer = utils.LoopingCall(f=None)
 
         while True:
