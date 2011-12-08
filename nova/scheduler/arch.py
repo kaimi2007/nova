@@ -263,13 +263,7 @@ class ArchitectureScheduler(driver.Scheduler):
 #        instance_type = request_spec['instance_type']
 
         hosts = self.hosts_up_with_arch(context, topic, request_spec)
-#        hosts = self.hosts_up_with_arch(context, topic, instance_id)
-#        hosts = self.hosts_up_with_arch(context, topic, instance_id,
-#                                        instance_type)
         if not hosts:
-# OLD code
-            #return hosts
-# !OLD
             raise driver.NoValidHost(_("Scheduler was unable to locate a host"
                                        " for this request. Is the appropriate"
                                        " service running?"))
@@ -278,31 +272,37 @@ class ArchitectureScheduler(driver.Scheduler):
 
     def schedule_create_volume(self, context, volume_id, *_args, **_kwargs):
         """Picks a host that is up and has the fewest volumes."""
+        elevated = context.elevated()
+
         volume_ref = db.volume_get(context, volume_id)
-        if (volume_ref['availability_zone']
-            and ':' in volume_ref['availability_zone']
-            and context.is_admin):
-            zone, _x, host = volume_ref['availability_zone'].partition(':')
-            service = db.service_get_by_args(context.elevated(), host,
-                                             'nova-volume')
+        availability_zone = volume_ref.get('availability_zone')
+
+        zone, host = None, None
+        if availability_zone:
+            zone, _x, host = availability_zone.partition(':')
+        if host and context.is_admin:
+            service = db.service_get_by_args(elevated, host, 'nova-volume')
             if not self.service_is_up(service):
-                raise driver.WillNotSchedule(_("Host %s not available") % host)
+                raise exception.WillNotSchedule(host=host)
             driver.cast_to_volume_host(context, host, 'create_volume',
                     volume_id=volume_id, **_kwargs)
             return None
-        results = db.service_get_all_volume_sorted(context)
+
+        results = db.service_get_all_volume_sorted(elevated)
+        if zone:
+            results = [(service, gigs) for (service, gigs) in results
+                       if service['availability_zone'] == zone]
         for result in results:
             (service, volume_gigabytes) = result
             if volume_gigabytes + volume_ref['size'] > FLAGS.max_gigabytes:
-                raise driver.NoValidHost(_("All hosts have too many "
-                                           "gigabytes"))
+                msg = _("All hosts have too many gigabytes")
+                raise exception.NoValidHost(reason=msg)
             if self.service_is_up(service):
                 driver.cast_to_volume_host(context, service['host'],
                         'create_volume', volume_id=volume_id, **_kwargs)
                 return None
-        raise driver.NoValidHost(_("Scheduler was unable to locate a host"
-                                   " for this request. Is the appropriate"
-                                   " service running?"))
+        msg = _("Is the appropriate service running?")
+        raise exception.NoValidHost(reason=msg)
 
     def schedule_run_instance(self, context, request_spec, *_args, **kwargs):
         """Create and run an instance or instances"""
@@ -314,7 +314,7 @@ class ArchitectureScheduler(driver.Scheduler):
             host = self._schedule(context, 'compute', request_spec, **kwargs)
             instance = self.create_instance_db_entry(elevated, request_spec)
             driver.cast_to_compute_host(context, host,
-                    'run_instance', instance_id=instance['id'], **kwargs)
+                    'run_instance', instance_id=instance['uuid'], **kwargs)
             instances.append(driver.encode_instance(instance))
 
         return instances
