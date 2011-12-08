@@ -838,6 +838,7 @@ class ComputeTestCase(BaseTestCase):
         instance_type_ref = db.instance_type_get(context,
                 inst_ref['instance_type_id'])
         self.assertEqual(instance_type_ref['flavorid'], '1')
+        self.assertEqual(inst_ref['host'], migration_ref['source_compute'])
 
         self.compute.terminate_instance(context, inst_ref['uuid'])
 
@@ -1054,8 +1055,8 @@ class ComputeTestCase(BaseTestCase):
         self.compute.driver.test_remove_vm(instance_name)
 
         # Force the compute manager to do its periodic poll
-        error_list = self.compute.periodic_tasks(context.get_admin_context())
-        self.assertFalse(error_list)
+        ctxt = context.get_admin_context()
+        self.compute.periodic_tasks(ctxt, raise_on_error=True)
 
         instances = db.instance_get_all(context.get_admin_context())
         LOG.info(_("After force-killing instances: %s"), instances)
@@ -1504,13 +1505,32 @@ class ComputeAPITestCase(BaseTestCase):
     def test_snapshot(self):
         """Can't backup an instance which is already being backed up."""
         instance = self._create_fake_instance()
-        self.compute_api.snapshot(self.context, instance, None, None)
+        image = self.compute_api.snapshot(self.context, instance, 'snap1',
+                                        {'extra_param': 'value1'})
+
+        self.assertEqual(image['name'], 'snap1')
+        properties = image['properties']
+        self.assertTrue('backup_type' not in properties)
+        self.assertEqual(properties['image_type'], 'snapshot')
+        self.assertEqual(properties['instance_uuid'], instance['uuid'])
+        self.assertEqual(properties['extra_param'], 'value1')
+
         db.instance_destroy(self.context, instance['id'])
 
     def test_backup(self):
         """Can't backup an instance which is already being backed up."""
         instance = self._create_fake_instance()
-        self.compute_api.backup(self.context, instance, None, None, None)
+        image = self.compute_api.backup(self.context, instance,
+                                        'backup1', 'DAILY', None,
+                                        {'extra_param': 'value1'})
+
+        self.assertEqual(image['name'], 'backup1')
+        properties = image['properties']
+        self.assertEqual(properties['backup_type'], 'DAILY')
+        self.assertEqual(properties['image_type'], 'backup')
+        self.assertEqual(properties['instance_uuid'], instance['uuid'])
+        self.assertEqual(properties['extra_param'], 'value1')
+
         db.instance_destroy(self.context, instance['id'])
 
     def test_backup_conflict(self):
@@ -1650,6 +1670,57 @@ class ComputeAPITestCase(BaseTestCase):
             self.compute_api.resize(context, instance, None)
         finally:
             self.compute.terminate_instance(context, instance['uuid'])
+
+    def test_associate_floating_ip(self):
+        """Ensure we can associate a floating ip with an instance"""
+        called = {'associate': False}
+
+        def fake_associate_ip_network_api(self, ctxt, floating_address,
+                                          fixed_address):
+            called['associate'] = True
+
+        nw_info = fake_network.fake_get_instance_nw_info(self.stubs, 1)
+
+        def fake_get_nw_info(self, ctxt, instance):
+            return nw_info
+
+        self.stubs.Set(nova.network.API, 'associate_floating_ip',
+                       fake_associate_ip_network_api)
+
+        self.stubs.Set(nova.network.API, 'get_instance_nw_info',
+                       fake_get_nw_info)
+
+        instance = self._create_fake_instance()
+        instance_uuid = instance['uuid']
+        address = '0.1.2.3'
+
+        self.compute.run_instance(self.context, instance_uuid)
+        self.compute_api.associate_floating_ip(self.context,
+                                               instance,
+                                               address)
+        self.assertTrue(called['associate'])
+        self.compute.terminate_instance(self.context, instance_uuid)
+
+    def test_associate_floating_ip_no_fixed_ip(self):
+        """Should fail if instance has no fixed ip."""
+
+        def fake_get_nw_info(self, ctxt, instance):
+            return []
+
+        self.stubs.Set(nova.network.API, 'get_instance_nw_info',
+                       fake_get_nw_info)
+
+        instance = self._create_fake_instance()
+        instance_uuid = instance['uuid']
+        address = '0.1.2.3'
+
+        self.compute.run_instance(self.context, instance_uuid)
+        self.assertRaises(exception.ApiError,
+                          self.compute_api.associate_floating_ip,
+                          self.context,
+                          instance,
+                          address)
+        self.compute.terminate_instance(self.context, instance_uuid)
 
     def test_get(self):
         """Test get instance"""
