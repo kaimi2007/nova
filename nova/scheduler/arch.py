@@ -263,12 +263,7 @@ class ArchitectureScheduler(driver.Scheduler):
 #        instance_type = request_spec['instance_type']
 
         hosts = self.hosts_up_with_arch(context, topic, request_spec)
-        if not hosts:
-            raise driver.NoValidHost(_("Scheduler was unable to locate a host"
-                                       " for this request. Is the appropriate"
-                                       " service running?"))
-        else:
-            return hosts[int(random.random() * len(hosts))]
+        return hosts[int(random.random() * len(hosts))]
 
     def schedule_create_volume(self, context, volume_id, *_args, **_kwargs):
         """Picks a host that is up and has the fewest volumes."""
