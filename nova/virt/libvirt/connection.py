@@ -695,7 +695,6 @@ class LibvirtConnection(driver.ComputeDriver):
         LOG.info(_('detach_volume: cmd(%s)') % cmd)
         subprocess.call(cmd, shell=True)
 
-
     @exception.wrap_exception()
     def detach_volume(self, connection_info, instance_name, mountpoint):
         virt_dom = self._lookup_by_name(instance_name)
@@ -710,7 +709,7 @@ class LibvirtConnection(driver.ComputeDriver):
                 self.detach_volume_lxc(connection_info, \
                                        instance_name, mountpoint, \
                                        virt_dom)
-            else: 
+            else:
                 xml = self._get_disk_xml(virt_dom.XMLDesc(0), mount_device)
                 if not xml:
                     raise exception.DiskNotFound(location=mount_device)
