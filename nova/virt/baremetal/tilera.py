@@ -331,17 +331,15 @@ class BareMetalNodes(object):
         self.power_mgr(node_id, 3)
         self.sleep_mgr(100)
 
-        chk_act = self.check_activated(node_id, node_ip)
-        if chk_act == 1:
-            try:
-                self.network_set(node_ip, mac_address, ip_address)
-                self.ssh_set(node_ip)
-                self.iptables_set(node_ip, user_data)
-                return power_state.RUNNING
-            except Exception as ex:
-                raise exception.Error(_("Node is unknown error state."))
-        else:
-            return power_state.SHUTDOWN
+        try:
+            self.check_activated(node_id, node_ip)
+            self.network_set(node_ip, mac_address, ip_address)
+            self.ssh_set(node_ip)
+            self.iptables_set(node_ip, user_data)
+            return power_state.RUNNING
+        except Exception as ex:
+            self.deactivate_node(node_id)
+            raise exception.Error(_("Node is unknown error state."))
 
     def get_console_output(self, console_log, node_id):
         """
