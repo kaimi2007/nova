@@ -2246,6 +2246,11 @@ class HostState(object):
         data["hypervisor_type"] = self.connection.get_hypervisor_type()
         data["hypervisor_version"] = self.connection.get_hypervisor_version()
 
+        # Add user-defined capabilities
+        caps = FLAGS.extra_node_capabilities
+        for cap in caps:
+            key, value = cap.split('=')
+            data[key] = value
         self._stats = data
 
         return data
