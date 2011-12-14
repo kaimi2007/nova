@@ -307,6 +307,34 @@ class ComputeManager(manager.SchedulerDependentManager):
 
         return (swap, ephemerals, block_device_mapping)
 
+    def _is_instance_terminated(self, instance_uuid):
+        """Instance in DELETING task state or not found in DB"""
+        context = nova.context.get_admin_context()
+        try:
+            instance = self.db.instance_get_by_uuid(context, instance_uuid)
+            if instance['task_state'] == task_states.DELETING:
+                return True
+            return False
+        except:
+            return True
+
+    def _shutdown_instance_even_if_deleted(self, context, instance_uuid):
+        """Call terminate_instance even for already deleted instances"""
+        LOG.info(_("Going to force the deletion of the vm %(instance_uuid)s, "
+                   "even if it is deleted") % locals())
+        try:
+            try:
+                self.terminate_instance(context, instance_uuid)
+            except exception.InstanceNotFound:
+                LOG.info(_("Instance %(instance_uuid)s did not exist in the "
+                         "DB, but I will shut it down anyway using a special "
+                         "context") % locals())
+                ctxt = nova.context.get_admin_context(True)
+                self.terminate_instance(ctxt, instance_uuid)
+        except Exception as ex:
+            LOG.info(_("exception terminating the instance "
+                     "%(instance_id)s") % locals())
+
     def _run_instance(self, context, instance_uuid,
                       requested_networks=None,
                       injected_files=[],
@@ -330,9 +358,14 @@ class ComputeManager(manager.SchedulerDependentManager):
                 with utils.save_and_reraise_exception():
                     self._deallocate_network(context, instance)
             self._notify_about_instance_usage(instance)
+            if self._is_instance_terminated(instance_uuid):
+                raise exception.InstanceNotFound
         except exception.InstanceNotFound:
             LOG.exception(_("Instance %s not found.") % instance_uuid)
-            return  # assuming the instance was already deleted
+            # assuming the instance was already deleted, run "delete" again
+            # just in case
+            self._shutdown_instance_even_if_deleted(context, instance_uuid)
+            return
         except Exception as e:
             with utils.save_and_reraise_exception():
                 self._instance_update(context, instance_uuid,
@@ -752,8 +785,10 @@ class ComputeManager(manager.SchedulerDependentManager):
                        'instance: %(instance_uuid)s (state: %(state)s '
                        'expected: %(running)s)') % locals())
 
-        self.driver.snapshot(context, instance_ref, image_id)
-        self._instance_update(context, instance_ref['id'], task_state=None)
+        try:
+            self.driver.snapshot(context, instance_ref, image_id)
+        finally:
+            self._instance_update(context, instance_ref['id'], task_state=None)
 
         if image_type == 'snapshot' and rotation:
             raise exception.ImageRotationNotAllowed()
@@ -1745,6 +1780,12 @@ class ComputeManager(manager.SchedulerDependentManager):
         # must be deleted for preparing next block migration
         if block_migration:
             self.driver.destroy(instance_ref, network_info)
+        else:
+            # self.driver.destroy() usually performs  vif unplugging
+            # but we must do it explicitly here when block_migration
+            # is false, as the network devices at the source must be
+            # torn down
+            self.driver.unplug_vifs(instance_ref, network_info)
 
         LOG.info(_('Migrating %(i_name)s to %(dest)s finished successfully.')
                  % locals())

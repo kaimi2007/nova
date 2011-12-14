@@ -952,14 +952,11 @@ def fixed_ip_get_by_network_host(context, network_id, host):
 
 
 @require_context
-def fixed_ip_get_by_virtual_interface(context, vif_id):
+def fixed_ips_by_virtual_interface(context, vif_id):
     result = model_query(context, models.FixedIp, read_deleted="no").\
                  options(joinedload('floating_ips')).\
                  filter_by(virtual_interface_id=vif_id).\
                  all()
-
-    if not result:
-        raise exception.FixedIpNotFoundForVirtualInterface(vif_id=vif_id)
 
     return result
 
@@ -1607,17 +1604,12 @@ def instance_action_create(context, values):
 
 
 @require_admin_context
-def instance_get_actions(context, instance_id):
+def instance_get_actions(context, instance_uuid):
     """Return the actions associated to the given instance id"""
     session = get_session()
-
-    if utils.is_uuid_like(instance_id):
-        instance = instance_get_by_uuid(context, instance_id, session)
-        instance_id = instance.id
-
     return session.query(models.InstanceActions).\
-                        filter_by(instance_id=instance_id).\
-                        all()
+                   filter_by(instance_uuid=instance_uuid).\
+                   all()
 
 
 @require_context

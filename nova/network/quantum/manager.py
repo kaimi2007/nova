@@ -79,6 +79,7 @@ class QuantumManager(manager.FlatManager):
 
         super(QuantumManager, self).__init__(*args, **kwargs)
 
+    def init_host(self):
         # Initialize forwarding rules for anything specified in
         # FLAGS.fixed_range()
         self.driver.init_host()
@@ -86,10 +87,10 @@ class QuantumManager(manager.FlatManager):
         # gateway set.
         networks = self.get_all_networks()
         for net in networks:
-            LOG.debug("Initializing network: %s (cidr: %s, gw: %s)" % (
-                net['label'], net['cidr'], net['gateway']))
             if net['gateway']:
-                self.driver.init_host(net['cidr'])
+                LOG.debug("Initializing NAT: %s (cidr: %s, gw: %s)" % (
+                    net['label'], net['cidr'], net['gateway']))
+                self.driver.add_snat_rule(net['cidr'])
         self.driver.ensure_metadata_ip()
         self.driver.metadata_forward()
 
@@ -135,7 +136,14 @@ class QuantumManager(manager.FlatManager):
             priority, cidr, gateway, gateway_v6,
             cidr_v6, dns1, dns2)
 
+        # Initialize forwarding if gateway is set
+        if gateway:
+            self.driver.add_snat_rule(cidr)
+
         return [{'uuid': quantum_net_id}]
+
+    def _generate_gw_dev(self, network_id):
+        return "gw-" + str(network_id[0:11])
 
     def delete_network(self, context, fixed_range, uuid):
         """Lookup network by uuid, delete both the IPAM
@@ -149,11 +157,28 @@ class QuantumManager(manager.FlatManager):
         if project_id is None:
             # If nothing was found we default to this
             project_id = FLAGS.quantum_default_tenant_id
+        q_tenant_id = project_id or FLAGS.quantum_default_tenant_id
+        # Check for any attached ports on the network and fail the deletion if
+        # there is anything but the gateway port attached.  If it is only the
+        # gateway port, unattach and delete it.
+        ports = self.q_conn.get_attached_ports(q_tenant_id, quantum_net_id)
+        if len(ports) > 1:
+            raise Exception(_("Network %s in use, cannot delete" %
+                              (quantum_net_id)))
+        LOG.debug("Ports currently on network: %s" % ports)
+        for p in ports:
+            if p["attachment"].startswith("gw-"):
+                self.q_conn.detach_and_delete_port(q_tenant_id,
+                                                   quantum_net_id,
+                                                   p['port-id'])
+        # Now we can delete the network
+        self.q_conn.delete_network(q_tenant_id, quantum_net_id)
         LOG.debug("Deleting network for tenant: %s" % project_id)
         self.ipam.delete_subnets_by_net_id(context, quantum_net_id,
                 project_id)
-        q_tenant_id = project_id or FLAGS.quantum_default_tenant_id
-        self.q_conn.delete_network(q_tenant_id, quantum_net_id)
+        # Get rid of dnsmasq
+        dev = self._generate_gw_dev(quantum_net_id)
+        self.driver.kill_dhcp(dev)
 
     def allocate_for_instance(self, context, **kwargs):
         """Called by compute when it is creating a new VM.
@@ -489,13 +514,14 @@ class QuantumManager(manager.FlatManager):
             # Fill in some of the network fields that we would have
             # previously gotten from the network table (they'll be
             # passed to the linux_net functions).
-            network_ref['cidr'] = subnet['cidr']
-            n = IPNetwork(subnet['cidr'])
+            if subnet['cidr']:
+                network_ref['cidr'] = subnet['cidr']
+            n = IPNetwork(network_ref['cidr'])
             network_ref['dhcp_server'] = IPAddress(n.first + 1)
             network_ref['dhcp_start'] = IPAddress(n.first + 2)
             network_ref['broadcast'] = IPAddress(n.broadcast)
             network_ref['gateway'] = IPAddress(n.first + 1)
-            dev = "gw-" + str(network_ref['uuid'][0:11])
+            dev = self._generate_gw_dev(network_ref['uuid'])
             # And remove the dhcp mappings for the subnet
             hosts = self.get_dhcp_hosts_text(context,
                 subnet['network_id'], project_id)
@@ -503,9 +529,6 @@ class QuantumManager(manager.FlatManager):
             # Restart dnsmasq
             self.driver.kill_dhcp(dev)
             self.driver.restart_dhcp(context, dev, network_ref)
-
-            # TODO(bgh): if this is the last instance for the network
-            # then we should actually just kill the dhcp server.
 
     def validate_networks(self, context, networks):
         """Validates that this tenant has quantum networks with the associated

@@ -1413,6 +1413,9 @@ class CloudTestCase(test.TestCase):
                   'max_count': 1, }
         instance_id = self._run_instance(**kwargs)
 
+        result = self.cloud.rescue_instance(self.context, instance_id)
+        self.assertTrue(result)
+
         result = self.cloud.unrescue_instance(self.context, instance_id)
         self.assertTrue(result)
 
@@ -1430,9 +1433,10 @@ class CloudTestCase(test.TestCase):
                   'max_count': 1, }
         instance_id = self._run_instance(**kwargs)
 
-        # a running instance can't be started. It is just ignored.
-        result = self.cloud.start_instances(self.context, [instance_id])
-        self.assertTrue(result)
+        # a running instance can't be started.
+        self.assertRaises(exception.InstanceInvalidState,
+                          self.cloud.start_instances,
+                          self.context, [instance_id])
 
         result = self.cloud.stop_instances(self.context, [instance_id])
         self.assertTrue(result)
@@ -1481,9 +1485,10 @@ class CloudTestCase(test.TestCase):
                   'max_count': 1, }
         instance_id = self._run_instance(**kwargs)
 
-        # a running instance can't be started. It is just ignored.
-        result = self.cloud.start_instances(self.context, [instance_id])
-        self.assertTrue(result)
+        # a running instance can't be started.
+        self.assertRaises(exception.InstanceInvalidState,
+                          self.cloud.start_instances,
+                          self.context, [instance_id])
 
         result = self.cloud.terminate_instances(self.context, [instance_id])
         self.assertTrue(result)
@@ -1495,9 +1500,10 @@ class CloudTestCase(test.TestCase):
                   'max_count': 1, }
         instance_id = self._run_instance(**kwargs)
 
-        # a running instance can't be started. It is just ignored.
-        result = self.cloud.start_instances(self.context, [instance_id])
-        self.assertTrue(result)
+        # a running instance can't be started.
+        self.assertRaises(exception.InstanceInvalidState,
+                          self.cloud.start_instances,
+                          self.context, [instance_id])
 
         result = self.cloud.reboot_instances(self.context, [instance_id])
         self.assertTrue(result)
