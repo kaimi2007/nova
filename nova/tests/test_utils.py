@@ -94,6 +94,7 @@ exit 1
         self.assertRaises(exception.ProcessExecutionError,
                           utils.execute,
                           '/bin/false', check_exit_code=True)
+
     def test_no_retry_on_success(self):
         fd, tmpfilename = tempfile.mkstemp()
         _, tmpfilename2 = tempfile.mkstemp()

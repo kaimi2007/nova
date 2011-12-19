@@ -428,7 +428,8 @@ def compute_node_get_by_xpu_arch(context, xpu_arch, session=None):
                 xpu_arch)
 
     return result
-       
+
+
 def compute_node_get_for_service(context, service_id):
     return model_query(context, models.ComputeNode).\
                     options(joinedload('service')).\

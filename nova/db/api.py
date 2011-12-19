@@ -186,7 +186,8 @@ def compute_node_get_by_cpu_arch(context, cpu_arch, session=None):
 def compute_node_get_by_xpu_arch(context, xpu_arch, session=None):
     """Get a computeNode or raise if it does not exist."""
     return IMPL.compute_node_get_by_xpu_arch(context, xpu_arch)
-       
+
+
 def compute_node_get_for_service(context, service_id):
     """Get all computeNodes."""
     return IMPL.compute_node_get_for_service(context, service_id)
