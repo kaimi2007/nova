@@ -19,6 +19,7 @@
 
 """Handles all requests relating to instances (guest vms)."""
 
+import functools
 import novaclient
 import re
 import time
@@ -51,36 +52,38 @@ flags.DEFINE_integer('find_host_timeout', 30,
                      'Timeout after NN seconds when looking for a host.')
 
 
-def _is_able_to_shutdown(instance):
-    vm_state = instance["vm_state"]
-    instance_uuid = instance["uuid"]
+def check_instance_state(vm_state=None, task_state=None):
+    """Decorator to check VM and/or task state before entry to API functions.
 
-    valid_shutdown_states = [
-        vm_states.ACTIVE,
-        vm_states.REBUILDING,
-        vm_states.BUILDING,
-        vm_states.ERROR,
-    ]
+    If the instance is in the wrong state, the wrapper will raise an exception.
+    """
 
-    if vm_state not in valid_shutdown_states:
-        LOG.warn(_("Instance %(instance_uuid)s cannot be shutdown from "
-                   "its current state: %(vm_state)s.") % locals())
-        return False
+    if vm_state is not None and not isinstance(vm_state, set):
+        vm_state = set(vm_state)
+    if task_state is not None and not isinstance(task_state, set):
+        task_state = set(task_state)
 
-    return True
+    def outer(f):
+        @functools.wraps(f)
+        def inner(self, context, instance, *args, **kw):
+            if vm_state is not None and \
+               instance['vm_state'] not in vm_state:
+                raise exception.InstanceInvalidState(
+                    attr='vm_state',
+                    instance_uuid=instance['uuid'],
+                    state=instance['vm_state'],
+                    method=f.__name__)
+            if task_state is not None and \
+               instance['task_state'] not in task_state:
+                raise exception.InstanceInvalidState(
+                    attr='task_state',
+                    instance_uuid=instance['uuid'],
+                    state=instance['task_state'],
+                    method=f.__name__)
 
-
-def _is_queued_delete(instance):
-    vm_state = instance["vm_state"]
-    instance_uuid = instance["uuid"]
-
-    if vm_state != vm_states.SOFT_DELETE:
-        LOG.warn(_("Instance %(instance_uuid)s is not in a 'soft delete' "
-                   "state. It is currently %(vm_state)s. Action aborted.") %
-                 locals())
-        return False
-
-    return True
+            return f(self, context, instance, *args, **kw)
+        return inner
+    return outer
 
 
 class API(base.Base):
@@ -766,14 +769,12 @@ class API(base.Base):
         rv = self.db.instance_update(context, instance["id"], kwargs)
         return dict(rv.iteritems())
 
+    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.ERROR])
     @scheduler_api.reroute_compute("soft_delete")
     def soft_delete(self, context, instance):
         """Terminate an instance."""
         instance_uuid = instance["uuid"]
         LOG.debug(_("Going to try to soft delete %s"), instance_uuid)
-
-        if not _is_able_to_shutdown(instance):
-            return
 
         # NOTE(jerdfelt): The compute daemon handles reclaiming instances
         # that are in soft delete. If there is no host assigned, there is
@@ -806,23 +807,22 @@ class API(base.Base):
         else:
             self.db.instance_destroy(context, instance['id'])
 
+    # NOTE(jerdfelt): The API implies that only ACTIVE and ERROR are
+    # allowed but the EC2 API appears to allow from RESCUED and STOPPED
+    # too
+    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.ERROR,
+                                    vm_states.RESCUED, vm_states.STOPPED])
     @scheduler_api.reroute_compute("delete")
     def delete(self, context, instance):
         """Terminate an instance."""
         LOG.debug(_("Going to try to terminate %s"), instance["uuid"])
 
-        if not _is_able_to_shutdown(instance):
-            return
-
         self._delete(context, instance)
 
+    @check_instance_state(vm_state=[vm_states.SOFT_DELETE])
     @scheduler_api.reroute_compute("restore")
     def restore(self, context, instance):
         """Restore a previously deleted (but not reclaimed) instance."""
-
-        if not _is_queued_delete(instance):
-            return
-
         self.update(context,
                     instance,
                     vm_state=vm_states.ACTIVE,
@@ -837,23 +837,19 @@ class API(base.Base):
             self._cast_compute_message('power_on_instance', context,
                                        instance['uuid'], host)
 
+    @check_instance_state(vm_state=[vm_states.SOFT_DELETE])
     @scheduler_api.reroute_compute("force_delete")
     def force_delete(self, context, instance):
         """Force delete a previously deleted (but not reclaimed) instance."""
-
-        if not _is_queued_delete(instance):
-            return
-
         self._delete(context, instance)
 
+    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.RESCUED],
+                          task_state=[None, task_states.RESIZE_VERIFY])
     @scheduler_api.reroute_compute("stop")
     def stop(self, context, instance):
         """Stop an instance."""
         instance_uuid = instance["uuid"]
         LOG.debug(_("Going to try to stop %s"), instance_uuid)
-
-        if not _is_able_to_shutdown(instance):
-            return
 
         self.update(context,
                     instance,
@@ -867,6 +863,7 @@ class API(base.Base):
             self._cast_compute_message('stop_instance', context,
                     instance_uuid, host)
 
+    @check_instance_state(vm_state=[vm_states.STOPPED])
     def start(self, context, instance):
         """Start an instance."""
         vm_state = instance["vm_state"]
@@ -1078,6 +1075,8 @@ class API(base.Base):
         raise exception.Error(_("Unable to find host for Instance %s")
                                 % instance_uuid)
 
+    @check_instance_state(vm_state=[vm_states.ACTIVE],
+                          task_state=[None, task_states.RESIZE_VERIFY])
     @scheduler_api.reroute_compute("backup")
     def backup(self, context, instance, name, backup_type, rotation,
                extra_properties=None):
@@ -1095,6 +1094,8 @@ class API(base.Base):
                             extra_properties=extra_properties)
         return recv_meta
 
+    @check_instance_state(vm_state=[vm_states.ACTIVE],
+                          task_state=[None, task_states.RESIZE_VERIFY])
     @scheduler_api.reroute_compute("snapshot")
     def snapshot(self, context, instance, name, extra_properties=None):
         """Snapshot the given instance.
@@ -1125,12 +1126,6 @@ class API(base.Base):
         task_state = instance["task_state"]
         instance_uuid = instance['uuid']
 
-        if task_state == task_states.IMAGE_BACKUP:
-            raise exception.InstanceBackingUp(instance_uuid=instance_uuid)
-
-        if task_state == task_states.IMAGE_SNAPSHOT:
-            raise exception.InstanceSnapshotting(instance_uuid=instance_uuid)
-
         properties = {
             'instance_uuid': instance_uuid,
             'user_id': str(context.user_id),
@@ -1150,6 +1145,8 @@ class API(base.Base):
                                    params=params)
         return recv_meta
 
+    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.RESCUED],
+                          task_state=[None, task_states.RESIZE_VERIFY])
     @scheduler_api.reroute_compute("reboot")
     def reboot(self, context, instance, reboot_type):
         """Reboot the given instance."""
@@ -1164,15 +1161,13 @@ class API(base.Base):
                                    instance['uuid'],
                                    params={'reboot_type': reboot_type})
 
+    @check_instance_state(vm_state=[vm_states.ACTIVE],
+                          task_state=[None, task_states.RESIZE_VERIFY])
     @scheduler_api.reroute_compute("rebuild")
     def rebuild(self, context, instance, image_href, admin_password,
                 name=None, metadata=None, files_to_inject=None):
         """Rebuild the given instance with the provided metadata."""
         name = name or instance["display_name"]
-
-        if instance["vm_state"] != vm_states.ACTIVE:
-            msg = _("Instance must be active to rebuild.")
-            raise exception.RebuildRequiresActiveInstance(msg)
 
         files_to_inject = files_to_inject or []
         metadata = metadata or {}
@@ -1199,6 +1194,8 @@ class API(base.Base):
                                    instance["uuid"],
                                    params=rebuild_params)
 
+    @check_instance_state(vm_state=[vm_states.ACTIVE],
+                          task_state=[task_states.RESIZE_VERIFY])
     @scheduler_api.reroute_compute("revert_resize")
     def revert_resize(self, context, instance):
         """Reverts a resize, deleting the 'new' instance in the process."""
@@ -1223,6 +1220,8 @@ class API(base.Base):
         self.db.migration_update(context, migration_ref['id'],
                                  {'status': 'reverted'})
 
+    @check_instance_state(vm_state=[vm_states.ACTIVE],
+                          task_state=[task_states.RESIZE_VERIFY])
     @scheduler_api.reroute_compute("confirm_resize")
     def confirm_resize(self, context, instance):
         """Confirms a migration/resize and deletes the 'old' instance."""
@@ -1249,6 +1248,8 @@ class API(base.Base):
         self.db.instance_update(context, instance['uuid'],
                 {'host': migration_ref['dest_compute'], })
 
+    @check_instance_state(vm_state=[vm_states.ACTIVE],
+                          task_state=[None])
     @scheduler_api.reroute_compute("resize")
     def resize(self, context, instance, flavor_id=None):
         """Resize (ie, migrate) a running instance.
@@ -1330,6 +1331,8 @@ class API(base.Base):
         # didn't raise so this is the correct zone
         self.network_api.add_network_to_project(context, project_id)
 
+    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.RESCUED],
+                          task_state=[None, task_states.RESIZE_VERIFY])
     @scheduler_api.reroute_compute("pause")
     def pause(self, context, instance):
         """Pause the given instance."""
@@ -1340,6 +1343,7 @@ class API(base.Base):
                     task_state=task_states.PAUSING)
         self._cast_compute_message('pause_instance', context, instance_uuid)
 
+    @check_instance_state(vm_state=[vm_states.PAUSED])
     @scheduler_api.reroute_compute("unpause")
     def unpause(self, context, instance):
         """Unpause the given instance."""
@@ -1375,8 +1379,10 @@ class API(base.Base):
 
     def get_actions(self, context, instance):
         """Retrieve actions for the given instance."""
-        return self.db.instance_get_actions(context, instance['id'])
+        return self.db.instance_get_actions(context, instance['uuid'])
 
+    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.RESCUED],
+                          task_state=[None, task_states.RESIZE_VERIFY])
     @scheduler_api.reroute_compute("suspend")
     def suspend(self, context, instance):
         """Suspend the given instance."""
@@ -1387,6 +1393,7 @@ class API(base.Base):
                     task_state=task_states.SUSPENDING)
         self._cast_compute_message('suspend_instance', context, instance_uuid)
 
+    @check_instance_state(vm_state=[vm_states.SUSPENDED])
     @scheduler_api.reroute_compute("resume")
     def resume(self, context, instance):
         """Resume the given instance."""
@@ -1397,6 +1404,8 @@ class API(base.Base):
                     task_state=task_states.RESUMING)
         self._cast_compute_message('resume_instance', context, instance_uuid)
 
+    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.STOPPED],
+                          task_state=[None, task_states.RESIZE_VERIFY])
     @scheduler_api.reroute_compute("rescue")
     def rescue(self, context, instance, rescue_password=None):
         """Rescue the given instance."""
@@ -1412,6 +1421,7 @@ class API(base.Base):
                                    instance['uuid'],
                                    params=rescue_params)
 
+    @check_instance_state(vm_state=[vm_states.RESCUED])
     @scheduler_api.reroute_compute("unrescue")
     def unrescue(self, context, instance):
         """Unrescue the given instance."""

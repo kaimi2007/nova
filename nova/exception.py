@@ -250,6 +250,11 @@ class InvalidParameterValue(Invalid):
     message = _("%(err)s")
 
 
+class InstanceInvalidState(Invalid):
+    message = _("Instance %(instance_uuid)s in %(attr)s %(state)s. Cannot "
+                "%(method)s while the instance is in this state.")
+
+
 class InstanceNotRunning(Invalid):
     message = _("Instance %(instance_id)s is not running.")
 
@@ -513,10 +518,6 @@ class FixedIpNotFoundForNetworkHost(FixedIpNotFound):
 
 class FixedIpNotFoundForSpecificInstance(FixedIpNotFound):
     message = _("Instance %(instance_id)s doesn't have fixed ip '%(ip)s'.")
-
-
-class FixedIpNotFoundForVirtualInterface(FixedIpNotFound):
-    message = _("Virtual interface %(vif_id)s has zero associated fixed ips.")
 
 
 class FixedIpNotFoundForHost(FixedIpNotFound):

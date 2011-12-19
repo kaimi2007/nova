@@ -94,7 +94,11 @@ class FakeConnection(driver.ComputeDriver):
         return info_list
 
     def plug_vifs(self, instance, network_info):
-        """Plugin VIFs into networks."""
+        """Plug VIFs into networks."""
+        pass
+
+    def unplug_vifs(self, instance, network_info):
+        """Unplug VIFs from networks."""
         pass
 
     def spawn(self, context, instance, image_meta,
@@ -111,7 +115,8 @@ class FakeConnection(driver.ComputeDriver):
     def reboot(self, instance, network_info, reboot_type):
         pass
 
-    def get_host_ip_addr(self):
+    @staticmethod
+    def get_host_ip_addr():
         return '192.168.0.1'
 
     def resize(self, instance, flavor):

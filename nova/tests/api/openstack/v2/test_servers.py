@@ -1182,6 +1182,11 @@ class ServersControllerTest(test.TestCase):
         body = dict(reboot=dict(type="HARD"))
         req = fakes.HTTPRequest.blank(
             '/v2/fake/servers/%s/action' % FAKE_UUID)
+        # Assume the instance is in ACTIVE state before calling reboot
+        self.stubs.Set(nova.db, 'instance_get',
+                       return_server_with_state(vm_states.ACTIVE))
+        self.stubs.Set(nova.db, 'instance_get_by_uuid',
+                       return_server_with_state(vm_states.ACTIVE))
         self.controller.action(req, FAKE_UUID, body)
         self.test_server_actions()
 
@@ -1220,11 +1225,13 @@ class ServersControllerTest(test.TestCase):
 
         self.server_delete_called = False
 
+        new_return_server = return_server_with_attributes(
+            vm_state=vm_states.ACTIVE)
+        self.stubs.Set(nova.db, 'instance_get', new_return_server)
+
         def instance_destroy_mock(context, id):
             self.server_delete_called = True
-
-        self.stubs.Set(nova.db, 'instance_destroy',
-            instance_destroy_mock)
+        self.stubs.Set(nova.db, 'instance_destroy', instance_destroy_mock)
 
         self.controller.delete(req, FAKE_UUID)
 

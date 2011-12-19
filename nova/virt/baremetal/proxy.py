@@ -485,7 +485,7 @@ class ProxyConnection(driver.ComputeDriver):
                                % locals()))
             try:
                 disk.inject_data(injection_path, key, net, metadata,
-                                 partition=target_partition,
+                                 partition=None,  # target_partition,
                                  nbd=FLAGS.use_cow_images,
                                  tune2fs=tune2fs)
 
