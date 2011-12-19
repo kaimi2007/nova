@@ -4,8 +4,9 @@ export NOVA_PROJECT_ID=demo
 export NOVA_USERNAME=demo
 export NOVA_PASSWORD=guest
 export NOVA_API_KEY=$NOVA_PASSWORD
-#export NOVA_URL="http://65.114.169.38:8774/v1.1/"
-export NOVA_AUTH_URL=http://$HOST_IP:5000/v2.0/
+##export NOVA_URL="http://65.114.169.38:8774/v1.1/"
+export NOVA_URL="http://$HOST_IP:5000/v2.0/"
+#export NOVA_AUTH_URL=http://$HOST_IP:5000/v2.0/
 export NOVA_VERSION=1.1
 export NOVA_REGION_NAME=RegionOne
 
