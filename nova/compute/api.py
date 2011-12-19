@@ -310,7 +310,7 @@ class API(base.Base):
                     context, instance_type, image, base_options,
                     security_group, block_device_mapping)
             # Tells scheduler we created the instance already.
-            base_options['id'] = instance['id']
+            base_options['uuid'] = instance['uuid']
             rpc_method = rpc.cast
         else:
             # We need to wait for the scheduler to create the instance
@@ -1555,7 +1555,7 @@ class API(base.Base):
         # accommodate the info containing floating as well as fixed ip
         # addresses
         fixed_ip_addrs = []
-        for info in self.network_api.get_instance_nw_info(context,
+        for info in self.network_api.get_instance_nw_info(context.elevated(),
                                                           instance):
             ips = info[1]['ips']
             fixed_ip_addrs.extend([ip_dict['ip'] for ip_dict in ips])
@@ -1601,3 +1601,8 @@ class API(base.Base):
         self.db.instance_metadata_update(context, instance['id'],
                                          _metadata, True)
         return _metadata
+
+    def get_instance_faults(self, context, instances):
+        """Get all faults for a list of instance uuids."""
+        uuids = [instance['uuid'] for instance in instances]
+        return self.db.instance_fault_get_by_instance_uuids(context, uuids)

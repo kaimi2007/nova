@@ -201,10 +201,7 @@ class LibvirtConnection(driver.ComputeDriver):
 
     def __init__(self, read_only):
         super(LibvirtConnection, self).__init__()
-        self.libvirt_uri = self.get_uri()
 
-        self.libvirt_xml = open(FLAGS.libvirt_xml_template).read()
-        self.cpuinfo_xml = open(FLAGS.cpuinfo_xml_template).read()
         self._host_state = None
         self._wrapped_conn = None
         self.read_only = read_only
@@ -242,10 +239,26 @@ class LibvirtConnection(driver.ComputeDriver):
         # NOTE(nsokolov): moved instance restarting to ComputeManager
         pass
 
+    @property
+    def libvirt_xml(self):
+        if not hasattr(self, '_libvirt_xml_cache_info'):
+            self._libvirt_xml_cache_info = {}
+
+        return utils.read_cached_file(FLAGS.libvirt_xml_template,
+                self._libvirt_xml_cache_info)
+
+    @property
+    def cpuinfo_xml(self):
+        if not hasattr(self, '_cpuinfo_xml_cache_info'):
+            self._cpuinfo_xml_cache_info = {}
+
+        return utils.read_cached_file(FLAGS.cpuinfo_xml_template,
+                self._cpuinfo_xml_cache_info)
+
     def _get_connection(self):
         if not self._wrapped_conn or not self._test_connection():
-            LOG.debug(_('Connecting to libvirt: %s'), self.libvirt_uri)
-            self._wrapped_conn = self._connect(self.libvirt_uri,
+            LOG.debug(_('Connecting to libvirt: %s'), self.uri)
+            self._wrapped_conn = self._connect(self.uri,
                                                self.read_only)
         return self._wrapped_conn
     _conn = property(_get_connection)
@@ -262,7 +275,8 @@ class LibvirtConnection(driver.ComputeDriver):
                 return False
             raise
 
-    def get_uri(self):
+    @property
+    def uri(self):
         if FLAGS.libvirt_type == 'uml':
             uri = FLAGS.libvirt_uri or 'uml:///system'
         elif FLAGS.libvirt_type == 'xen':
@@ -1660,7 +1674,13 @@ class LibvirtConnection(driver.ComputeDriver):
         total = 0
         for dom_id in self._conn.listDomainsID():
             dom = self._conn.lookupByID(dom_id)
-            total += len(dom.vcpus()[1])
+            vcpus = dom.vcpus()
+            if vcpus is None:
+                # dom.vcpus is not implemented for lxc, but returning 0 for
+                # a used count is hardly useful for something measuring usage
+                total += 1
+            else:
+                total += len(vcpus[1])
         return total
 
     def get_memory_mb_used(self):

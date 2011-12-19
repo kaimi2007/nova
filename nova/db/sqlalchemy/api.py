@@ -428,6 +428,12 @@ def compute_node_get_by_xpu_arch(context, xpu_arch, session=None):
                 xpu_arch)
 
     return result
+       
+def compute_node_get_for_service(context, service_id):
+    return model_query(context, models.ComputeNode).\
+                    options(joinedload('service')).\
+                    filter_by(service_id=service_id).\
+                    first()
 
 
 @require_admin_context
@@ -1015,7 +1021,7 @@ def virtual_interface_update(context, vif_id, values):
 def _virtual_interface_query(context, session=None):
     return model_query(context, models.VirtualInterface, session=session,
                        read_deleted="yes").\
-                      options(joinedload('fixed_ips'))
+                       options(joinedload_all('fixed_ips.floating_ips'))
 
 
 @require_context
@@ -4097,16 +4103,27 @@ def sm_volume_get_all(context):
 
 
 def instance_fault_create(context, values):
-    """Create a new Instance Fault."""
+    """Create a new InstanceFault."""
     fault_ref = models.InstanceFault()
     fault_ref.update(values)
     fault_ref.save()
-    return fault_ref
+    return dict(fault_ref.iteritems())
 
 
-def instance_fault_get_by_instance(context, instance_uuid):
-    """Get first instance fault with the given instance uuid."""
-    return model_query(context, models.InstanceFault, read_deleted='no').\
-                filter_by(instance_uuid=instance_uuid).\
-                order_by(desc("created_at")).\
-                first()
+def instance_fault_get_by_instance_uuids(context, instance_uuids):
+    """Get all instance faults for the provided instance_uuids."""
+    rows = model_query(context, models.InstanceFault, read_deleted='no').\
+                       filter(models.InstanceFault.instance_uuid.in_(
+                           instance_uuids)).\
+                       order_by(desc("created_at")).\
+                       all()
+
+    output = {}
+    for instance_uuid in instance_uuids:
+        output[instance_uuid] = []
+
+    for row in rows:
+        data = dict(row.iteritems())
+        output[row['instance_uuid']].append(data)
+
+    return output

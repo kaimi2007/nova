@@ -20,6 +20,7 @@
 Tests For Compute
 """
 from copy import copy
+import datetime
 from webob import exc
 
 import mox
@@ -1867,7 +1868,8 @@ class ComputeAPITestCase(BaseTestCase):
 
         nw_info = fake_network.fake_get_instance_nw_info(self.stubs, 1)
 
-        def fake_get_nw_info(self, ctxt, instance):
+        def fake_get_nw_info(cls, ctxt, instance):
+            self.assertTrue(ctxt.is_admin)
             return nw_info
 
         self.stubs.Set(nova.network.API, 'associate_floating_ip',
@@ -2274,6 +2276,32 @@ class ComputeAPITestCase(BaseTestCase):
         self.compute_api.delete_instance_metadata(_context, instance, 'key2')
         metadata = self.compute_api.get_instance_metadata(_context, instance)
         self.assertEqual(metadata, {'key3': 'value3'})
+
+        db.instance_destroy(_context, instance['uuid'])
+
+    def test_get_instance_faults(self):
+        """Get an instances latest fault"""
+        instance = self._create_fake_instance()
+
+        fault_fixture = {
+                'code': 404,
+                'instance_uuid': instance['uuid'],
+                'message': "HTTPNotFound",
+                'details': "Stock details for test",
+                'created_at': datetime.datetime(2010, 10, 10, 12, 0, 0),
+            }
+
+        def return_fault(_ctxt, instance_uuids):
+            return dict.fromkeys(instance_uuids, [fault_fixture])
+
+        self.stubs.Set(nova.db,
+                       'instance_fault_get_by_instance_uuids',
+                       return_fault)
+
+        _context = context.get_admin_context()
+        output = self.compute_api.get_instance_faults(_context, [instance])
+        expected = {instance['uuid']: [fault_fixture]}
+        self.assertEqual(output, expected)
 
         db.instance_destroy(_context, instance['uuid'])
 
