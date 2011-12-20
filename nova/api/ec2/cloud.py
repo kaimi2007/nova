@@ -1162,7 +1162,7 @@ class CloudController(object):
             i['privateIpAddress'] = fixed_ip
             i['publicDnsName'] = floating_ip
             i['ipAddress'] = floating_ip or fixed_ip
-            i['dnsName'] = i['publicDnsName'] or i['ipAddress'] 
+            i['dnsName'] = i['ipAddress'] or i['privateDnsName']
             i['keyName'] = instance['key_name']
 
             if context.is_admin:
