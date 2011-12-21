@@ -616,6 +616,15 @@ class LibvirtConnection(driver.ComputeDriver):
         LOG.info(_('attach_volume: cmd (%s)') % cmd)
         subprocess.call(cmd, shell=True)
 
+        # change owner
+        user = FLAGS.user
+        user = user.rsplit("/")
+        user = user[len(user)-1]
+        cmd = '/bin/chown %s /vmnt' % user
+        cmd = cmd_lxc + cmd
+        LOG.info(_('attach_volume: cmd (%s)') % cmd)
+        subprocess.call(cmd, shell=True)
+
         # create a sub-directory for mount
         found = 0
         for n in range(0, 100):
@@ -644,6 +653,16 @@ class LibvirtConnection(driver.ComputeDriver):
             raise Exception(_('cannot find mounting directories'))
 
         lxc_mounts[dev_key] = dir_name
+        cmd = cmd_lxc + '/bin/chmod 777 ' + mountpoint
+        LOG.info(_('attach_volume: cmd (%s)') % cmd)
+        subprocess.call(cmd, shell=True)
+
+        # change owner
+        cmd = '/bin/chown %s %s ' % (user, dir_name)
+        cmd = cmd_lxc + cmd
+        LOG.info(_('attach_volume: cmd (%s)') % cmd)
+        subprocess.call(cmd, shell=True)
+
         # mount
         cmd = cmd_lxc + ' /bin/mount ' + mountpoint + ' ' + dir_name
         LOG.info(_('attach_volume: cmd (%s)') % cmd)
@@ -726,6 +745,8 @@ class LibvirtConnection(driver.ComputeDriver):
             #             migration, so we should still logout even if
             #             the instance doesn't exist here anymore.
             virt_dom = self._lookup_by_name(instance_name)
+            LOG.info(_('detach_volume: FLAGS.libvirt(%s)') \
+                     % FLAGS.libvirt_type)
             if FLAGS.libvirt_type == 'lxc':
                 self.detach_volume_lxc(connection_info, \
                                        instance_name, mountpoint, \
