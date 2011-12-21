@@ -42,15 +42,27 @@ class Console_output(extensions.ExtensionDescriptor):
     def get_console_output(self, input_dict, req, server_id):
         """Get text console output."""
         context = req.environ['nova.context']
-        length = input_dict['os-getConsoleOutput'].get('length')
+
         try:
-            return self.compute_api.get_console_output(context,
-                                                       server_id,
-                                                       length)
+            instance = self.compute_api.routing_get(context, server_id)
+        except exception.NotFound:
+            raise webob.exc.HTTPNotFound(_('Instance not found'))
+
+        try:
+            length = input_dict['os-getConsoleOutput'].get('length')
+        except (TypeError, KeyError):
+            raise webob.exc.HTTPBadRequest(_('Malformed request body'))
+
+        try:
+            output = self.compute_api.get_console_output(context,
+                                                         instance,
+                                                         length)
         except exception.ApiError, e:
             raise webob.exc.HTTPBadRequest(explanation=e.message)
         except exception.NotAuthorized, e:
             raise webob.exc.HTTPUnauthorized()
+
+        return {'output': output}
 
     def get_actions(self):
         """Return the actions the extension adds, as required by contract."""
