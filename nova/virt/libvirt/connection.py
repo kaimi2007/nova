@@ -616,15 +616,6 @@ class LibvirtConnection(driver.ComputeDriver):
         LOG.info(_('attach_volume: cmd (%s)') % cmd)
         subprocess.call(cmd, shell=True)
 
-        # change owner
-        user = FLAGS.user
-        user = user.rsplit("/")
-        user = user[len(user)-1]
-        cmd = '/bin/chown %s /vmnt' % user
-        cmd = cmd_lxc + cmd
-        LOG.info(_('attach_volume: cmd (%s)') % cmd)
-        subprocess.call(cmd, shell=True)
-
         # create a sub-directory for mount
         found = 0
         for n in range(0, 100):
@@ -657,14 +648,24 @@ class LibvirtConnection(driver.ComputeDriver):
         LOG.info(_('attach_volume: cmd (%s)') % cmd)
         subprocess.call(cmd, shell=True)
 
+        # mount
+        cmd = cmd_lxc + ' /bin/mount ' + mountpoint + ' ' + dir_name
+        LOG.info(_('attach_volume: cmd (%s)') % cmd)
+        p = subprocess.Popen(cmd, shell=True, \
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        x = p.communicate()
+
         # change owner
-        cmd = '/bin/chown %s %s ' % (user, dir_name)
+        user = FLAGS.user
+        user = user.rsplit("/")
+        user = user[len(user)-1]
+        cmd = '/bin/chown %s /vmnt' % user
         cmd = cmd_lxc + cmd
         LOG.info(_('attach_volume: cmd (%s)') % cmd)
         subprocess.call(cmd, shell=True)
 
-        # mount
-        cmd = cmd_lxc + ' /bin/mount ' + mountpoint + ' ' + dir_name
+        cmd = '/bin/chown %s %s ' % (user, dir_name)
+        cmd = cmd_lxc + cmd
         LOG.info(_('attach_volume: cmd (%s)') % cmd)
         subprocess.call(cmd, shell=True)
 
@@ -724,7 +725,9 @@ class LibvirtConnection(driver.ComputeDriver):
         cmd_lxc = 'sudo lxc-attach -n %s -- ' % str(init_pid)
         cmd = cmd_lxc + ' /bin/umount ' + dir_name
         LOG.info(_('detach_volume: cmd(%s)') % cmd)
-        subprocess.call(cmd, shell=True)
+        p = subprocess.Popen(cmd, shell=True, \
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        x = p.communicate()
         cmd = cmd_lxc + ' /bin/rmdir  ' + dir_name
         LOG.info(_('detach_volume: cmd(%s)') % cmd)
         subprocess.call(cmd, shell=True)
