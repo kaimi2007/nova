@@ -658,7 +658,7 @@ class LibvirtConnection(driver.ComputeDriver):
         # change owner
         user = FLAGS.user
         user = user.rsplit("/")
-        user = user[len(user)-1]
+        user = user[len(user) - 1]
         cmd = '/bin/chown %s /vmnt' % user
         cmd = cmd_lxc + cmd
         LOG.info(_('attach_volume: cmd (%s)') % cmd)

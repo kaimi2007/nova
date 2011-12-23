@@ -14,6 +14,7 @@ NUM_NETWORKS=1
 #NOVA_DIR=$DIR/$DIRNAME
 NOVA_DIR=/usr/local/nova
 NETWORK_SIZE=256
+USER=/home/nova
 
 # We assume that IP address of br100 of cloud controller is 10.99.1.1
 # The followings should be changed if your network settings are different from this.
@@ -177,6 +178,9 @@ if [ "$CMD" == "compute-init" ]; then
 	fi
         if [ "$LIBVIRT_TYPE" != "lxc" ]; then
 		echo "--use_cow_images"  >>$NOVA_DIR/bin/nova.conf
+        fi
+	if [ "$ARCH" != "tilera" ]; then
+		echo "--user=$USER" >>$NOVA_DIR/bin/nova.conf
         fi
 fi
 

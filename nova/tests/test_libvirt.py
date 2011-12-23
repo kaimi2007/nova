@@ -193,6 +193,7 @@ class LibvirtVolumeTestCase(test.TestCase):
         libvirt_driver.disconnect_volume(connection_info, mount_device)
         connection_info = vol_driver.terminate_connection(vol, '127.0.0.1')
 
+
 class CacheConcurrencyTestCase(test.TestCase):
     def setUp(self):
         super(CacheConcurrencyTestCase, self).setUp()
