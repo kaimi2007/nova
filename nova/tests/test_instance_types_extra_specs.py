@@ -119,7 +119,8 @@ class InstanceTypeExtraSpecsTestCase(test.TestCase):
                             self.context,
                             "m1.small")
         self.assertEquals(instance_type['extra_specs'],
-                          dict(cpu_arch="x86_64"))
+                          dict(hypervisor_type="QEMU",
+                               cpu_arch="x86_64"))
 
     def test_instance_type_get_by_name_with_extra_specs(self):
         instance_type = db.instance_type_get_by_name(
@@ -136,7 +137,8 @@ class InstanceTypeExtraSpecsTestCase(test.TestCase):
                             self.context,
                             "m1.small")
         self.assertEquals(instance_type['extra_specs'],
-                          dict(cpu_arch="x86_64"))
+                          dict(hypervisor_type="QEMU",
+                               cpu_arch="x86_64"))
 
     def test_instance_type_get_by_flavor_id_with_extra_specs(self):
         instance_type = db.instance_type_get_by_flavor_id(
@@ -153,7 +155,8 @@ class InstanceTypeExtraSpecsTestCase(test.TestCase):
                             self.context,
                             2)
         self.assertEquals(instance_type['extra_specs'],
-                          dict(cpu_arch="x86_64"))
+                          dict(hypervisor_type="QEMU",
+                               cpu_arch="x86_64"))
 
     def test_instance_type_get_all(self):
         specs = dict(cpu_arch="x86_64",
@@ -171,4 +174,5 @@ class InstanceTypeExtraSpecsTestCase(test.TestCase):
 
         self.assertEquals(name2specs['cg1.testxlarge'], specs)
         self.assertEquals(name2specs['m1.small'],
-                          dict(cpu_arch="x86_64"))
+                          dict(hypervisor_type="QEMU",
+                               cpu_arch="x86_64"))
