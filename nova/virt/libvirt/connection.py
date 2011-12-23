@@ -638,8 +638,28 @@ class LibvirtConnection(driver.ComputeDriver):
             raise Exception(_('cannot find mounting directories'))
 
         lxc_mounts[dev_key] = dir_name
+        cmd = cmd_lxc + '/bin/chmod 777 ' + mountpoint
+        LOG.info(_('attach_volume: cmd (%s)') % cmd)
+        subprocess.call(cmd, shell=True)
+
         # mount
         cmd = cmd_lxc + ' /bin/mount ' + mountpoint + ' ' + dir_name
+        LOG.info(_('attach_volume: cmd (%s)') % cmd)
+        p = subprocess.Popen(cmd, shell=True, \
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        x = p.communicate()
+
+        # change owner
+        user = FLAGS.user
+        user = user.rsplit("/")
+        user = user[len(user) - 1]
+        cmd = '/bin/chown %s /vmnt' % user
+        cmd = cmd_lxc + cmd
+        LOG.info(_('attach_volume: cmd (%s)') % cmd)
+        subprocess.call(cmd, shell=True)
+
+        cmd = '/bin/chown %s %s ' % (user, dir_name)
+        cmd = cmd_lxc + cmd
         LOG.info(_('attach_volume: cmd (%s)') % cmd)
         subprocess.call(cmd, shell=True)
 
@@ -699,7 +719,9 @@ class LibvirtConnection(driver.ComputeDriver):
         cmd_lxc = 'sudo lxc-attach -n %s -- ' % str(init_pid)
         cmd = cmd_lxc + ' /bin/umount ' + dir_name
         LOG.info(_('detach_volume: cmd(%s)') % cmd)
-        subprocess.call(cmd, shell=True)
+        p = subprocess.Popen(cmd, shell=True, \
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        x = p.communicate()
         cmd = cmd_lxc + ' /bin/rmdir  ' + dir_name
         LOG.info(_('detach_volume: cmd(%s)') % cmd)
         subprocess.call(cmd, shell=True)
@@ -720,6 +742,8 @@ class LibvirtConnection(driver.ComputeDriver):
             #             migration, so we should still logout even if
             #             the instance doesn't exist here anymore.
             virt_dom = self._lookup_by_name(instance_name)
+            LOG.info(_('detach_volume: FLAGS.libvirt(%s)') \
+                     % FLAGS.libvirt_type)
             if FLAGS.libvirt_type == 'lxc':
                 self.detach_volume_lxc(connection_info, \
                                        instance_name, mountpoint, \
