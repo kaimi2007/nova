@@ -20,13 +20,18 @@
 """Handles all requests relating to instances (guest vms)."""
 
 import functools
-import novaclient
 import re
 import time
 
+import novaclient
 import webob.exc
 
 from nova import block_device
+from nova.compute import instance_types
+from nova.compute import power_state
+from nova.compute import task_states
+from nova.compute import vm_states
+from nova.db import base
 from nova import exception
 from nova import flags
 import nova.image
@@ -34,14 +39,9 @@ from nova import log as logging
 from nova import network
 from nova import quota
 from nova import rpc
+from nova.scheduler import api as scheduler_api
 from nova import utils
 from nova import volume
-from nova.compute import instance_types
-from nova.compute import power_state
-from nova.compute import task_states
-from nova.compute import vm_states
-from nova.scheduler import api as scheduler_api
-from nova.db import base
 
 
 LOG = logging.getLogger('nova.compute.api')
@@ -233,7 +233,7 @@ class API(base.Base):
         if 'properties' in image and 'vm_mode' in image['properties']:
             vm_mode = image['properties']['vm_mode']
 
-        # If instance doesn't have auto_disk_config overriden by request, use
+        # If instance doesn't have auto_disk_config overridden by request, use
         # whatever the image indicates
         if auto_disk_config is None:
             if ('properties' in image and
@@ -926,7 +926,7 @@ class API(base.Base):
     def get_all(self, context, search_opts=None):
         """Get all instances filtered by one of the given parameters.
 
-        If there is no filter and the context is an admin, it will retreive
+        If there is no filter and the context is an admin, it will retrieve
         all instances in the system.
 
         Deleted instances will be returned by default, unless there is a
@@ -1194,25 +1194,22 @@ class API(base.Base):
     @check_instance_state(vm_state=[vm_states.ACTIVE],
                           task_state=[None, task_states.RESIZE_VERIFY])
     @scheduler_api.reroute_compute("rebuild")
-    def rebuild(self, context, instance, image_href, admin_password,
-                name=None, metadata=None, files_to_inject=None):
-        """Rebuild the given instance with the provided metadata."""
-        name = name or instance["display_name"]
+    def rebuild(self, context, instance, image_href, admin_password, **kwargs):
+        """Rebuild the given instance with the provided attributes."""
 
-        files_to_inject = files_to_inject or []
-        metadata = metadata or {}
-
+        files_to_inject = kwargs.pop('files_to_inject', [])
         self._check_injected_file_quota(context, files_to_inject)
+
+        metadata = kwargs.get('metadata', {})
         self._check_metadata_properties_quota(context, metadata)
 
         self.update(context,
                     instance,
-                    metadata=metadata,
-                    display_name=name,
                     image_ref=image_href,
                     vm_state=vm_states.REBUILDING,
                     task_state=None,
-                    progress=0)
+                    progress=0,
+                    **kwargs)
 
         rebuild_params = {
             "new_pass": admin_password,

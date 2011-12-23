@@ -21,10 +21,8 @@ Management class for VM-related functions (spawn, reboot, etc).
 
 import base64
 import json
-import os
 import pickle
 import random
-import subprocess
 import sys
 import time
 import uuid
@@ -38,7 +36,6 @@ from nova import context as nova_context
 from nova import db
 from nova import exception
 from nova import flags
-from nova import ipv6
 from nova import log as logging
 from nova import utils
 from nova.virt import driver
@@ -97,7 +94,8 @@ class VMOps(object):
         self._session = session
         self.poll_rescue_last_ran = None
         VMHelper.XenAPI = self.XenAPI
-        self.vif_driver = utils.import_object(FLAGS.xenapi_vif_driver)
+        vif_impl = utils.import_class(FLAGS.xenapi_vif_driver)
+        self.vif_driver = vif_impl(xenapi_session=self._session)
         self._product_version = product_version
 
     def list_instances(self):
@@ -1432,8 +1430,8 @@ class VMOps(object):
         self._session.call_xenapi("VM.get_record", vm_ref)
 
         for device, (network, info) in enumerate(network_info):
-            vif_rec = self.vif_driver.plug(self._session,
-                    vm_ref, instance, device, network, info)
+            vif_rec = self.vif_driver.plug(instance, network, info,
+                                           vm_ref=vm_ref, device=device)
             network_ref = vif_rec['network']
             LOG.debug(_('Creating VIF for VM %(vm_ref)s,' \
                 ' network %(network_ref)s.') % locals())
@@ -1443,8 +1441,8 @@ class VMOps(object):
 
     def plug_vifs(self, instance, network_info):
         """Set up VIF networking on the host."""
-        for (network, mapping) in network_info:
-            self.vif_driver.plug(self._session, instance, network, mapping)
+        for device, (network, mapping) in enumerate(network_info):
+            self.vif_driver.plug(instance, network, mapping, device=device)
 
     def unplug_vifs(self, instance, network_info):
         if network_info:

@@ -17,6 +17,7 @@
 
 import sqlalchemy
 from sqlalchemy import select, Column, ForeignKey, Integer, String
+from migrate import ForeignKeyConstraint
 
 from nova import log as logging
 
@@ -47,13 +48,6 @@ def upgrade(migrate_engine):
     except Exception:
         uuid_column.drop()
         raise
-
-    if migrate_engine.name == "mysql":
-        try:
-            migrate_engine.execute("ALTER TABLE instance_actions " \
-                "DROP FOREIGN KEY instance_actions_ibfk_1;")
-        except Exception:  # Don't care, just fail silently.
-            pass
 
     instance_actions.c.instance_id.drop()
 
