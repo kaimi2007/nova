@@ -24,7 +24,6 @@ import routes
 import webob.dec
 import webob.exc
 
-from nova.api.openstack.v2 import accounts
 from nova.api.openstack.v2 import consoles
 from nova.api.openstack.v2 import extensions
 from nova.api.openstack.v2 import flavors
@@ -34,7 +33,6 @@ from nova.api.openstack.v2 import ips
 from nova.api.openstack.v2 import limits
 from nova.api.openstack.v2 import servers
 from nova.api.openstack.v2 import server_metadata
-from nova.api.openstack.v2 import users
 from nova.api.openstack.v2 import versions
 from nova.api.openstack.v2 import zones
 from nova.api.openstack import wsgi
@@ -134,14 +132,6 @@ class APIRouter(base_wsgi.Router):
     def _setup_routes(self, mapper):
         if FLAGS.allow_admin_api:
             LOG.debug(_("Including admin operations in API."))
-
-            mapper.resource("user", "users",
-                        controller=users.create_resource(),
-                        collection={'detail': 'GET'})
-
-            mapper.resource("account", "accounts",
-                            controller=accounts.create_resource(),
-                            collection={'detail': 'GET'})
 
             mapper.resource("zone", "zones",
                         controller=zones.create_resource(),
