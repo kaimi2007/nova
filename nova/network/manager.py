@@ -148,7 +148,7 @@ class RPCAllocateFixedIP(object):
             if not network['multi_host']:
                 host = network['host']
             # NOTE(vish): if there is no network host, set one
-            if host == None:
+            if host is None:
                 host = rpc.call(context, FLAGS.network_topic,
                                 {'method': 'set_network_host',
                                  'args': {'network_ref': network}})
@@ -988,6 +988,8 @@ class NetworkManager(manager.SchedulerDependentManager):
 
             net['dns1'] = dns1
             net['dns2'] = dns2
+
+            net['project_id'] = kwargs.get('project_id')
 
             if num_networks > 1:
                 net['label'] = '%s_%d' % (label, index)
