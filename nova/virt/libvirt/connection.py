@@ -933,7 +933,7 @@ class LibvirtConnection(driver.ComputeDriver):
                                          'unrescue.xml')
         libvirt_utils.write_to_file(unrescue_xml_path, unrescue_xml)
 
-        xml = self.to_xml(instance, network_info, rescue=True)
+        xml = self.to_xml(instance, network_info, image_meta, rescue=True)
         rescue_images = {
             'image_id': FLAGS.rescue_image_id or instance['image_ref'],
             'kernel_id': FLAGS.rescue_kernel_id or instance['kernel_id'],
@@ -975,7 +975,7 @@ class LibvirtConnection(driver.ComputeDriver):
     @exception.wrap_exception()
     def spawn(self, context, instance, image_meta, network_info,
               block_device_info=None):
-        xml = self.to_xml(instance, network_info, False,
+        xml = self.to_xml(instance, network_info, image_meta, False,
                           block_device_info=block_device_info)
         self.firewall_driver.setup_basic_filtering(instance, network_info)
         self.firewall_driver.prepare_instance_filter(instance, network_info)
@@ -1399,7 +1399,7 @@ class LibvirtConnection(driver.ComputeDriver):
         LOG.debug(_("block_device_list %s"), block_device_list)
         return block_device.strip_dev(mount_device) in block_device_list
 
-    def _prepare_xml_info(self, instance, network_info, rescue,
+    def _prepare_xml_info(self, instance, network_info, image_meta, rescue,
                           block_device_info=None):
         block_device_mapping = driver.block_device_info_get_mapping(
             block_device_info)
@@ -1415,6 +1415,11 @@ class LibvirtConnection(driver.ComputeDriver):
             driver_type = 'qcow2'
         else:
             driver_type = 'raw'
+
+        if image_meta and image_meta.get('disk_format') == 'iso':
+            root_device_type = 'cdrom'
+        else:
+            root_device_type = 'disk'
 
         volumes = []
         for vol in block_device_mapping:
@@ -1452,6 +1457,7 @@ class LibvirtConnection(driver.ComputeDriver):
                     'rescue': rescue,
                     'disk_prefix': self._disk_prefix,
                     'driver_type': driver_type,
+                    'root_device_type': root_device_type,
                     'vif_type': FLAGS.libvirt_vif_type,
                     'nics': nics,
                     'ebs_root': ebs_root,
@@ -1507,12 +1513,12 @@ class LibvirtConnection(driver.ComputeDriver):
             xml_info['disk'] = xml_info['basepath'] + "/disk"
         return xml_info
 
-    def to_xml(self, instance, network_info, rescue=False,
+    def to_xml(self, instance, network_info, image_meta=None, rescue=False,
                block_device_info=None):
         # TODO(termie): cache?
         LOG.debug(_('instance %s: starting toXML method'), instance['name'])
-        xml_info = self._prepare_xml_info(instance, network_info, rescue,
-                                          block_device_info)
+        xml_info = self._prepare_xml_info(instance, network_info, image_meta,
+                                          rescue, block_device_info)
         xml = str(Template(self.libvirt_xml, searchList=[xml_info]))
         LOG.debug(_('instance %s: finished toXML method'), instance['name'])
         return xml
