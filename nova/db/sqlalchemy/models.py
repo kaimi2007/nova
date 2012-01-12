@@ -268,7 +268,6 @@ class InstanceInfoCache(BASE, NovaBase):
     # text column used for storing a json object of network data for api
     network_info = Column(Text)
 
-    # this is all uuid based, we have them might as well start using them
     instance_id = Column(String(36), ForeignKey('instances.uuid'),
                                      nullable=False, unique=True)
     instance = relationship(Instance,
@@ -934,7 +933,7 @@ def register_models():
     """
     from sqlalchemy import create_engine
     models = (Service, Instance, InstanceActions, InstanceTypes,
-              Volume, ExportDevice, IscsiTarget, FixedIp, FloatingIp,
+              Volume, IscsiTarget, FixedIp, FloatingIp,
               Network, SecurityGroup, SecurityGroupIngressRule,
               SecurityGroupInstanceAssociation, AuthToken, User,
               Project, Certificate, ConsolePool, Console, Zone,
