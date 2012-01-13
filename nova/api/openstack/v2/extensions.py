@@ -162,6 +162,7 @@ class RequestExtensionController(object):
             pre_handler(req)
 
         res = req.get_response(self.application)
+        res.environ = req.environ
 
         # Don't call extensions if the main application returned an
         # unsuccessful status
@@ -551,6 +552,17 @@ class ExtensionsXMLSerializer(xmlutil.XMLTemplateSerializer):
 
     def show(self):
         return ExtensionTemplate()
+
+
+def require_admin(f):
+    @functools.wraps(f)
+    def wraps(self, req, *args, **kwargs):
+        if 'nova.context' in req.environ and\
+           req.environ['nova.context'].is_admin:
+            return f(self, req, *args, **kwargs)
+        else:
+            raise exception.AdminRequired()
+    return wraps
 
 
 def wrap_errors(fn):

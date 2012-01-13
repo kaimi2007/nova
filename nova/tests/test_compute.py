@@ -28,7 +28,9 @@ import mox
 import webob.exc
 
 import nova
+import nova.common.policy
 from nova import compute
+import nova.compute.api
 from nova.compute import instance_types
 from nova.compute import manager as compute_manager
 from nova.compute import power_state
@@ -42,8 +44,9 @@ from nova.image import fake as fake_image
 from nova import log as logging
 from nova.network.quantum import client as quantum_client
 from nova.notifier import test_notifier
-from nova.scheduler import driver as scheduler_driver
+import nova.policy
 from nova import rpc
+from nova.scheduler import driver as scheduler_driver
 from nova import test
 from nova.tests import fake_network
 from nova import utils
@@ -111,7 +114,8 @@ class BaseTestCase(test.TestCase):
         self.compute = utils.import_object(FLAGS.compute_manager)
         self.user_id = 'fake'
         self.project_id = 'fake'
-        self.context = context.RequestContext(self.user_id, self.project_id)
+        self.context = context.RequestContext(self.user_id,
+                                              self.project_id)
         test_notifier.NOTIFICATIONS = []
         self.mox = mox.Mox()
         self.total_waits = 0
@@ -817,7 +821,6 @@ class ComputeTestCase(BaseTestCase):
                           instance['uuid'])
         self.compute.terminate_instance(self.context, instance['uuid'])
 
-    @test.skip_test('test fails: lp892005')
     def test_instance_set_to_error_on_uncaught_exception(self):
         """Test that instance is set to error state when exception is raised"""
         instance = self._create_fake_instance()
@@ -846,7 +849,6 @@ class ComputeTestCase(BaseTestCase):
 
         self.compute.terminate_instance(self.context, instance['uuid'])
 
-    @test.skip_test('test fails: lp892005')
     def test_network_is_deallocated_on_spawn_failure(self):
         """When a spawn fails the network must be deallocated"""
         instance = self._create_fake_instance()
@@ -878,7 +880,9 @@ class ComputeTestCase(BaseTestCase):
         instance_uuid = instance['uuid']
         self.compute.run_instance(self.context, instance_uuid)
 
-        non_admin_context = context.RequestContext(None, None, is_admin=False)
+        non_admin_context = context.RequestContext(None,
+                                                   None,
+                                                   is_admin=False)
 
         # decorator should return False (fail) with locked nonadmin context
         self.compute.lock_instance(self.context, instance_uuid)
@@ -1358,6 +1362,15 @@ class ComputeAPITestCase(BaseTestCase):
             'properties': {'kernel_id': 1, 'ramdisk_id': 1},
         }
 
+    def _run_instance(self):
+        instance = self._create_fake_instance()
+        instance_uuid = instance['uuid']
+        self.compute.run_instance(self.context, instance_uuid)
+
+        instance = db.instance_get_by_uuid(self.context, instance_uuid)
+        self.assertEqual(instance['task_state'], None)
+        return instance, instance_uuid
+
     def test_create_with_too_little_ram(self):
         """Test an instance type with too little memory"""
 
@@ -1554,13 +1567,45 @@ class ComputeAPITestCase(BaseTestCase):
 
         db.instance_destroy(self.context, instance['id'])
 
-    def test_delete(self):
+    def test_start_shutdown(self):
+        def check_state(instance_uuid, power_state_, vm_state_, task_state_):
+            instance = db.instance_get_by_uuid(self.context, instance_uuid)
+            self.assertEqual(instance['power_state'], power_state_)
+            self.assertEqual(instance['vm_state'], vm_state_)
+            self.assertEqual(instance['task_state'], task_state_)
+
+        def start_check_state(instance_uuid,
+                              power_state_, vm_state_, task_state_):
+            instance = db.instance_get_by_uuid(self.context, instance_uuid)
+            self.compute_api.start(self.context, instance)
+            check_state(instance_uuid, power_state_, vm_state_, task_state_)
+
         instance = self._create_fake_instance()
         instance_uuid = instance['uuid']
         self.compute.run_instance(self.context, instance_uuid)
 
-        instance = db.instance_get_by_uuid(self.context, instance_uuid)
-        self.assertEqual(instance['task_state'], None)
+        check_state(instance_uuid, power_state.RUNNING, vm_states.ACTIVE, None)
+
+        # NOTE(yamahata): emulate compute.manager._sync_power_state() that
+        # the instance is shutdown by itself
+        db.instance_update(self.context, instance_uuid,
+                           {'power_state': power_state.NOSTATE,
+                            'vm_state': vm_states.SHUTOFF})
+        check_state(instance_uuid, power_state.NOSTATE, vm_states.SHUTOFF,
+                    None)
+
+        start_check_state(instance_uuid,
+                          power_state.NOSTATE, vm_states.SHUTOFF, None)
+
+        db.instance_update(self.context, instance_uuid,
+                           {'shutdown_terminate': False})
+        start_check_state(instance_uuid, power_state.NOSTATE,
+                          vm_states.STOPPED, task_states.STARTING)
+
+        db.instance_destroy(self.context, instance['id'])
+
+    def test_delete(self):
+        instance, instance_uuid = self._run_instance()
 
         self.compute_api.delete(self.context, instance)
 
@@ -1569,18 +1614,37 @@ class ComputeAPITestCase(BaseTestCase):
 
         db.instance_destroy(self.context, instance['id'])
 
-    def test_delete_soft(self):
-        instance = self._create_fake_instance()
-        instance_uuid = instance['uuid']
-        self.compute.run_instance(self.context, instance['uuid'])
+    def test_delete_fail(self):
+        instance, instance_uuid = self._run_instance()
+
+        instance = db.instance_update(self.context, instance_uuid,
+                                      {'disable_terminate': True})
+        self.compute_api.delete(self.context, instance)
 
         instance = db.instance_get_by_uuid(self.context, instance_uuid)
         self.assertEqual(instance['task_state'], None)
+
+        db.instance_destroy(self.context, instance['id'])
+
+    def test_delete_soft(self):
+        instance, instance_uuid = self._run_instance()
 
         self.compute_api.soft_delete(self.context, instance)
 
         instance = db.instance_get_by_uuid(self.context, instance_uuid)
         self.assertEqual(instance['task_state'], task_states.POWERING_OFF)
+
+        db.instance_destroy(self.context, instance['id'])
+
+    def test_delete_soft_fail(self):
+        instance, instance_uuid = self._run_instance()
+
+        instance = db.instance_update(self.context, instance_uuid,
+                                      {'disable_terminate': True})
+        self.compute_api.soft_delete(self.context, instance)
+
+        instance = db.instance_get_by_uuid(self.context, instance_uuid)
+        self.assertEqual(instance['task_state'], None)
 
         db.instance_destroy(self.context, instance['id'])
 
@@ -1621,7 +1685,7 @@ class ComputeAPITestCase(BaseTestCase):
         instance = self._create_fake_instance()
         instance_uuid = instance['uuid']
         instance_id = instance['id']
-        self.compute.run_instance(self.context, instance_uuid )
+        self.compute.run_instance(self.context, instance_uuid)
         db.instance_update(self.context, instance_id,
                            {'vm_state': vm_states.SUSPENDED})
         instance = db.instance_get(self.context, instance_id)
@@ -2770,7 +2834,7 @@ class ComputeAPITestCase(BaseTestCase):
     def test_attach_volume_invalid(self):
         self.assertRaises(exception.ApiError,
                 self.compute_api.attach_volume,
-                None,
+                self.context,
                 None,
                 None,
                 '/dev/invalid')
@@ -2921,3 +2985,112 @@ class ComputeAPITestCase(BaseTestCase):
         self.compute_api.inject_file(self.context, instance,
                                      "/tmp/test", "File Contents")
         db.instance_destroy(self.context, instance['id'])
+
+
+class ComputePolicyTestCase(BaseTestCase):
+
+    def setUp(self):
+        super(ComputePolicyTestCase, self).setUp()
+        nova.policy.reset()
+        nova.policy.init()
+
+        self.compute_api = compute.API()
+
+    def tearDown(self):
+        super(ComputePolicyTestCase, self).tearDown()
+        nova.policy.reset()
+
+    def _set_rules(self, rules):
+        nova.common.policy.set_brain(nova.common.policy.HttpBrain(rules))
+
+    def test_actions_are_prefixed(self):
+        self.mox.StubOutWithMock(nova.policy, 'enforce')
+        nova.policy.enforce(self.context, 'compute:reboot', {})
+        self.mox.ReplayAll()
+        nova.compute.api.check_policy(self.context, 'reboot', {})
+        self.mox.UnsetStubs()
+        self.mox.VerifyAll()
+
+    def test_wrapped_method(self):
+        instance = self._create_fake_instance()
+        self.compute.run_instance(self.context, instance['uuid'])
+
+        # force delete to fail
+        rules = {"compute:delete": [["false:false"]]}
+        self._set_rules(rules)
+
+        self.assertRaises(exception.PolicyNotAuthorized,
+                          self.compute_api.delete, self.context, instance)
+
+        # reset rules to allow deletion
+        rules = {"compute:delete": []}
+        self._set_rules(rules)
+
+        self.compute_api.delete(self.context, instance)
+
+    def test_create_fail(self):
+        rules = {"compute:create": [["false:false"]]}
+        self._set_rules(rules)
+
+        self.assertRaises(exception.PolicyNotAuthorized,
+                          self.compute_api.create, self.context, '1', '1')
+
+    def test_create_attach_volume_fail(self):
+        rules = {
+            "compute:create": [],
+            "compute:create:attach_network": [["false:false"]],
+            "compute:create:attach_volume": [],
+        }
+        self._set_rules(rules)
+
+        self.assertRaises(exception.PolicyNotAuthorized,
+                          self.compute_api.create, self.context, '1', '1',
+                          requested_networks='blah',
+                          block_device_mapping='blah')
+
+    def test_create_attach_network_fail(self):
+        rules = {
+            "compute:create": [],
+            "compute:create:attach_network": [],
+            "compute:create:attach_volume": [["false:false"]],
+        }
+        self._set_rules(rules)
+
+        self.assertRaises(exception.PolicyNotAuthorized,
+                          self.compute_api.create, self.context, '1', '1',
+                          requested_networks='blah',
+                          block_device_mapping='blah')
+
+    def test_get_fail(self):
+        instance = self._create_fake_instance()
+
+        rules = {
+            "compute:get": [["false:false"]],
+        }
+        self._set_rules(rules)
+
+        self.assertRaises(exception.PolicyNotAuthorized,
+                          self.compute_api.get, self.context, instance['uuid'])
+
+    def test_get_all_fail(self):
+        rules = {
+            "compute:get_all": [["false:false"]],
+        }
+        self._set_rules(rules)
+
+        self.assertRaises(exception.PolicyNotAuthorized,
+                          self.compute_api.get_all, self.context)
+
+    def test_get_instance_faults(self):
+        instance1 = self._create_fake_instance()
+        instance2 = self._create_fake_instance()
+        instances = [instance1, instance2]
+
+        rules = {
+            "compute:get_instance_faults": [["false:false"]],
+        }
+        self._set_rules(rules)
+
+        self.assertRaises(exception.PolicyNotAuthorized,
+                          self.compute_api.get_instance_faults,
+                          self.context, instances)

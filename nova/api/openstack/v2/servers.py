@@ -28,7 +28,6 @@ from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova import compute
 from nova.compute import instance_types
-from nova import network
 from nova import exception
 from nova import flags
 from nova import log as logging
@@ -353,7 +352,6 @@ class Controller(wsgi.Controller):
     def __init__(self, **kwargs):
         super(Controller, self).__init__(**kwargs)
         self.compute_api = compute.API()
-        self.network_api = network.API()
 
     @wsgi.serializers(xml=MinimalServersTemplate)
     def index(self, req):
@@ -826,6 +824,9 @@ class Controller(wsgi.Controller):
         except exception.MigrationNotFound:
             msg = _("Instance has not been resized.")
             raise exc.HTTPBadRequest(explanation=msg)
+        except exception.InstanceInvalidState as state_error:
+            common.raise_http_conflict_for_instance_invalid_state(state_error,
+                    'confirmResize')
         except Exception, e:
             LOG.exception(_("Error in confirm-resize %s"), e)
             raise exc.HTTPBadRequest()
@@ -839,6 +840,9 @@ class Controller(wsgi.Controller):
         except exception.MigrationNotFound:
             msg = _("Instance has not been resized.")
             raise exc.HTTPBadRequest(explanation=msg)
+        except exception.InstanceInvalidState as state_error:
+            common.raise_http_conflict_for_instance_invalid_state(state_error,
+                    'revertResize')
         except Exception, e:
             LOG.exception(_("Error in revert-resize %s"), e)
             raise exc.HTTPBadRequest()
@@ -862,6 +866,9 @@ class Controller(wsgi.Controller):
 
         try:
             self.compute_api.reboot(context, instance, reboot_type)
+        except exception.InstanceInvalidState as state_error:
+            common.raise_http_conflict_for_instance_invalid_state(state_error,
+                    'reboot')
         except Exception, e:
             LOG.exception(_("Error in reboot %s"), e)
             raise exc.HTTPUnprocessableEntity()
@@ -880,6 +887,9 @@ class Controller(wsgi.Controller):
         except exception.CannotResizeToSameSize:
             msg = _("Resize requires a change in size.")
             raise exc.HTTPBadRequest(explanation=msg)
+        except exception.InstanceInvalidState as state_error:
+            common.raise_http_conflict_for_instance_invalid_state(state_error,
+                    'resize')
 
         return webob.Response(status_int=202)
 
@@ -893,9 +903,8 @@ class Controller(wsgi.Controller):
         except exception.NotFound:
             raise exc.HTTPNotFound()
         except exception.InstanceInvalidState as state_error:
-            state = state_error.kwargs.get("state")
-            msg = _("Unable to delete instance when %s") % state
-            raise exc.HTTPConflict(explanation=msg)
+            common.raise_http_conflict_for_instance_invalid_state(state_error,
+                    'delete')
 
     def _get_key_name(self, req, body):
         if 'server' in body:
@@ -1009,10 +1018,9 @@ class Controller(wsgi.Controller):
                                      image_href,
                                      password,
                                      **kwargs)
-
-        except exception.RebuildRequiresActiveInstance:
-            msg = _("Instance must be active to rebuild.")
-            raise exc.HTTPConflict(explanation=msg)
+        except exception.InstanceInvalidState as state_error:
+            common.raise_http_conflict_for_instance_invalid_state(state_error,
+                    'rebuild')
         except exception.InstanceNotFound:
             msg = _("Instance could not be found")
             raise exc.HTTPNotFound(explanation=msg)
@@ -1064,9 +1072,9 @@ class Controller(wsgi.Controller):
                                               instance,
                                               image_name,
                                               extra_properties=props)
-        except exception.InstanceBusy:
-            msg = _("Server is currently creating an image. Please wait.")
-            raise webob.exc.HTTPConflict(explanation=msg)
+        except exception.InstanceInvalidState as state_error:
+            common.raise_http_conflict_for_instance_invalid_state(state_error,
+                    'createImage')
 
         # build location of newly-created image entity
         image_id = str(image['id'])

@@ -17,6 +17,7 @@
 
 import datetime
 
+import routes
 import webob
 import webob.dec
 import webob.request
@@ -318,6 +319,14 @@ class HTTPRequest(webob.Request):
         return out
 
 
+class TestRouter(wsgi.Router):
+    def __init__(self, controller):
+        mapper = routes.Mapper()
+        mapper.resource("test", "tests",
+                        controller=os_wsgi.Resource(controller))
+        super(TestRouter, self).__init__(mapper)
+
+
 class FakeAuthDatabase(object):
     data = {}
 
@@ -560,6 +569,8 @@ def stub_instance(id, user_id='fake', project_id='fake', host=None,
         "progress": progress,
         "auto_disk_config": auto_disk_config,
         "name": "instance-%s" % id,
-        "fixed_ips": fixed_ips}
+        "fixed_ips": fixed_ips,
+        "shutdown_terminate": True,
+        "disable_terminate": False}
 
     return instance

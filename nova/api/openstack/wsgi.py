@@ -840,6 +840,9 @@ class Resource(wsgi.Application):
         response = None
         try:
             action_result = self.dispatch(meth, request, action_args)
+        except exception.NotAuthorized as ex:
+            msg = unicode(ex)
+            response = Fault(webob.exc.HTTPUnauthorized(explanation=msg))
         except TypeError as ex:
             LOG.exception(ex)
             response = Fault(webob.exc.HTTPBadRequest())
@@ -919,7 +922,7 @@ class Fault(webob.exc.HTTPException):
             403: "resizeNotAllowed",
             404: "itemNotFound",
             405: "badMethod",
-            409: "inProgress",
+            409: "inProgress",  # FIXME(comstud): This doesn't seem right
             413: "overLimit",
             415: "badMediaType",
             501: "notImplemented",
