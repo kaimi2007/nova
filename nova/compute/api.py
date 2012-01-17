@@ -111,12 +111,8 @@ class API(base.Base):
         self.image_service = image_service or \
                 nova.image.get_default_image_service()
 
-        if not network_api:
-            network_api = network.API()
-        self.network_api = network_api
-        if not volume_api:
-            volume_api = volume.API()
-        self.volume_api = volume_api
+        self.network_api = network_api or network.API()
+        self.volume_api = volume_api or volume.API()
         super(API, self).__init__(**kwargs)
 
     def _check_injected_file_quota(self, context, injected_files):
@@ -1199,20 +1195,21 @@ class API(base.Base):
             'image_type': image_type,
         }
 
+        sent_meta = {'name': name, 'is_public': False}
+
         if image_type == 'backup':
             properties['backup_type'] = backup_type
 
-        properties.update(extra_properties or {})
-        sent_meta = {'name': name, 'is_public': False,
-                     'status': 'creating', 'properties': properties}
-
-        if image_type == 'snapshot':
+        elif image_type == 'snapshot':
             min_ram, min_disk = self._get_minram_mindisk_params(context,
                                                                 instance)
             if min_ram is not None:
                 sent_meta['min_ram'] = min_ram
             if min_disk is not None:
                 sent_meta['min_disk'] = min_disk
+
+        properties.update(extra_properties or {})
+        sent_meta['properties'] = properties
 
         recv_meta = self.image_service.create(context, sent_meta)
         params = {'image_id': recv_meta['id'], 'image_type': image_type,
@@ -1420,16 +1417,6 @@ class API(base.Base):
                                    context,
                                    instance_uuid,
                                    params=dict(address=address))
-
-    #TODO(tr3buchet): how to run this in the correct zone?
-    def add_network_to_project(self, context, project_id):
-        """Force adds a network to the project."""
-        # this will raise if zone doesn't know about project so the decorator
-        # can catch it and pass it down
-        self.db.project_get(context, project_id)
-
-        # didn't raise so this is the correct zone
-        self.network_api.add_network_to_project(context, project_id)
 
     @wrap_check_policy
     @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.SHUTOFF,
@@ -1643,7 +1630,8 @@ class API(base.Base):
         if not re.match("^/dev/x{0,1}[a-z]d[a-z]+$", device):
             raise exception.ApiError(_("Invalid device specified: %s. "
                                      "Example device: /dev/vdb") % device)
-        self.volume_api.check_attach(context, volume_id=volume_id)
+        volume = self.volume_api.get(context, volume_id)
+        self.volume_api.check_attach(context, volume)
         host = instance['host']
         rpc.cast(context,
                  self.db.queue_get_for(context, FLAGS.compute_topic, host),
@@ -1660,7 +1648,8 @@ class API(base.Base):
 
         check_policy(context, 'detach_volume', instance)
 
-        self.volume_api.check_detach(context, volume_id=volume_id)
+        volume = self.volume_api.get(context, volume_id)
+        self.volume_api.check_detach(context, volume)
         host = instance['host']
         rpc.cast(context,
                  self.db.queue_get_for(context, FLAGS.compute_topic, host),

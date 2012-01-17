@@ -1194,6 +1194,10 @@ class ComputeTestCase(BaseTestCase):
         self.mox.StubOutWithMock(rpc, 'call')
         rpc.call(c, FLAGS.volume_topic, {"method": "check_for_export",
                                          "args": {'instance_id': instance_id}})
+
+        self.mox.StubOutWithMock(self.compute.driver, 'get_instance_disk_info')
+        self.compute.driver.get_instance_disk_info(inst_ref.name)
+
         rpc.call(c, topic, {"method": "pre_live_migration",
                             "args": {'instance_id': instance_id,
                                      'block_migration': True,
@@ -2839,42 +2843,6 @@ class ComputeAPITestCase(BaseTestCase):
                 None,
                 '/dev/invalid')
 
-    def test_attach_volume(self):
-        instance_id = 1
-        instance_uuid = utils.gen_uuid()
-        volume_id = 1
-
-        for device in ('/dev/sda', '/dev/xvda'):
-            # creating mocks
-            self.mox.StubOutWithMock(self.compute_api.volume_api,
-                    'check_attach')
-            self.mox.StubOutWithMock(self.compute_api, 'get')
-            self.mox.StubOutWithMock(rpc, 'cast')
-
-            rpc.cast(
-                    mox.IgnoreArg(),
-                    mox.IgnoreArg(), {"method": "attach_volume",
-                        "args": {'volume_id': volume_id,
-                                 'instance_uuid': instance_uuid,
-                                 'mountpoint': device}})
-
-            self.compute_api.volume_api.check_attach(
-                    mox.IgnoreArg(),
-                    volume_id=volume_id).AndReturn(
-                            {'id': volume_id, 'status': 'available',
-                                'attach_status': 'detached'})
-
-            self.compute_api.get(
-                    mox.IgnoreArg(),
-                    mox.IgnoreArg()).AndReturn({
-                        'id': instance_id,
-                        'uuid': instance_uuid,
-                        'host': 'fake'})
-
-            self.mox.ReplayAll()
-            self.compute_api.attach_volume(None, None, volume_id, device)
-            self.mox.UnsetStubs()
-
     def test_vnc_console(self):
         """Make sure we can a vnc console for an instance."""
         def vnc_rpc_call_wrapper(*args, **kwargs):
@@ -2907,6 +2875,10 @@ class ComputeAPITestCase(BaseTestCase):
         def fake_check_attach(*args, **kwargs):
             pass
 
+        def fake_volume_get(self, context, volume_id):
+            return {'id': volume_id}
+
+        self.stubs.Set(nova.volume.api.API, 'get', fake_volume_get)
         self.stubs.Set(nova.volume.api.API, 'check_attach', fake_check_attach)
 
         instance = self._create_fake_instance()

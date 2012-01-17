@@ -306,11 +306,6 @@ def floating_ip_fixed_ip_associate(context, floating_address,
                                                host)
 
 
-def floating_ip_get_all(context):
-    """Get all floating ips."""
-    return IMPL.floating_ip_get_all(context)
-
-
 def floating_ip_get_all_by_host(context, host):
     """Get all floating ips by host."""
     return IMPL.floating_ip_get_all_by_host(context, host)
@@ -329,6 +324,11 @@ def floating_ip_get_by_address(context, address):
 def floating_ip_get_by_fixed_address(context, fixed_address):
     """Get a floating ips by fixed address"""
     return IMPL.floating_ip_get_by_fixed_address(context, fixed_address)
+
+
+def floating_ip_get_by_fixed_ip_id(context, fixed_ip_id):
+    """Get a floating ips by fixed address"""
+    return IMPL.floating_ip_get_by_fixed_ip_id(context, fixed_ip_id)
 
 
 def floating_ip_update(context, address, values):
@@ -421,11 +421,6 @@ def fixed_ip_get(context, id):
 def fixed_ip_get_all(context):
     """Get all defined fixed ips."""
     return IMPL.fixed_ip_get_all(context)
-
-
-def fixed_ip_get_all_by_instance_host(context, host):
-    """Get all allocated fixed ips filtered by instance host."""
-    return IMPL.fixed_ip_get_all_by_instance_host(context, host)
 
 
 def fixed_ip_get_by_address(context, address):
@@ -595,15 +590,6 @@ def instance_get_all_by_host(context, host):
 def instance_get_all_by_reservation(context, reservation_id):
     """Get all instances belonging to a reservation."""
     return IMPL.instance_get_all_by_reservation(context, reservation_id)
-
-
-def instance_get_fixed_addresses(context, instance_id):
-    """Get the fixed ip address of an instance."""
-    return IMPL.instance_get_fixed_addresses(context, instance_id)
-
-
-def instance_get_fixed_addresses_v6(context, instance_id):
-    return IMPL.instance_get_fixed_addresses_v6(context, instance_id)
 
 
 def instance_get_floating_address(context, instance_id):
