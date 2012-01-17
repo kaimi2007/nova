@@ -58,7 +58,7 @@ from nova.compute import vm_states
 from nova.virt import disk
 from nova.virt import driver
 from nova.virt import images
-from nova.virt.libvirt import netutils
+from nova.virt import netutils
 from nova.virt.baremetal import nodes
 from nova.virt.baremetal import dom
 from nova.virt.libvirt import utils as libvirt_utils
