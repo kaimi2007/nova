@@ -820,13 +820,33 @@ class LibvirtConnection(driver.ComputeDriver):
             <name>%s</name>
         </domainsnapshot>
         """ % snapshot_name
-        snapshot_ptr = virt_dom.snapshotCreateXML(snapshot_xml, 0)
+        if FLAGS.libvirt_type != 'lxc':
+            snapshot_ptr = virt_dom.snapshotCreateXML(snapshot_xml, 0)
 
         # Find the disk
         xml_desc = virt_dom.XMLDesc(0)
         domain = ElementTree.fromstring(xml_desc)
-        source = domain.find('devices/disk/source')
-        disk_path = source.get('file')
+        if FLAGS.libvirt_type != 'lxc':
+            source = domain.find('devices/disk/source')
+            disk_path = source.get('file')
+        else:
+            source = domain.find('devices/filesystem/source')
+            disk_path = source.get('dir')
+            disk_path = disk_path[0:disk_path.rfind('rootfs')] 
+            # hacking because snapshot is not supported for raw image
+            if FLAGS.use_cow_images == False:
+                cmd = 'qemu-img convert -f raw -O qcow2 ' + disk_path + 'disk' \
+                      + ' ' + disk_path + 'disk.qcow2'
+                disk_path = disk_path + 'disk.qcow2'
+                p = subprocess.Popen(cmd, shell=True,  \
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                x = p.communicate()
+                source_format = 'qcow2'
+                cmd = 'qemu-img snapshot -c ' + snapshot_name + \
+                      ' ' + disk_path
+                p = subprocess.Popen(cmd, shell=True,  \
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                x = p.communicate()
 
         # Export the snapshot to a raw image
         temp_dir = tempfile.mkdtemp()
@@ -845,7 +865,8 @@ class LibvirtConnection(driver.ComputeDriver):
         finally:
             # Clean up
             shutil.rmtree(temp_dir)
-            snapshot_ptr.delete(0)
+            if FLAGS.libvirt_type != 'lxc':
+                snapshot_ptr.delete(0)
 
     @exception.wrap_exception()
     def reboot(self, instance, network_info, reboot_type=None, xml=None):
