@@ -74,7 +74,8 @@ def upgrade(migrate_engine):
                    (name == 'm1.medium') or \
                    (name == 'm1.large') or \
                    (name == 'm1.xlarge'):
-                    extra_specs = dict(cpu_arch='x86_64')
+                    extra_specs = dict(cpu_arch='x86_64',
+                                       hypervisor_type='QEMU')
                 elif (name == 'cg1.small') or \
                      (name == 'cg1.medium') or \
                      (name == 'cg1.large') or  \
@@ -84,7 +85,8 @@ def upgrade(migrate_engine):
                     extra_specs = dict(
                                       cpu_arch='x86_64',
                                       xpu_arch='fermi',
-                                      xpus=1)
+                                      xpus=1,
+                                      hypervisor_type='LXC')
                 elif (name == 'sh1.small') or  \
                      (name == 'sh1.medium') or \
                      (name == 'sh1.large') or \
@@ -96,10 +98,12 @@ def upgrade(migrate_engine):
                      (name == 'sh1.32xlarge'):
                     extra_specs = dict(
                                       cpu_arch='x86_64',
-                                      system_type='UV')
+                                      system_type='UV',
+                                      hypervisor_type='QEMU')
                 elif (name == 'tp64.8x8'):
                     extra_specs = dict(
-                                      cpu_arch='tilepro64')
+                                      cpu_arch='tilepro64',
+                                      hypervisor_type='tilera_hv')
 
                 db.api.instance_type_extra_specs_update_or_create(
                                           context.get_admin_context(),
