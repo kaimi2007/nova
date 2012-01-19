@@ -22,35 +22,15 @@ is provided here as an example of how to implement a backend.
 """
 
 import base64
-import multiprocessing
 import os
-import random
-import shutil
 import subprocess
-import sys
-import tempfile
 import time
-import uuid
-from xml.dom import minidom
-from xml.etree import ElementTree
 
-from eventlet import greenthread
-from eventlet import tpool
-
-from nova import context
-from nova import db
 from nova import exception
 from nova import flags
-from nova import ipv6
 from nova import log as logging
 from nova import utils
-from nova import vnc
-from nova.auth import manager
-from nova.compute import instance_types
 from nova.compute import power_state
-from nova.virt import disk
-from nova.virt import driver
-from nova.virt import images
 
 flags.DEFINE_string('tile_monitor', '/usr/local/TileraMDE/bin/tile-monitor',
                     'Tilera command line program for Bare-metal driver')

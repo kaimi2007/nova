@@ -33,7 +33,6 @@ from nova.virt.baremetal import proxy
 from nova.virt.baremetal import dom
 
 FLAGS = flags.FLAGS
-FLAGS.baremetal_driver = 'fake'
 
 
 # Same fake_domains is used by different classes,
@@ -47,6 +46,10 @@ fake_domains = [{'status': 1, 'name': 'instance-00000001',
 
 
 class DomainReadWriteTestCase(test.TestCase):
+
+    def setUp(self):
+        self.flags(baremetal_driver = 'fake')
+        super(DomainReadWriteTestCase, self).setUp()
 
     def test_read_domain_with_empty_list(self):
         """Read a file that contains no domains"""
@@ -141,6 +144,7 @@ class DomainReadWriteTestCase(test.TestCase):
 class BareMetalDomTestCase(test.TestCase):
 
     def setUp(self):
+        self.flags(baremetal_driver = 'fake')
         super(BareMetalDomTestCase, self).setUp()
         # Stub out utils.execute
         self.stubs = stubout.StubOutForTesting()
@@ -260,6 +264,7 @@ class ProxyBareMetalTestCase(test.TestCase):
                      'instance_type_id': '5'}  # m1.small
 
     def setUp(self):
+        self.flags(baremetal_driver = 'fake')
         super(ProxyBareMetalTestCase, self).setUp()
         self.context = context.get_admin_context()
         fake_utils.stub_out_utils_execute(self.stubs)
