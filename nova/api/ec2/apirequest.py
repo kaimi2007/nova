@@ -24,11 +24,11 @@ import datetime
 # TODO(termie): replace minidom with etree
 from xml.dom import minidom
 
+from nova.api.ec2.admin import AdminController
+from nova.api.ec2 import ec2utils
+from nova import exception
 from nova import flags
 from nova import log as logging
-from nova import exception
-from nova.api.ec2 import ec2utils
-from nova.api.ec2.admin import AdminController
 
 LOG = logging.getLogger("nova.api.request")
 FLAGS = flags.FLAGS
@@ -99,7 +99,7 @@ class APIRequest(object):
         request_id_el = xml.createElement('requestId')
         request_id_el.appendChild(xml.createTextNode(request_id))
         response_el.appendChild(request_id_el)
-        if(response_data == True):
+        if response_data is True:
             self._render_dict(xml, response_el, {'return': 'true'})
         else:
             self._render_dict(xml, response_el, response_data)
@@ -108,7 +108,13 @@ class APIRequest(object):
 
         response = xml.toxml()
         xml.unlink()
-        LOG.debug(response)
+
+        # Don't write private key to log
+        if self.action != "CreateKeyPair":
+            LOG.debug(response)
+        else:
+            LOG.debug("CreateKeyPair: Return Private Key")
+
         return response
 
     def _render_dict(self, xml, el, data):

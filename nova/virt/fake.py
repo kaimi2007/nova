@@ -25,11 +25,11 @@ semantics of real hypervisor connections.
 
 """
 
+from nova.compute import power_state
 from nova import db
 from nova import exception
 from nova import log as logging
 from nova import utils
-from nova.compute import power_state
 from nova.virt import driver
 
 
@@ -162,8 +162,7 @@ class FakeConnection(driver.ComputeDriver):
     def resume(self, instance):
         pass
 
-    def destroy(self, instance, network_info, block_device_info=None,
-                cleanup=True):
+    def destroy(self, instance, network_info, block_device_info=None):
         key = instance['name']
         if key in self.instances:
             del self.instances[key]
@@ -218,7 +217,7 @@ class FakeConnection(driver.ComputeDriver):
         return [0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L]
 
     def get_console_output(self, instance):
-        return 'FAKE CONSOLE\xffOUTPUT'
+        return 'FAKE CONSOLE OUTPUT\nANOTHER\nLAST LINE'
 
     def get_ajax_console(self, instance):
         return {'token': 'FAKETOKEN',
@@ -226,7 +225,7 @@ class FakeConnection(driver.ComputeDriver):
                 'port': 6969}
 
     def get_vnc_console(self, instance):
-        return {'token': 'FAKETOKEN',
+        return {'internal_access_path': 'FAKE',
                 'host': 'fakevncconsole.com',
                 'port': 6969}
 
@@ -284,7 +283,7 @@ class FakeConnection(driver.ComputeDriver):
         """This method is supported only by libvirt."""
         raise NotImplementedError('This method is supported only by libvirt.')
 
-    def get_instance_disk_info(self, ctxt, instance_ref):
+    def get_instance_disk_info(self, instance_name):
         """This method is supported only by libvirt."""
         return
 
@@ -319,4 +318,8 @@ class FakeConnection(driver.ComputeDriver):
 
     def set_host_enabled(self, host, enabled):
         """Sets the specified host's ability to accept new instances."""
+        pass
+
+    def get_disk_available_least(self):
+        """ """
         pass

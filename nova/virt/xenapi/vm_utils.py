@@ -22,7 +22,6 @@ their attributes like VDIs, VIFs, as well as their lookup functions.
 
 import contextlib
 import json
-import math
 import os
 import pickle
 import re
@@ -34,7 +33,6 @@ import uuid
 from decimal import Decimal
 from xml.dom import minidom
 
-from nova import db
 from nova import exception
 from nova import flags
 from nova.image import glance
@@ -42,8 +40,7 @@ from nova import log as logging
 from nova import utils
 from nova.compute import instance_types
 from nova.compute import power_state
-from nova.virt import disk
-from nova.virt import images
+from nova.virt.disk import api as disk
 from nova.virt.xenapi import HelperBase
 from nova.virt.xenapi import volume_utils
 
@@ -485,7 +482,7 @@ class VMHelper(HelperBase):
             # 4. Create VBD between instance VM and swap VDI
             volume_utils.VolumeHelper.create_vbd(
                 session, vm_ref, vdi_ref, userdevice, bootable=False)
-        except:
+        except Exception:
             with utils.save_and_reraise_exception():
                 cls.destroy_vdi(session, vdi_ref)
 
@@ -708,35 +705,28 @@ class VMHelper(HelperBase):
         2. If we're not using Glance, then we need to deduce this based on
            whether a kernel_id is specified.
         """
-        def log_disk_format(image_type):
-            pretty_format = {ImageType.KERNEL: 'KERNEL',
-                             ImageType.RAMDISK: 'RAMDISK',
-                             ImageType.DISK: 'DISK',
-                             ImageType.DISK_RAW: 'DISK_RAW',
-                             ImageType.DISK_VHD: 'DISK_VHD',
-                             ImageType.DISK_ISO: 'DISK_ISO'}
-            disk_format = pretty_format[image_type]
-            image_ref = image_meta['id']
-            LOG.debug(_("Detected %(disk_format)s format for image "
-                        "%(image_ref)s") % locals())
+        disk_format = image_meta['disk_format']
 
-        def determine_from_image_meta():
-            glance_disk_format2nova_type = {
-                'ami': ImageType.DISK,
-                'aki': ImageType.KERNEL,
-                'ari': ImageType.RAMDISK,
-                'raw': ImageType.DISK_RAW,
-                'vhd': ImageType.DISK_VHD,
-                'iso': ImageType.DISK_ISO}
-            disk_format = image_meta['disk_format']
-            try:
-                return glance_disk_format2nova_type[disk_format]
-            except KeyError:
-                raise exception.InvalidDiskFormat(disk_format=disk_format)
+        disk_format_map = {
+            'ami': 'DISK',
+            'aki': 'KERNEL',
+            'ari': 'RAMDISK',
+            'raw': 'DISK_RAW',
+            'vhd': 'DISK_VHD',
+            'iso': 'DISK_ISO',
+        }
 
-        image_type = determine_from_image_meta()
+        try:
+            image_type_str = disk_format_map[disk_format]
+        except KeyError:
+            raise exception.InvalidDiskFormat(disk_format=disk_format)
 
-        log_disk_format(image_type)
+        image_type = getattr(ImageType, image_type_str)
+
+        image_ref = image_meta['id']
+        msg = _("Detected %(image_type_str)s format for image %(image_ref)s")
+        LOG.debug(msg % locals())
+
         return image_type
 
     @classmethod
@@ -850,6 +840,14 @@ class VMHelper(HelperBase):
             return (vm_rec['PV_kernel'], vm_rec['PV_ramdisk'])
         else:
             return (None, None)
+
+    @classmethod
+    def is_snapshot(cls, session, vm):
+        vm_rec = session.call_xenapi("VM.get_record", vm)
+        if 'is_a_template' in vm_rec and 'is_a_snapshot' in vm_rec:
+            return vm_rec['is_a_template'] and vm_rec['is_a_snapshot']
+        else:
+            return False
 
     @classmethod
     def compile_info(cls, record):
@@ -1530,7 +1528,7 @@ def _prepare_injectables(inst, networks_info):
                               'dns': dns,
                               'address_v6': ip_v6 and ip_v6['ip'] or '',
                               'netmask_v6': ip_v6 and ip_v6['netmask'] or '',
-                              'gateway_v6': ip_v6 and info['gateway6'] or '',
+                              'gateway_v6': ip_v6 and info['gateway_v6'] or '',
                               'use_ipv6': FLAGS.use_ipv6}
             interfaces_info.append(interface_info)
 
