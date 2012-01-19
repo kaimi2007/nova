@@ -840,7 +840,7 @@ class LibvirtConnection(driver.ComputeDriver):
             disk_path = disk_path[0:disk_path.rfind('rootfs')]
             # hacking because snapshot is not supported for raw image
             if FLAGS.use_cow_images == False:
-                cmd = 'qemu-img convert -f raw -O qcow2 ' + disk_path
+                cmd = 'qemu-img convert -f raw -O qcow2 ' + disk_path \
                       + 'disk' + ' ' + disk_path + 'disk.qcow2'
                 disk_path = disk_path + 'disk.qcow2'
                 p = subprocess.Popen(cmd, shell=True,  \
