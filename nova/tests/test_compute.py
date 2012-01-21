@@ -2171,9 +2171,10 @@ class ComputeAPITestCase(BaseTestCase):
     def test_resize_request_spec(self):
         def _fake_cast(context, args):
             request_spec = args['args']['request_spec']
+            filter_properties = args['args']['filter_properties']
             instance_properties = request_spec['instance_properties']
             self.assertEqual(instance_properties['host'], 'host2')
-            self.assertEqual(request_spec['avoid_original_host'], True)
+            self.assertIn('host2', filter_properties['ignore_hosts'])
 
         self.stubs.Set(self.compute_api, '_cast_scheduler_message',
                        _fake_cast)
@@ -2190,9 +2191,10 @@ class ComputeAPITestCase(BaseTestCase):
     def test_resize_request_spec_noavoid(self):
         def _fake_cast(context, args):
             request_spec = args['args']['request_spec']
+            filter_properties = args['args']['filter_properties']
             instance_properties = request_spec['instance_properties']
             self.assertEqual(instance_properties['host'], 'host2')
-            self.assertEqual(request_spec['avoid_original_host'], False)
+            self.assertNotIn('host2', filter_properties['ignore_hosts'])
 
         self.stubs.Set(self.compute_api, '_cast_scheduler_message',
                        _fake_cast)
@@ -2480,9 +2482,9 @@ class ComputeAPITestCase(BaseTestCase):
                 search_opts={'flavor': 5})
         self.assertEqual(len(instances), 0)
 
-        self.assertRaises(exception.FlavorNotFound,
-                self.compute_api.get_all,
-                c, search_opts={'flavor': 99})
+        # ensure unknown filter maps to an empty list, not an exception
+        instances = self.compute_api.get_all(c, search_opts={'flavor': 99})
+        self.assertEqual(instances, [])
 
         # m1.medium's flavorid == 3
         instances = self.compute_api.get_all(c, search_opts={'flavor': 3})

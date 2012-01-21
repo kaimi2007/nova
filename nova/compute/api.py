@@ -179,7 +179,7 @@ class API(base.Base):
                reservation_id, access_ip_v4, access_ip_v6,
                requested_networks, config_drive,
                block_device_mapping, auto_disk_config,
-               create_instance_here=False):
+               create_instance_here=False, scheduler_hints=None):
         """Verify all the input parameters regardless of the provisioning
         strategy being performed and schedule the instance(s) for
         creation."""
@@ -284,6 +284,22 @@ class API(base.Base):
         root_device_name = block_device.properties_root_device_name(
             image['properties'])
 
+        # NOTE(vish): We have a legacy hack to allow admins to specify hosts
+        #             via az using az:host. It might be nice to expose an
+        #             api to specify specific hosts to force onto, but for
+        #             now it just supports this legacy hack.
+        host = None
+        if availability_zone:
+            availability_zone, _x, host = availability_zone.partition(':')
+        if not availability_zone:
+            availability_zone = FLAGS.default_schedule_zone
+        if context.is_admin and host:
+            filter_properties = {'force_hosts': [host]}
+        else:
+            filter_properties = {}
+
+        filter_properties['scheduler_hints'] = scheduler_hints
+
         base_options = {
             'reservation_id': reservation_id,
             'image_ref': image_href,
@@ -343,7 +359,8 @@ class API(base.Base):
                 availability_zone, injected_files,
                 admin_password, image,
                 num_instances, requested_networks,
-                block_device_mapping, security_group)
+                block_device_mapping, security_group,
+                filter_properties)
 
         if create_instance_here:
             return ([instance], reservation_id)
@@ -516,7 +533,8 @@ class API(base.Base):
             num_instances,
             requested_networks,
             block_device_mapping,
-            security_group):
+            security_group,
+            filter_properties):
         """Send a run_instance request to the schedulers for processing."""
 
         pid = context.project_id
@@ -529,7 +547,6 @@ class API(base.Base):
             'image': image,
             'instance_properties': base_options,
             'instance_type': instance_type,
-            'filter': None,
             'blob': zone_blob,
             'num_instances': num_instances,
             'block_device_mapping': block_device_mapping,
@@ -543,7 +560,8 @@ class API(base.Base):
                           "request_spec": request_spec,
                           "admin_password": admin_password,
                           "injected_files": injected_files,
-                          "requested_networks": requested_networks}})
+                          "requested_networks": requested_networks,
+                          "filter_properties": filter_properties}})
 
     def create(self, context, instance_type,
                image_href, kernel_id=None, ramdisk_id=None,
@@ -555,7 +573,7 @@ class API(base.Base):
                reservation_id=None, block_device_mapping=None,
                access_ip_v4=None, access_ip_v6=None,
                requested_networks=None, config_drive=None,
-               auto_disk_config=None):
+               auto_disk_config=None, scheduler_hints=None):
         """
         Provision instances, sending instance information to the
         scheduler.  The scheduler will determine where the instance(s)
@@ -594,7 +612,8 @@ class API(base.Base):
                                reservation_id, access_ip_v4, access_ip_v6,
                                requested_networks, config_drive,
                                block_device_mapping, auto_disk_config,
-                               create_instance_here=create_instance_here)
+                               create_instance_here=create_instance_here,
+                               scheduler_hints=scheduler_hints)
 
         if create_instance_here or instances is None:
             return (instances, reservation_id)
@@ -1001,8 +1020,12 @@ class API(base.Base):
         filters = {}
 
         def _remap_flavor_filter(flavor_id):
-            instance_type = instance_types.get_instance_type_by_flavor_id(
-                    flavor_id)
+            try:
+                instance_type = instance_types.get_instance_type_by_flavor_id(
+                        flavor_id)
+            except exception.FlavorNotFound:
+                raise ValueError()
+
             filters['instance_type_id'] = instance_type['id']
 
         def _remap_fixed_ip_filter(fixed_ip):
@@ -1035,7 +1058,13 @@ class API(base.Base):
                 if isinstance(remap_object, basestring):
                     filters[remap_object] = value
                 else:
-                    remap_object(value)
+                    try:
+                        remap_object(value)
+
+                    # We already know we can't match the filter, so
+                    # return an empty list
+                    except ValueError:
+                        return []
 
         local_zone_only = search_opts.get('local_zone_only', False)
 
@@ -1255,12 +1284,20 @@ class API(base.Base):
                                    instance['uuid'],
                                    params={'reboot_type': reboot_type})
 
+    def _validate_image_href(self, context, image_href):
+        """Throws an ImageNotFound exception if image_href does not exist."""
+        (image_service, image_id) = nova.image.get_image_service(context,
+                                                                 image_href)
+        image_service.show(context, image_id)
+
     @wrap_check_policy
     @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.SHUTOFF],
                           task_state=[None, task_states.RESIZE_VERIFY])
     @scheduler_api.reroute_compute("rebuild")
     def rebuild(self, context, instance, image_href, admin_password, **kwargs):
         """Rebuild the given instance with the provided attributes."""
+
+        self._validate_image_href(context, image_href)
 
         files_to_inject = kwargs.pop('files_to_inject', [])
         self._check_injected_file_quota(context, files_to_inject)
@@ -1383,13 +1420,14 @@ class API(base.Base):
                     **kwargs)
 
         request_spec = {
-            'instance_type': new_instance_type,
-            'filter': None,
-            'num_instances': 1,
-            'instance_properties': instance,
-            'avoid_original_host': not FLAGS.allow_resize_to_same_host,
-            'local_zone': True,
-            }
+                'instance_type': new_instance_type,
+                'num_instances': 1,
+                'instance_properties': instance}
+
+        filter_properties = {'local_zone_only': True, 'ignore_hosts': []}
+
+        if not FLAGS.allow_resize_to_same_host:
+            filter_properties['ignore_hosts'].append(instance['host'])
 
         self._cast_scheduler_message(context,
                     {"method": "prep_resize",
@@ -1397,7 +1435,8 @@ class API(base.Base):
                               "instance_uuid": instance['uuid'],
                               "update_db": False,
                               "instance_type_id": new_instance_type['id'],
-                              "request_spec": request_spec}})
+                              "request_spec": request_spec,
+                              "filter_properties": filter_properties}})
 
     @wrap_check_policy
     @scheduler_api.reroute_compute("add_fixed_ip")
