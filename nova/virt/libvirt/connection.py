@@ -144,10 +144,6 @@ flags.DEFINE_list('libvirt_volume_drivers',
                    'rbd=nova.virt.libvirt.volume.LibvirtNetVolumeDriver',
                    'sheepdog=nova.virt.libvirt.volume.LibvirtNetVolumeDriver'],
                   'Libvirt handlers for remote volumes.')
-flags.DEFINE_string('default_local_format',
-                    None,
-                    'The default format a local_volume will be formatted with '
-                    'on creation.')
 flags.DEFINE_bool('libvirt_use_virtio_for_bridges',
                   False,
                   'Use virtio for bridge interfaces')
@@ -221,7 +217,7 @@ class LibvirtConnection(driver.ComputeDriver):
         else:
             self._disk_prefix = disk_prefix_map.get(FLAGS.libvirt_type, 'vd')
         self.default_root_device = self._disk_prefix + 'a'
-        self.default_local_device = self._disk_prefix + 'b'
+        self.default_ephemeral_device = self._disk_prefix + 'b'
         self.default_swap_device = self._disk_prefix + 'c'
 
     @property
@@ -1179,15 +1175,15 @@ class LibvirtConnection(driver.ComputeDriver):
         """Create a blank image of specified size"""
 
         if not fs_format:
-            fs_format = FLAGS.default_local_format
+            fs_format = FLAGS.default_ephemeral_format
 
         libvirt_utils.create_image('raw', target,
                                    '%d%c' % (local_size, unit))
         if fs_format:
             libvirt_utils.mkfs(fs_format, target)
 
-    def _create_ephemeral(self, target, local_size, fs_label, os_type):
-        self._create_local(target, local_size)
+    def _create_ephemeral(self, target, ephemeral_size, fs_label, os_type):
+        self._create_local(target, ephemeral_size)
         disk.mkfs(os_type, fs_label, target)
 
     @staticmethod
@@ -1246,13 +1242,15 @@ class LibvirtConnection(driver.ComputeDriver):
                                   project_id=inst['project_id'])
 
         root_fname = hashlib.sha1(str(disk_images['image_id'])).hexdigest()
-        size = FLAGS.minimum_root_size
+        size = inst['root_gb'] * 1024 * 1024 * 1024
 
         inst_type_id = inst['instance_type_id']
         inst_type = instance_types.get_instance_type(inst_type_id)
         if inst_type['name'] == 'm1.tiny' or suffix == '.rescue':
             size = None
             root_fname += "_sm"
+        else:
+            root_fname += "_%d" % inst['root_gb']
 
         if not self._volume_in_mapping(self.default_root_device,
                                        block_device_info):
@@ -1266,18 +1264,18 @@ class LibvirtConnection(driver.ComputeDriver):
                               project_id=inst['project_id'],
                               size=size)
 
-        local_gb = inst['local_gb']
-        if local_gb and not self._volume_in_mapping(
-            self.default_local_device, block_device_info):
+        ephemeral_gb = inst['ephemeral_gb']
+        if ephemeral_gb and not self._volume_in_mapping(
+            self.default_ephemeral_device, block_device_info):
             fn = functools.partial(self._create_ephemeral,
                                    fs_label='ephemeral0',
                                    os_type=inst.os_type)
             self._cache_image(fn=fn,
                               target=basepath('disk.local'),
                               fname="ephemeral_%s_%s_%s" %
-                              ("0", local_gb, inst.os_type),
+                              ("0", ephemeral_gb, inst.os_type),
                               cow=FLAGS.use_cow_images,
-                              local_size=local_gb)
+                              ephemeral_size=ephemeral_gb)
 
         for eph in driver.block_device_info_get_ephemerals(block_device_info):
             fn = functools.partial(self._create_ephemeral,
@@ -1288,7 +1286,7 @@ class LibvirtConnection(driver.ComputeDriver):
                               fname="ephemeral_%s_%s_%s" %
                               (eph['num'], eph['size'], inst.os_type),
                               cow=FLAGS.use_cow_images,
-                              local_size=eph['size'])
+                              ephemeral_size=eph['size'])
 
         swap_mb = 0
 
@@ -1464,14 +1462,14 @@ class LibvirtConnection(driver.ComputeDriver):
         ebs_root = self._volume_in_mapping(self.default_root_device,
                                            block_device_info)
 
-        local_device = False
-        if not (self._volume_in_mapping(self.default_local_device,
+        ephemeral_device = False
+        if not (self._volume_in_mapping(self.default_ephemeral_device,
                                         block_device_info) or
                 0 in [eph['num'] for eph in
                       driver.block_device_info_get_ephemerals(
                           block_device_info)]):
-            if instance['local_gb'] > 0:
-                local_device = self.default_local_device
+            if instance['ephemeral_gb'] > 0:
+                ephemeral_device = self.default_ephemeral_device
 
         ephemerals = []
         for eph in driver.block_device_info_get_ephemerals(block_device_info):
@@ -1492,7 +1490,7 @@ class LibvirtConnection(driver.ComputeDriver):
                     'vif_type': FLAGS.libvirt_vif_type,
                     'nics': nics,
                     'ebs_root': ebs_root,
-                    'local_device': local_device,
+                    'ephemeral_device': ephemeral_device,
                     'volumes': volumes,
                     'use_virtio_for_bridges':
                             FLAGS.libvirt_use_virtio_for_bridges,
@@ -1510,10 +1508,11 @@ class LibvirtConnection(driver.ComputeDriver):
                 nova_context.get_admin_context(), instance['id'],
                 {'root_device_name': '/dev/' + self.default_root_device})
 
-        if local_device:
+        if ephemeral_device:
             db.instance_update(
                 nova_context.get_admin_context(), instance['id'],
-                {'default_local_device': '/dev/' + self.default_local_device})
+                {'default_ephemeral_device':
+                 '/dev/' + self.default_ephemeral_device})
 
         swap = driver.block_device_info_get_swap(block_device_info)
         if driver.swap_is_usable(swap):
@@ -1917,13 +1916,13 @@ class LibvirtConnection(driver.ComputeDriver):
                'net_arch': FLAGS.net_arch,
                'net_info': FLAGS.net_info,
                'net_mbps': FLAGS.net_mbps,
+               'service_id': service_ref['id'],
                'disk_available_least': self.get_disk_available_least()}
 
         compute_node_ref = service_ref['compute_node']
         LOG.info(_('#### RLK: cpu_arch = %s ') % FLAGS.cpu_arch)
         if not compute_node_ref:
             LOG.info(_('Compute_service record created for %s ') % host)
-            dic['service_id'] = service_ref['id']
             db.compute_node_create(ctxt, dic)
         else:
             LOG.info(_('Compute_service record updated for %s ') % host)
@@ -2144,7 +2143,7 @@ class LibvirtConnection(driver.ComputeDriver):
                         image_id=instance_ref['image_ref'],
                         user_id=instance_ref['user_id'],
                         project_id=instance_ref['project_id'],
-                        size=instance_ref['local_gb'])
+                        size=instance_ref['ephemeral_gb'])
 
                 libvirt_utils.create_cow_image(backing_file, instance_disk)
 

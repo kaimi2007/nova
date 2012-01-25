@@ -32,7 +32,11 @@ flags.DEFINE_integer('reserved_host_disk_mb', 0,
         'Amount of disk in MB to reserve for host/dom0')
 flags.DEFINE_integer('reserved_host_memory_mb', 512,
         'Amount of memory in MB to reserve for host/dom0')
-flags.DEFINE_list('default_host_filters', ['RamFilter', 'ComputeFilter'],
+flags.DEFINE_list('default_host_filters', [
+            'AvailabilityZoneFilter',
+            'RamFilter',
+            'ComputeFilter',
+        ],
         'Which filters to use for filtering hosts when not specified '
         'in the request.')
 
@@ -93,24 +97,30 @@ class HostState(object):
         # These will change as resources are virtually "consumed".
         self.free_ram_mb = 0
         self.free_disk_mb = 0
+        self.vcpus_total = 0
+        self.vcpus_used = 0
 
     def update_from_compute_node(self, compute):
         """Update information about a host from its compute_node info."""
         all_disk_mb = compute['local_gb'] * 1024
         all_ram_mb = compute['memory_mb']
+        vcpus_total = compute['vcpus']
         if FLAGS.reserved_host_disk_mb > 0:
             all_disk_mb -= FLAGS.reserved_host_disk_mb
         if FLAGS.reserved_host_memory_mb > 0:
             all_ram_mb -= FLAGS.reserved_host_memory_mb
         self.free_ram_mb = all_ram_mb
         self.free_disk_mb = all_disk_mb
+        self.vcpus_total = vcpus_total
 
     def consume_from_instance(self, instance):
         """Update information about a host from instance info."""
-        disk_mb = instance['local_gb'] * 1024
+        disk_mb = (instance['root_gb'] + instance['ephemeral_gb']) * 1024
         ram_mb = instance['memory_mb']
+        vcpus = instance['vcpus']
         self.free_ram_mb -= ram_mb
         self.free_disk_mb -= disk_mb
+        self.vcpus_used += vcpus
 
     def passes_filters(self, filter_fns, filter_properties):
         """Return whether or not this host passes filters."""

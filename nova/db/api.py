@@ -203,11 +203,30 @@ def compute_node_update(context, compute_id, values):
     """Set the given properties on an computeNode and update it.
 
     Raises NotFound if computeNode does not exist.
-
     """
-
     return IMPL.compute_node_update(context, compute_id, values)
 
+
+def compute_node_get_by_host(context, host):
+    return IMPL.compute_node_get_by_host(context, host)
+
+
+def compute_node_capacity_find(context, minimum_ram_mb, minimum_disk_gb):
+    return IMPL.compute_node_capacity_find(context, minimum_ram_mb,
+                                           minimum_disk_gb)
+
+
+def compute_node_utilization_update(context, host, free_ram_mb_delta=0,
+                          free_disk_gb_delta=0, work_delta=0, vm_delta=0):
+    return IMPL.compute_node_utilization_update(context, host,
+                          free_ram_mb_delta, free_disk_gb_delta, work_delta,
+                          vm_delta)
+
+
+def compute_node_utilization_set(context, host, free_ram_mb=None,
+                                 free_disk_gb=None, work=None, vms=None):
+    return IMPL.compute_node_utilization_set(context, host, free_ram_mb,
+                                             free_disk_gb, work, vms)
 
 ###################
 
@@ -1530,6 +1549,11 @@ def agent_build_update(context, agent_build_id, values):
 def bw_usage_get_by_instance(context, instance_id, start_period):
     """Return bw usages for an instance in a given audit period."""
     return IMPL.bw_usage_get_by_instance(context, instance_id, start_period)
+
+
+def bw_usage_get_all_by_filters(context, filters):
+    """Return bandwidth usage that matches all filters."""
+    return IMPL.bw_usage_get_all_by_filters(context, filters)
 
 
 def bw_usage_update(context,

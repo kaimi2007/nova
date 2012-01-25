@@ -637,24 +637,27 @@ class FixedIpCommands(object):
             print "error: %s" % ex
             sys.exit(2)
 
-        print "%-18s\t%-15s\t%-17s\t%-15s\t%s" % (_('network'),
-                                                  _('IP address'),
-                                                  _('MAC address'),
-                                                  _('hostname'),
-                                                  _('host'))
+        instances = db.instance_get_all(context.get_admin_context())
+        instances_by_id = {}
+        for instance in instances:
+            instances_by_id[instance['id']] = instance
+
+        print "%-18s\t%-15s\t%-15s\t%s" % (_('network'),
+                                              _('IP address'),
+                                              _('hostname'),
+                                              _('host'))
         for fixed_ip in fixed_ips:
             hostname = None
             host = None
             mac_address = None
             if fixed_ip['instance']:
-                instance = fixed_ip['instance']
+                instance = instances_by_id[fixed_ip['instance_id']]
                 hostname = instance['hostname']
                 host = instance['host']
-                mac_address = fixed_ip['virtual_interface']['address']
-            print "%-18s\t%-15s\t%-17s\t%-15s\t%s" % (
+            print "%-18s\t%-15s\t%-15s\t%s" % (
                     fixed_ip['network']['cidr'],
                     fixed_ip['address'],
-                    mac_address, hostname, host)
+                    hostname, host)
 
     @args('--address', dest="address", metavar='<ip address>',
           help='IP address')
@@ -904,7 +907,7 @@ class NetworkCommands(object):
         net_manager.delete_network(context.get_admin_context(),
             fixed_range, uuid)
 
-    @args('--network', dest="fixed_range", metavar='<x.x.x.x/yy>',
+    @args('--fixed_range', dest="fixed_range", metavar='<x.x.x.x/yy>',
             help='Network to modify')
     @args('--project', dest="project", metavar='<project name>',
             help='Project name to associate')
@@ -2215,7 +2218,9 @@ class ConfigCommands(object):
         pass
 
     def list(self):
-        print FLAGS.FlagsIntoString()
+        for key, value in FLAGS.FlagValuesDict().iteritems():
+            if value is not None:
+                print '%s = %s' % (key, value)
 
 
 class GetLogCommands(object):

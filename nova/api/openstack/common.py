@@ -250,10 +250,10 @@ def get_version_from_href(href):
     """Returns the api version in the href.
 
     Returns the api version in the href.
-    If no version is found, 1.0 is returned
+    If no version is found, '2' is returned
 
     Given: 'http://www.nova.com/123'
-    Returns: '1.0'
+    Returns: '2'
 
     Given: 'http://www.nova.com/v1.1'
     Returns: '1.1'
@@ -426,12 +426,6 @@ class MetadataXMLDeserializer(wsgi.XMLDeserializer):
         return {'body': {'meta': metadata_item}}
 
 
-class MetadataHeadersSerializer(wsgi.ResponseHeadersSerializer):
-
-    def delete(self, response, data):
-        response.status_int = 204
-
-
 metadata_nsmap = {None: xmlutil.XMLNS_V11}
 
 
@@ -457,26 +451,6 @@ class MetadataTemplate(xmlutil.TemplateBuilder):
         elem.set('key', 0)
         elem.text = 1
         return xmlutil.MasterTemplate(root, 1, nsmap=metadata_nsmap)
-
-
-class MetadataXMLSerializer(xmlutil.XMLTemplateSerializer):
-    def index(self):
-        return MetadataTemplate()
-
-    def create(self):
-        return MetadataTemplate()
-
-    def update_all(self):
-        return MetadataTemplate()
-
-    def show(self):
-        return MetaItemTemplate()
-
-    def update(self):
-        return MetaItemTemplate()
-
-    def default(self):
-        return xmlutil.MasterTemplate(None, 1)
 
 
 def check_snapshots_enabled(f):
@@ -530,13 +504,16 @@ class ViewBuilder(object):
                             self._collection_name,
                             str(identifier))
 
-    def _get_collection_links(self, request, items):
+    def _get_collection_links(self, request, items, id_key="uuid"):
         """Retrieve 'next' link, if applicable."""
         links = []
         limit = int(request.params.get("limit", 0))
         if limit and limit == len(items):
             last_item = items[-1]
-            last_item_id = last_item.get("uuid", last_item["id"])
+            if id_key in last_item:
+                last_item_id = last_item[id_key]
+            else:
+                last_item_id = last_item["id"]
             links.append({
                 "rel": "next",
                 "href": self._get_next_link(request, last_item_id),

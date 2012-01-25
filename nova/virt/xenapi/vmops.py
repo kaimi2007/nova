@@ -371,7 +371,7 @@ class VMOps(object):
                         instance.instance_type_id)
                 VMHelper.auto_configure_disk(session=self._session,
                                              vdi_ref=first_vdi_ref,
-                                             new_gb=instance_type['local_gb'])
+                                             new_gb=instance_type['root_gb'])
 
             VolumeHelper.create_vbd(session=self._session, vm_ref=vm_ref,
                                     vdi_ref=first_vdi_ref,
@@ -388,6 +388,13 @@ class VMOps(object):
             VMHelper.generate_swap(session=self._session, instance=instance,
                                    vm_ref=vm_ref, userdevice=userdevice,
                                    swap_mb=swap_mb)
+            userdevice += 1
+
+        ephemeral_gb = instance_type['ephemeral_gb']
+        if ephemeral_gb:
+            VMHelper.generate_ephemeral(self._session, instance,
+                                        vm_ref, userdevice,
+                                        ephemeral_gb)
             userdevice += 1
 
         # Attach any other disks
@@ -703,10 +710,10 @@ class VMOps(object):
             sr_path = VMHelper.get_sr_path(self._session)
 
             if instance['auto_disk_config'] and \
-               instance['local_gb'] > instance_type['local_gb']:
+               instance['root_gb'] > instance_type['root_gb']:
                 # Resizing disk storage down
-                old_gb = instance['local_gb']
-                new_gb = instance_type['local_gb']
+                old_gb = instance['root_gb']
+                new_gb = instance_type['root_gb']
 
                 LOG.debug(_("Resizing down VDI %(cow_uuid)s from "
                           "%(old_gb)dGB to %(new_gb)dGB") % locals())
@@ -816,7 +823,7 @@ class VMOps(object):
         """Resize a running instance by changing its disk size."""
         #TODO(mdietz): this will need to be adjusted for swap later
 
-        new_disk_size = instance.local_gb * 1024 * 1024 * 1024
+        new_disk_size = instance.root_gb * 1024 * 1024 * 1024
         if not new_disk_size:
             return
 
@@ -828,7 +835,7 @@ class VMOps(object):
 
         instance_name = instance.name
         old_gb = virtual_size / (1024 * 1024 * 1024)
-        new_gb = instance.local_gb
+        new_gb = instance.root_gb
 
         if virtual_size < new_disk_size:
             # Resize up. Simple VDI resize will do the trick
@@ -930,8 +937,9 @@ class VMOps(object):
         resp = self._make_agent_call('key_init', instance, '', key_init_args)
         # Successful return code from key_init is 'D0'
         if resp['returncode'] != 'D0':
-            LOG.error(_('Failed to exchange keys: %(resp)r') % locals())
-            return None
+            msg = _('Failed to exchange keys: %(resp)r') % locals()
+            LOG.error(msg)
+            raise Exception(msg)
         # Some old versions of the Windows agent have a trailing \\r\\n
         # (ie CRLF escaped) for some reason. Strip that off.
         agent_pub = int(resp['message'].replace('\\r\\n', ''))
@@ -945,8 +953,9 @@ class VMOps(object):
         resp = self._make_agent_call('password', instance, '', password_args)
         # Successful return code from password is '0'
         if resp['returncode'] != '0':
-            LOG.error(_('Failed to update password: %(resp)r') % locals())
-            return None
+            msg = _('Failed to update password: %(resp)r') % locals()
+            LOG.error(msg)
+            raise Exception(msg)
         return resp['message']
 
     def inject_file(self, instance, path, contents):

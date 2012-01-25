@@ -151,6 +151,8 @@ class BaseTestCase(test.TestCase):
         type_id = instance_types.get_instance_type_by_name(type_name)['id']
         inst['instance_type_id'] = type_id
         inst['ami_launch_index'] = 0
+        inst['root_gb'] = 0
+        inst['ephemeral_gb'] = 0
         inst.update(params)
         return db.instance_create(self.context, inst)
 
@@ -168,7 +170,8 @@ class BaseTestCase(test.TestCase):
         inst['name'] = 'm1.small'
         inst['memory_mb'] = '1024'
         inst['vcpus'] = '1'
-        inst['local_gb'] = '20'
+        inst['root_gb'] = '20'
+        inst['ephemeral_gb'] = '10'
         inst['flavorid'] = '1'
         inst['swap'] = '2048'
         inst['rxtx_factor'] = 1
@@ -774,7 +777,7 @@ class ComputeTestCase(BaseTestCase):
         self.assertEquals(len(test_notifier.NOTIFICATIONS), 0)
         self.compute.add_fixed_ip_to_instance(self.context, instance_uuid, 1)
 
-        self.assertEquals(len(test_notifier.NOTIFICATIONS), 1)
+        self.assertEquals(len(test_notifier.NOTIFICATIONS), 2)
         self.compute.terminate_instance(self.context, instance_uuid)
 
     def test_remove_fixed_ip_usage_notification(self):
@@ -796,7 +799,7 @@ class ComputeTestCase(BaseTestCase):
                                                    instance_uuid,
                                                    1)
 
-        self.assertEquals(len(test_notifier.NOTIFICATIONS), 1)
+        self.assertEquals(len(test_notifier.NOTIFICATIONS), 2)
         self.compute.terminate_instance(self.context, instance_uuid)
 
     def test_run_instance_usage_notification(self):
@@ -804,11 +807,14 @@ class ComputeTestCase(BaseTestCase):
         inst_ref = self._create_fake_instance()
         instance_uuid = inst_ref['uuid']
         self.compute.run_instance(self.context, instance_uuid)
-        self.assertEquals(len(test_notifier.NOTIFICATIONS), 1)
+        self.assertEquals(len(test_notifier.NOTIFICATIONS), 2)
         inst_ref = db.instance_get_by_uuid(self.context, instance_uuid)
         msg = test_notifier.NOTIFICATIONS[0]
+        self.assertEquals(msg['event_type'], 'compute.instance.create.start')
+        # The last event is the one with the sugar in it.
+        msg = test_notifier.NOTIFICATIONS[1]
         self.assertEquals(msg['priority'], 'INFO')
-        self.assertEquals(msg['event_type'], 'compute.instance.create')
+        self.assertEquals(msg['event_type'], 'compute.instance.create.end')
         payload = msg['payload']
         self.assertEquals(payload['tenant_id'], self.project_id)
         self.assertEquals(payload['user_id'], self.user_id)
@@ -832,14 +838,16 @@ class ComputeTestCase(BaseTestCase):
         test_notifier.NOTIFICATIONS = []
         self.compute.terminate_instance(self.context, inst_ref['uuid'])
 
-        self.assertEquals(len(test_notifier.NOTIFICATIONS), 2)
+        self.assertEquals(len(test_notifier.NOTIFICATIONS), 3)
         msg = test_notifier.NOTIFICATIONS[0]
         self.assertEquals(msg['priority'], 'INFO')
         self.assertEquals(msg['event_type'], 'compute.instance.exists')
 
         msg = test_notifier.NOTIFICATIONS[1]
         self.assertEquals(msg['priority'], 'INFO')
-        self.assertEquals(msg['event_type'], 'compute.instance.delete')
+        self.assertEquals(msg['event_type'], 'compute.instance.delete.start')
+        msg1 = test_notifier.NOTIFICATIONS[2]
+        self.assertEquals(msg1['event_type'], 'compute.instance.delete.end')
         payload = msg['payload']
         self.assertEquals(payload['tenant_id'], self.project_id)
         self.assertEquals(payload['user_id'], self.user_id)
@@ -1006,10 +1014,14 @@ class ComputeTestCase(BaseTestCase):
                                                 instance_uuid,
                                                 'pre-migrating')
 
-        self.assertEquals(len(test_notifier.NOTIFICATIONS), 1)
+        self.assertEquals(len(test_notifier.NOTIFICATIONS), 2)
         msg = test_notifier.NOTIFICATIONS[0]
+        self.assertEquals(msg['event_type'],
+                          'compute.instance.resize.prep.start')
+        msg = test_notifier.NOTIFICATIONS[1]
+        self.assertEquals(msg['event_type'],
+                          'compute.instance.resize.prep.end')
         self.assertEquals(msg['priority'], 'INFO')
-        self.assertEquals(msg['event_type'], 'compute.instance.resize.prep')
         payload = msg['payload']
         self.assertEquals(payload['tenant_id'], self.project_id)
         self.assertEquals(payload['user_id'], self.user_id)
@@ -1449,7 +1461,7 @@ class ComputeAPITestCase(BaseTestCase):
         """Test an instance type with too little disk space"""
 
         inst_type = instance_types.get_default_instance_type()
-        inst_type['local_gb'] = 1
+        inst_type['root_gb'] = 1
 
         def fake_show(*args):
             img = copy(self.fake_image)
@@ -1461,7 +1473,7 @@ class ComputeAPITestCase(BaseTestCase):
             self.compute_api.create, self.context, inst_type, None)
 
         # Now increase the inst_type disk space and make sure all is fine.
-        inst_type['local_gb'] = 2
+        inst_type['root_gb'] = 2
         (refs, resv_id) = self.compute_api.create(self.context,
                 inst_type, None)
         db.instance_destroy(self.context, refs[0]['id'])
@@ -1470,7 +1482,7 @@ class ComputeAPITestCase(BaseTestCase):
         """Test an instance type with just enough ram and disk space"""
 
         inst_type = instance_types.get_default_instance_type()
-        inst_type['local_gb'] = 2
+        inst_type['root_gb'] = 2
         inst_type['memory_mb'] = 2
 
         def fake_show(*args):
@@ -1488,7 +1500,7 @@ class ComputeAPITestCase(BaseTestCase):
         """Test an instance type with no min_ram or min_disk"""
 
         inst_type = instance_types.get_default_instance_type()
-        inst_type['local_gb'] = 1
+        inst_type['root_gb'] = 1
         inst_type['memory_mb'] = 1
 
         def fake_show(*args):
@@ -1942,7 +1954,7 @@ class ComputeAPITestCase(BaseTestCase):
         self.stubs.Set(fake_image._FakeImageService, 'show', fake_show)
 
         instance = self._create_fake_instance()
-        inst_params = {'local_gb': 2, 'memory_mb': 256}
+        inst_params = {'root_gb': 2, 'memory_mb': 256}
         instance['instance_type'].update(inst_params)
 
         image = self.compute_api.snapshot(self.context, instance, 'snap1',
@@ -2783,12 +2795,12 @@ class ComputeAPITestCase(BaseTestCase):
         self.compute.terminate_instance(self.context, instance['uuid'])
 
     def test_volume_size(self):
-        local_size = 2
+        ephemeral_size = 2
         swap_size = 3
-        inst_type = {'local_gb': local_size, 'swap': swap_size}
+        inst_type = {'ephemeral_gb': ephemeral_size, 'swap': swap_size}
         self.assertEqual(self.compute_api._volume_size(inst_type,
-                                                          'ephemeral0'),
-                         local_size)
+                                                       'ephemeral0'),
+                         ephemeral_size)
         self.assertEqual(self.compute_api._volume_size(inst_type,
                                                        'ephemeral1'),
                          0)
