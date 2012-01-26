@@ -271,9 +271,9 @@ class ComputeManager(manager.SchedulerDependentManager):
         return self.driver.refresh_security_group_members(security_group_id)
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
-    def refresh_provider_fw_rules(self, context, **_kwargs):
+    def refresh_provider_fw_rules(self, context, **kwargs):
         """This call passes straight through to the virtualization driver."""
-        return self.driver.refresh_provider_fw_rules()
+        return self.driver.refresh_provider_fw_rules(**kwargs)
 
     def _get_instance_nw_info(self, context, instance):
         """Get a list of dictionaries of network data of an instance.
@@ -738,7 +738,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         instance.injected_files = kwargs.get('injected_files', [])
         network_info = self.network_api.get_instance_nw_info(context,
                                                              instance)
-        bd_mapping = self._setup_block_device_mapping(context, instance)
+        bd_mapping = self._setup_block_device_mapping(context, instance)[2]
 
         self._instance_update(context,
                               instance_uuid,
