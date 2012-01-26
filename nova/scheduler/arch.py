@@ -24,6 +24,7 @@ import string
 from nova import db
 from nova import flags
 from nova import utils
+from nova import exception
 
 from nova import log as logging
 
@@ -273,7 +274,7 @@ class ArchitectureScheduler(driver.Scheduler):
             zone, _x, host = availability_zone.partition(':')
         if host and context.is_admin:
             service = db.service_get_by_args(elevated, host, 'nova-volume')
-            if not self.service_is_up(service):
+            if not utils.service_is_up(service):
                 raise exception.WillNotSchedule(host=host)
             driver.cast_to_volume_host(context, host, 'create_volume',
                     volume_id=volume_id, **_kwargs)
@@ -288,7 +289,7 @@ class ArchitectureScheduler(driver.Scheduler):
             if volume_gigabytes + volume_ref['size'] > FLAGS.max_gigabytes:
                 msg = _("All hosts have too many gigabytes")
                 raise exception.NoValidHost(reason=msg)
-            if self.service_is_up(service):
+            if utils.service_is_up(service):
                 driver.cast_to_volume_host(context, service['host'],
                         'create_volume', volume_id=volume_id, **_kwargs)
                 return None
