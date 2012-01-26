@@ -66,12 +66,12 @@ class ArchitectureScheduler(driver.Scheduler):
         # from instance table
         wanted_vcpus = instance_type['vcpus']
         wanted_memory_mb = instance_type['memory_mb']
-        wanted_local_gb = instance_type['local_gb']
+        wanted_root_gb = instance_type['root_gb']
         instance_id = instance_type['id']
 
         LOG.debug(_("## wanted-vcpus=%s"), wanted_vcpus)
         LOG.debug(_("## wanted-memory=%s"), wanted_memory_mb)
-        LOG.debug(_("## wanted-hard=%s"), wanted_local_gb)
+        LOG.debug(_("## wanted-hard=%s"), wanted_root_gb)
         LOG.debug(_("## instance_id=%s"), instance_id)
 
         # from instance_metadata table
@@ -98,8 +98,7 @@ class ArchitectureScheduler(driver.Scheduler):
         """Get capability from zone_manager and match cpu_arch and others
         """
         cap = self.zone_manager.get_hosts_capabilities(context)
-        LOG.debug(_("## cap=%s"), cap)
-
+        
         for host, host_dict_cap in cap.iteritems():
             LOG.debug(_("## host=%s"), host)
             for service_name_cap, service_dict_cap in \
@@ -175,15 +174,12 @@ class ArchitectureScheduler(driver.Scheduler):
                         - int(resource_cap['vcpus_used']))
                     LOG.debug(_("## cap memory_mb = <%s>"),
                         resource_cap['host_memory_free'])
-                    LOG.debug(_("## cap local_gb = <%s>"),
-                        int(resource_cap['disk_total'])
-                        - int(resource_cap['disk_used']))
 
                     if wanted_vcpus > (int(resource_cap['vcpus']) \
                         - int(resource_cap['vcpus_used'])) \
                     or wanted_memory_mb > \
                        int(resource_cap['host_memory_free']) \
-                    or wanted_local_gb > (int(resource_cap['disk_total']) \
+                    or wanted_root_gb > (int(resource_cap['disk_total']) \
                         - int(resource_cap['disk_used'])):
 
                         flag_different = 1
@@ -313,3 +309,8 @@ class ArchitectureScheduler(driver.Scheduler):
             instances.append(driver.encode_instance(instance))
 
         return instances
+
+    def update_service_capabilities(self, service_name, host, capabilities):
+        """Process a capability update from a service node."""
+        self.zone_manager.update_service_capabilities(service_name,
+                host, capabilities)
