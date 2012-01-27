@@ -530,9 +530,9 @@ class LibvirtConnection(driver.ComputeDriver):
                 ' %(target)s') % locals())
         if FLAGS.libvirt_type == 'lxc':
             try:
-                disk.destroy_container(target, instance, \
-                    nbd=FLAGS.use_cow_images)
+                disk.destroy_container(self.container)
             except:
+                LOG.info(_('destroy_container fails but ignored'))
                 pass
         if FLAGS.connection_type == 'gpu':
             self.deassign_gpus(instance)
