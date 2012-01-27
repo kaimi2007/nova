@@ -30,35 +30,22 @@ A connection to a hypervisor through baremetal.
 """
 
 import hashlib
-import multiprocessing
 import os
-import random
 import shutil
-import subprocess
-import sys
-import tempfile
 import time
-import uuid
-
-from eventlet import greenthread
-from eventlet import tpool
 
 from nova import context as nova_context
 from nova import db
 from nova import exception
 from nova import flags
-from nova import ipv6
 from nova import log as logging
 from nova import utils
-from nova import vnc
-from nova.auth import manager
 from nova.compute import instance_types
 from nova.compute import power_state
 from nova.compute import vm_states
 from nova.virt import disk
+from nova.virt.disk import api as disk
 from nova.virt import driver
-from nova.virt import images
-from nova.virt import netutils
 from nova.virt.baremetal import nodes
 from nova.virt.baremetal import dom
 from nova.virt.libvirt import utils as libvirt_utils
@@ -169,7 +156,7 @@ class ProxyConnection(driver.ComputeDriver):
         LOG.info(_('instance %(instance_name)s: deleting instance files'
                 ' %(target)s') % locals())
         if FLAGS.baremetal_type == 'lxc':
-            disk.destroy_container(target, instance, nbd=FLAGS.use_cow_images)
+            disk.destroy_container(self.container)
         if os.path.exists(target):
             shutil.rmtree(target)
 
@@ -399,13 +386,15 @@ class ProxyConnection(driver.ComputeDriver):
                                   project_id=inst['project_id'])
 
         root_fname = hashlib.sha1(str(disk_images['image_id'])).hexdigest()
-        size = FLAGS.minimum_root_size
+        size = inst['root_gb'] * 1024 * 1024 * 1024
 
         inst_type_id = inst['instance_type_id']
         inst_type = instance_types.get_instance_type(inst_type_id)
         if inst_type['name'] == 'm1.tiny' or suffix == '.rescue':
             size = None
             root_fname += "_sm"
+        else:
+            root_fname += "_%d" % inst['root_gb']
 
         self._cache_image(fn=libvirt_utils.fetch_image,
                           context=context,
@@ -453,7 +442,7 @@ class ProxyConnection(driver.ComputeDriver):
             if FLAGS.use_ipv6:
                 address_v6 = mapping['ip6s'][0]['ip']
                 netmask_v6 = mapping['ip6s'][0]['netmask']
-                gateway_v6 = mapping['gateway6']
+                gateway_v6 = mapping['gateway_v6']
             net_info = {'name': 'eth%d' % ifc_num,
                    'address': address,
                    'netmask': netmask,
@@ -461,7 +450,7 @@ class ProxyConnection(driver.ComputeDriver):
                    'broadcast': mapping['broadcast'],
                    'dns': ' '.join(mapping['dns']),
                    'address_v6': address_v6,
-                   'gateway6': gateway_v6,
+                   'gateway_v6': gateway_v6,
                    'netmask_v6': netmask_v6}
             nets.append(net_info)
 
@@ -476,7 +465,7 @@ class ProxyConnection(driver.ComputeDriver):
 
             injection_path = basepath('root')
             img_id = inst.image_ref
-            tune2fs = True
+            disable_auto_fsck = True
 
             for injection in ('metadata', 'key', 'net'):
                 if locals()[injection]:
@@ -484,10 +473,14 @@ class ProxyConnection(driver.ComputeDriver):
                                '%(injection)s into image %(img_id)s'
                                % locals()))
             try:
+                LOG.info(_('%(injection_path)s %(key)s %(net)s '
+                               '%(metadata)s %(target_partition)s'
+                               '%(disable_auto_fsck)s'
+                               % locals()))
                 disk.inject_data(injection_path, key, net, metadata,
-                                 partition=None,  # target_partition,
-                                 nbd=FLAGS.use_cow_images,
-                                 tune2fs=tune2fs)
+                                 partition=target_partition,
+                                 use_cow=False,  # FLAGS.use_cow_images,
+                                 disable_auto_fsck=disable_auto_fsck)
 
             except Exception as e:
                 # This could be a windows image, or a vmdk format disk
@@ -516,7 +509,6 @@ class ProxyConnection(driver.ComputeDriver):
                     'memory_kb': inst_type['memory_mb'] * 1024,
                     'vcpus': inst_type['vcpus'],
                     'rescue': rescue,
-                    'local': inst_type['local_gb'],
                     'driver_type': driver_type,
                     'nics': nics,
                     'ip_address': mapping['ips'][0]['ip'],
@@ -526,10 +518,6 @@ class ProxyConnection(driver.ComputeDriver):
                     'kernel_id': instance['kernel_id'],
                     'ramdisk_id': instance['ramdisk_id']}
 
-        if FLAGS.vnc_enabled:
-            if FLAGS.baremetal_type != 'lxc':
-                xml_info['vncserver_host'] = FLAGS.vncserver_host
-                xml_info['vnc_keymap'] = FLAGS.vnc_keymap
         if not rescue:
             if instance['kernel_id']:
                 xml_info['kernel'] = xml_info['basepath'] + "/kernel"
@@ -722,7 +710,8 @@ class ProxyConnection(driver.ComputeDriver):
                'xpu_info': FLAGS.xpu_info,
                'net_arch': FLAGS.net_arch,
                'net_info': FLAGS.net_info,
-               'net_mbps': FLAGS.net_mbps}
+               'net_mbps': FLAGS.net_mbps,
+               'service_id': service_ref['id']}
 
         compute_node_ref = service_ref['compute_node']
         LOG.info(_('#### RLK: cpu_arch = %s ') % FLAGS.cpu_arch)

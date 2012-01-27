@@ -46,10 +46,11 @@ def get_baremetal_nodes():
 
 class BareMetalNodes(object):
     """
+    This manages node information and implements singleton.
+
     BareMetalNodes class handles machine architectures of interest to
     technical computing users have either poor or non-existent support
     for virtualization.
-    This manages node information and implements singleton.
     """
 
     _instance = None
@@ -57,7 +58,7 @@ class BareMetalNodes(object):
 
     def __new__(cls, *args, **kwargs):
         """
-        Returns the BareMetalNodes singleton
+        Returns the BareMetalNodes singleton.
         """
         if not cls._instance or ('new' in kwargs and kwargs['new']):
             cls._instance = super(BareMetalNodes, cls).__new__(cls)
@@ -65,12 +66,12 @@ class BareMetalNodes(object):
 
     def __init__(self, file_name="/tftpboot/tilera_boards"):
         """
-        Only call __init__ the first time object is instantiated
+        Only call __init__ the first time object is instantiated.
+
         From the bare-metal node list file: /tftpboot/tilera_boards,
-        Reads each item of each node
-            such as node ID, IP address, MAC address, vcpus,
-            memory, hdd, hypervisor type/version, and cpu
-        and appends each node information into nodes list
+        reads each item of each node such as node ID, IP address,
+        MAC address, vcpus, memory, hdd, hypervisor type/version, and cpu
+        and appends each node information into nodes list.
         """
         if self._is_init:
             return
@@ -111,9 +112,10 @@ class BareMetalNodes(object):
 
     def get_hw_info(self, field):
         """
-        Returns hardware information of bare-metal node by the given field
-            such as vcpus, memory_mb, local_gb, memory_mb_used,
-            local_gb_used, hypervisor_type, hypervisor_version, and cpu_info
+        Returns hardware information of bare-metal node by the given field.
+
+        Given field can be vcpus, memory_mb, local_gb, memory_mb_used,
+        local_gb_used, hypervisor_type, hypervisor_version, and cpu_info.
         """
         for node in self.nodes:
             if node['node_id'] == 9:
@@ -136,8 +138,9 @@ class BareMetalNodes(object):
 
     def set_status(self, node_id, status):
         """
-        Sets status of the given node by the given status
-        and Returns 1 if the node is in the nodes list
+        Sets status of the given node by the given status.
+
+        Returns 1 if the node is in the nodes list.
         """
         for node in self.nodes:
             if node['node_id'] == node_id:
@@ -147,15 +150,13 @@ class BareMetalNodes(object):
 
     def get_status(self):
         """
-        Gets status of the given node
+        Gets status of the given node.
         """
         pass
 
     def get_idle_node(self):
         """
-        Gets an idle node,
-        Sets the status as 1 (RUNNING)
-        and Returns the node ID
+        Gets an idle node, sets the status as 1 (RUNNING) and Returns node ID.
         """
         for item in self.nodes:
             if item['status'] == 0:
@@ -165,7 +166,7 @@ class BareMetalNodes(object):
 
     def get_ip_by_id(self, id):
         """
-        Returns default IP address of the given node
+        Returns default IP address of the given node.
         """
         for item in self.nodes:
             if item['node_id'] == id:
@@ -173,8 +174,7 @@ class BareMetalNodes(object):
 
     def free_node(self, node_id):
         """
-        Sets/frees status of the given node as 0 (IDLE)
-            so that the node can be used by other user
+        Sets/frees status of the given node as 0 (IDLE).
         """
         LOG.debug(_("free_node...."))
         for item in self.nodes:
@@ -183,10 +183,11 @@ class BareMetalNodes(object):
 
     def power_mgr(self, node_id, mode):
         """
-        Changes power state of the given node
-            according to the mode (1-ON, 2-OFF, 3-REBOOT)
-        /tftpboot/pdu_mgr script handles power management of
-        PDU (Power Distribution Unit)
+        Changes power state of the given node.
+
+        According to the mode (1-ON, 2-OFF, 3-REBOOT), power state can be
+        changed. /tftpboot/pdu_mgr script handles power management of
+        PDU (Power Distribution Unit).
         """
         if node_id < 5:
             pdu_num = 1
@@ -200,9 +201,10 @@ class BareMetalNodes(object):
 
     def deactivate_node(self, node_id):
         """
-        Deactivates the given node by turnning it off
+        Deactivates the given node by turnning it off.
+
         /tftpboot/fs_x directory is a NFS of node#x
-        /tftpboot/root_x file is an file system image of node#x
+        and /tftpboot/root_x file is an file system image of node#x.
         """
         node_ip = self.get_ip_by_id(node_id)
         LOG.debug(_("deactivate_node is called for \
@@ -225,9 +227,9 @@ class BareMetalNodes(object):
 
     def network_set(self, node_ip, mac_address, ip_address):
         """
-        Sets network configuration
-            based on the given ip_address and mac_address from nova
-            so that user can access the bare-metal node using ssh
+        Sets network configuration based on the given ip and mac address.
+
+        User can access the bare-metal node using ssh.
         """
         cmd = FLAGS.tile_monitor + \
             " --resume --net " + node_ip + " --run - " + \
@@ -239,9 +241,10 @@ class BareMetalNodes(object):
 
     def iptables_set(self, node_ip, user_data):
         """
-        Sets security setting (iptables:port) if needed
-            iptables -A INPUT -p tcp ! -s $IP --dport $PORT -j DROP
-        /tftpboot/iptables_rule script sets iptables rule on the given node
+        Sets security setting (iptables:port) if needed.
+
+        iptables -A INPUT -p tcp ! -s $IP --dport $PORT -j DROP
+        /tftpboot/iptables_rule script sets iptables rule on the given node.
         """
         if user_data != '':
             open_ip = base64.b64decode(user_data)
@@ -249,7 +252,7 @@ class BareMetalNodes(object):
 
     def check_activated(self, node_id, node_ip):
         """
-        Checks whether the given node is activated or not
+        Checks whether the given node is activated or not.
         """
         LOG.debug(_("Before ping to the bare-metal node"))
         tile_output = "/tftpboot/tile_output_" + str(node_id)
@@ -275,24 +278,23 @@ class BareMetalNodes(object):
 
     def vmlinux_set(self, node_id, mode):
         """
-        Sets kernel into default path (/tftpboot) if needed
-        in case of dummy image
-        from basepath to /tftpboot
-            based on the given mode
-            such as 0-NoSet, 1-SetVmlinux, 9-RemoveVmlinux
+        Sets kernel into default path (/tftpboot) if needed.
+
+        From basepath to /tftpboot, kernel is set based on the given mode
+        such as 0-NoSet, 1-SetVmlinux, or 9-RemoveVmlinux.
         """
         cmd = "Noting to do for tilera nodes: vmlinux is in CF"
         LOG.debug(_(cmd))
 
     def sleep_mgr(self, time_in_seconds):
         """
-        Sleeps until the node is activated
+        Sleeps until the node is activated.
         """
         time.sleep(time_in_seconds)
 
     def ssh_set(self, node_ip):
         """
-        Sets and Runs sshd in the node
+        Sets and Runs sshd in the node.
         """
         cmd = FLAGS.tile_monitor + \
             " --resume --net " + node_ip + " --run - " + \
@@ -303,7 +305,7 @@ class BareMetalNodes(object):
     def activate_node(self, node_id, node_ip, name, mac_address, \
                       ip_address, user_data):
         """
-        Activates the given node using ID, IP, and MAC address
+        Activates the given node using ID, IP, and MAC address.
         """
         LOG.debug(_("activate_node"))
 
@@ -323,7 +325,7 @@ class BareMetalNodes(object):
 
     def get_console_output(self, console_log, node_id):
         """
-        Gets console output of the given node
+        Gets console output of the given node.
         """
         node_ip = self.get_ip_by_id(node_id)
         log_path = "/tftpboot/log_" + str(node_id)
@@ -336,9 +338,9 @@ class BareMetalNodes(object):
 
     def get_image(self, bp):
         """
-        Gets the bare-metal file system image into the instance path
-        in case of dummy image
-        Noting to do for tilera nodes: actual image is used
+        Gets the bare-metal file system image into the instance path.
+
+        Noting to do for tilera nodes: actual image is used.
         """
         path_fs = "/tftpboot/tilera_fs"
         path_root = bp + "/root"
@@ -346,10 +348,11 @@ class BareMetalNodes(object):
 
     def set_image(self, bpath, node_id):
         """
-        Sets the PXE bare-metal file system from the instance path
-            after ssh key is injected
-        /tftpboot/fs_x directory is a NFS of node#x
-        /tftpboot/root_x file is an file system image of node#x
+        Sets the PXE bare-metal file system from the instance path.
+
+        This should be done after ssh key is injected.
+        /tftpboot/fs_x directory is a NFS of node#x.
+        /tftpboot/root_x file is an file system image of node#x.
         """
         path1 = bpath + "/root"
         pathx = "/tftpboot/root_" + str(node_id)

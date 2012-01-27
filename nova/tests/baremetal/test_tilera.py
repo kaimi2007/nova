@@ -16,11 +16,9 @@
 #
 
 import __builtin__
-
 import StringIO
 
 from nova import test
-
 from nova.virt.baremetal import tilera
 
 
