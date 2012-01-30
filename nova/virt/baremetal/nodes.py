@@ -15,9 +15,10 @@
 #    under the License.
 #
 
-from nova import flags
 from nova.virt.baremetal import tilera
 from nova.virt.baremetal import fake
+from nova import flags
+from nova import exception
 
 flags.DEFINE_string('baremetal_driver', 'tilera',
                     'Bare-metal driver runs on')
@@ -32,4 +33,4 @@ def get_baremetal_nodes():
     elif d == 'fake':
         return fake.get_baremetal_nodes()
     else:
-        raise Exception('Unknown baremetal driver "%s"' % d)
+        raise exception.Error(_("Unknown baremetal driver %(d)s"))

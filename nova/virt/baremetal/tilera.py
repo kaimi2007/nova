@@ -26,11 +26,11 @@ import os
 import subprocess
 import time
 
+from nova.compute import power_state
 from nova import exception
 from nova import flags
 from nova import log as logging
 from nova import utils
-from nova.compute import power_state
 
 flags.DEFINE_string('tile_monitor', '/usr/local/TileraMDE/bin/tile-monitor',
                     'Tilera command line program for Bare-metal driver')
@@ -237,6 +237,7 @@ class BareMetalNodes(object):
             " - --wait --run - ifconfig xgbe0 " + ip_address + \
             " - --wait --quit"
         subprocess.Popen(cmd, shell=True)
+        #utils.execute(cmd, shell=True)
         self.sleep_mgr(5)
 
     def iptables_set(self, node_ip, user_data):

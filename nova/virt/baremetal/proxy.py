@@ -103,7 +103,6 @@ class ProxyConnection(driver.ComputeDriver):
         return self._host_state
 
     def init_host(self, host):
-        # NOTE(nsokolov): moved instance restarting to ComputeManager
         pass
 
     def _get_connection(self):
@@ -140,8 +139,9 @@ class ProxyConnection(driver.ComputeDriver):
                 self._conn.destroy_domain(instance['name'])
                 break
             except Exception as ex:
-                msg = _("Error encountered when destroying instance '%(id)s': "
-                        "%(ex)s") % {"id": instance["id"], "ex": ex}
+                msg = (_("Error encountered when destroying instance "
+                        "'%(name)s': %(ex)s") %
+                        {"name": instance["name"], "ex": ex})
                 LOG.debug(msg)
                 break
 
@@ -473,10 +473,6 @@ class ProxyConnection(driver.ComputeDriver):
                                '%(injection)s into image %(img_id)s'
                                % locals()))
             try:
-                LOG.info(_('%(injection_path)s %(key)s %(net)s '
-                               '%(metadata)s %(target_partition)s'
-                               '%(disable_auto_fsck)s'
-                               % locals()))
                 disk.inject_data(injection_path, key, net, metadata,
                                  partition=target_partition,
                                  use_cow=False,  # FLAGS.use_cow_images,

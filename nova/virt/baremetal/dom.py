@@ -14,11 +14,11 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from nova.compute import power_state
 from nova import exception
 from nova import flags
 from nova import log as logging
 from nova import utils
-from nova.compute import power_state
 from nova.virt.baremetal import nodes
 
 FLAGS = flags.FLAGS
@@ -92,9 +92,8 @@ class BareMetalDom(object):
             dom = []
             LOG.debug(_("No domains exist."))
             return
-        LOG.debug(_("============= initial domains ==========="))
-        LOG.debug(_("%s"), self.domains)
-        LOG.debug(_("========================================="))
+        msg = _("============= initial domains =========== : %s")
+        LOG.debug(msg % (self.domains))
         for dom in self.domains[:]:
             if dom['status'] == power_state.BUILDING:
                 LOG.debug(_("Building domain: to be removed"))
@@ -159,13 +158,13 @@ class BareMetalDom(object):
             self.baremetal_nodes.deactivate_node(fd['node_id'])
 
             self.domains.remove(fd)
-            LOG.debug(_("domains: "))
-            LOG.debug(_(self.domains))
-            LOG.debug(_("nodes: "))
-            LOG.debug(_(self.baremetal_nodes.nodes))
+            msg = _("Domains: %s")
+            LOG.debug(msg % (self.domains))
+            msg = _("Nodes: %s")
+            LOG.debug(msg % (self.baremetal_nodes.nodes))
             self.store_domain()
-            LOG.debug(_("after storing domains"))
-            LOG.debug(_(self.domains))
+            msg = _("After storing domains: %s")
+            LOG.debug(msg % (self.domains))
         except:
             LOG.debug(_("deactivation/removing domain failed"))
             raise
@@ -196,7 +195,8 @@ class BareMetalDom(object):
                     'ramdisk_id': xml_dict['ramdisk_id'],
                      'status': power_state.BUILDING}
         self.domains.append(new_dom)
-        LOG.debug(_(new_dom))
+        msg = _("Created new domain: %s")
+        LOG.debug(msg % (new_dom))
         self.change_domain_state(new_dom['name'], power_state.BUILDING)
 
         self.baremetal_nodes.set_image(bpath, node_id)
@@ -230,10 +230,8 @@ class BareMetalDom(object):
         """
         Stores fake domains to the file.
         """
-        LOG.debug(_("store fake domains to the file"))
-        LOG.debug(_("-------"))
-        LOG.debug(_(self.domains))
-        LOG.debug(_("-------"))
+        msg = _("Stored fake domains to the file: %s")
+        LOG.debug(msg % (self.domains))
         write_domains(self.fake_dom_file, self.domains)
 
     def find_domain(self, name):
