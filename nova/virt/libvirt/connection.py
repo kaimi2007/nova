@@ -163,7 +163,7 @@ libvirt_opts = [
                     '(valid options are: sd, xvd, uvd, vd)'),
     cfg.ListOpt('extra_node_capabilities',
                default=[],
-               help= 'Key/value list with extra caps of the compute node'),
+               help='Key/value list with extra caps of the compute node'),
     cfg.StrOpt('dev_cgroups_path',
                default=None,
                help='Override the default disk prefix for the devices '

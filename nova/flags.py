@@ -195,7 +195,6 @@ def _get_my_ip():
         return "127.0.0.1"
 
 
-
 global_opts = [
     cfg.StrOpt('my_ip',
                default=_get_my_ip(),
