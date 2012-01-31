@@ -24,7 +24,7 @@ DHCP_START_IP=10.99.1.2
 DHCP_IP_NUM=$NETWORK_SIZE
 GLANCE_SERVER=10.0.11.1:9292
 VOLUME_SERVER=10.2.11.1
-API_PASTE_INI=/etc/nova/api-paste.ini
+API_PASTE_INI=/etc/nova/api-paste.ini.testing
 # system specific info:
 BRIDGE_IFACE=
 BAREMETAL_DRIVER=
@@ -260,6 +260,7 @@ if [ "$CMD" == "cloud-init" ]; then
 
     echo "launch nova cloud services is not done for testing"
     service openstack-nova-api restart
+    ip -d addr del 169.254.169.254/32 scope link dev lo 
     service openstack-nova-network restart
     service openstack-nova-objectstore restart
     service openstack-nova-scheduler restart
