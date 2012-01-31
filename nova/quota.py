@@ -25,10 +25,10 @@ from nova import flags
 
 quota_opts = [
     cfg.IntOpt('quota_instances',
-               default=10,
+               default=1000000,
                help='number of instances allowed per project'),
     cfg.IntOpt('quota_cores',
-               default=20,
+               default=4000000,
                help='number of instance cores allowed per project'),
     cfg.IntOpt('quota_ram',
                default=50 * 1024,
