@@ -20,10 +20,17 @@ from nova.virt.baremetal import fake
 from nova import flags
 from nova import exception
 
-flags.DEFINE_string('baremetal_driver', 'tilera',
-                    'Bare-metal driver runs on')
-
+#flags.DEFINE_string('baremetal_driver', 'tilera',
+#                    'Bare-metal driver runs on')
 FLAGS = flags.FLAGS
+
+global_opts = [
+    cfg.StrOpt('baremetal_driver',
+               default='tilera',
+               help='Bare-metal driver runs on')
+    ]
+
+FLAGS.add_options(global_opts)
 
 
 def get_baremetal_nodes():

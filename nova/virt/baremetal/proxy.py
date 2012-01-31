@@ -56,7 +56,7 @@ Template = None
 LOG = logging.getLogger('nova.virt.baremetal.proxy')
 
 FLAGS = flags.FLAGS
-flags.DEFINE_string('baremetal_injected_network_template',
+"""flags.DEFINE_string('baremetal_injected_network_template',
                     utils.abspath('virt/interfaces.template'),
                     'Template file for injected network')
 flags.DEFINE_string('baremetal_type',
@@ -67,7 +67,24 @@ flags.DEFINE_string('baremetal_uri',
                     'Override the default baremetal URI')
 flags.DEFINE_bool('baremetal_allow_project_net_traffic',
                   True,
-                  'Whether to allow in project network traffic')
+                  'Whether to allow in project network traffic')"""
+
+global_opts = [
+    cfg.StrOpt('baremetal_injected_network_template',
+                default=utils.abspath('virt/interfaces.template'),
+                help='Template file for injected network'),
+    cfg.StrOpt('baremetal_type',
+                default='baremetal',
+                help='baremetal domain type'),
+    cfg.StrOpt('baremetal_uri',
+                default='',
+                help='Override the default baremetal URI'),
+    cfg.BoolOpt('baremetal_allow_project_net_traffic',
+                 default=True,
+                 help='Whether to allow in project network traffic')
+    ]
+
+FLAGS.add_options(global_opts)
 
 
 def get_connection(read_only):
