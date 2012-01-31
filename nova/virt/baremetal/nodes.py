@@ -17,11 +17,10 @@
 
 from nova.virt.baremetal import tilera
 from nova.virt.baremetal import fake
+from nova.common import cfg
 from nova import flags
 from nova import exception
 
-#flags.DEFINE_string('baremetal_driver', 'tilera',
-#                    'Bare-metal driver runs on')
 FLAGS = flags.FLAGS
 
 global_opts = [

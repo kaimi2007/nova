@@ -27,13 +27,12 @@ import subprocess
 import time
 
 from nova.compute import power_state
+from nova.common import cfg
 from nova import exception
 from nova import flags
 from nova import log as logging
 from nova import utils
 
-#flags.DEFINE_string('tile_monitor', '/usr/local/TileraMDE/bin/tile-monitor',
-#                    'Tilera command line program for Bare-metal driver')
 FLAGS = flags.FLAGS
 
 global_opts = [

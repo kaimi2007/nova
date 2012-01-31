@@ -40,6 +40,7 @@ from nova import exception
 from nova import flags
 from nova import log as logging
 from nova import utils
+from nova.common import cfg
 from nova.compute import instance_types
 from nova.compute import power_state
 from nova.compute import vm_states
@@ -56,18 +57,6 @@ Template = None
 LOG = logging.getLogger('nova.virt.baremetal.proxy')
 
 FLAGS = flags.FLAGS
-"""flags.DEFINE_string('baremetal_injected_network_template',
-                    utils.abspath('virt/interfaces.template'),
-                    'Template file for injected network')
-flags.DEFINE_string('baremetal_type',
-                    'baremetal',
-                    'baremetal domain type')
-flags.DEFINE_string('baremetal_uri',
-                    '',
-                    'Override the default baremetal URI')
-flags.DEFINE_bool('baremetal_allow_project_net_traffic',
-                  True,
-                  'Whether to allow in project network traffic')"""
 
 global_opts = [
     cfg.StrOpt('baremetal_injected_network_template',
