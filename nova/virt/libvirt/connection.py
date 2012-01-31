@@ -161,7 +161,7 @@ libvirt_opts = [
                help='Override the default disk prefix for the devices attached'
                     ' to a server, which is dependent on libvirt_type. '
                     '(valid options are: sd, xvd, uvd, vd)'),
-    cfg.StrOpt('extra_node_capabilities',
+    cfg.ListOpt('extra_node_capabilities',
                default=[],
                help= 'Key/value list with extra caps of the compute node'),
     cfg.StrOpt('dev_cgroups_path',
