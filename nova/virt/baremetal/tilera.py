@@ -38,7 +38,7 @@ FLAGS = flags.FLAGS
 
 global_opts = [
     cfg.StrOpt('tile_monitor',
-               default=/usr/local/TileraMDE/bin/tile-monitor,
+               default='/usr/local/TileraMDE/bin/tile-monitor',
                help='Tilera command line program for Bare-metal driver')
     ]
 
