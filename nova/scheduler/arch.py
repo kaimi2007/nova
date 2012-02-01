@@ -30,16 +30,24 @@ from nova import log as logging
 
 LOG = logging.getLogger('nova.scheduler.ArchitectureScheduler')
 
+from nova.common import cfg
 from nova.scheduler import driver
 from nova import db
 
+ArchetectureScheduler_opts = [
+    cfg.IntOpt('max_cores',
+               default=16,
+               help='maximum number of instance cores to allow per host'),
+    cfg.IntOpt('max_gigabytes',
+               default=10000,
+               help='maximum number of volume gigabytes to allow per host'),
+    cfg.IntOpt('max_networks',
+               default=1000,
+               help='maximum number of networks to allow per host'),
+    ]
+
 FLAGS = flags.FLAGS
-flags.DEFINE_integer("max_cores", 16,
-                     "maximum number of instance cores to allow per host")
-flags.DEFINE_integer("max_gigabytes", 10000,
-                     "maximum number of volume gigabytes to allow per host")
-flags.DEFINE_integer("max_networks", 1000,
-                     "maximum number of networks to allow per host")
+FLAGS.add_options(ArchetectureScheduler_opts)
 
 
 class ArchitectureScheduler(driver.Scheduler):
