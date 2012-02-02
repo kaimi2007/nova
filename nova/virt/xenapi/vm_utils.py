@@ -30,7 +30,7 @@ import tempfile
 import time
 import urllib
 import uuid
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from xml.dom import minidom
 
 from nova.common import cfg
@@ -58,6 +58,15 @@ xenapi_vm_utils_opts = [
     cfg.IntOpt('max_kernel_ramdisk_size',
                default=16 * 1024 * 1024,
                help='maximum size in bytes of kernel or ramdisk images'),
+    cfg.StrOpt('sr_matching_filter',
+               default='other-config:i18n-key=local-storage',
+               help='Filter for finding the SR to be used to install guest '
+                    'instances on. The default value is the Local Storage in '
+                    'default XenServer/XCP installations. To select an SR '
+                    'with a different matching criteria, you could set it to '
+                    'other-config:my_favorite_sr=true. On the other hand, to '
+                    'fall back on the Default SR, as displayed by XenCenter, '
+                    'set this flag to: default-sr:true'),
     ]
 
 FLAGS = flags.FLAGS
@@ -965,15 +974,34 @@ class VMHelper(HelperBase):
     def find_sr(cls, session):
         """Return the storage repository to hold VM images"""
         host = session.get_xenapi_host()
+        try:
+            tokens = FLAGS.sr_matching_filter.split(':')
+            filter_criteria = tokens[0]
+            filter_pattern = tokens[1]
+        except IndexError:
+            # oops, flag is invalid
+            LOG.warning(_("Flag sr_matching_filter '%s' does not respect "
+                          "formatting convention"), FLAGS.sr_matching_filter)
+            return None
 
-        for sr_ref, sr_rec in cls.get_all_refs_and_recs(session, 'SR'):
-            if not ('i18n-key' in sr_rec['other_config'] and
-                    sr_rec['other_config']['i18n-key'] == 'local-storage'):
-                continue
-            for pbd_ref in sr_rec['PBDs']:
-                pbd_rec = cls.get_rec(session, 'PBD', pbd_ref)
-                if pbd_rec and pbd_rec['host'] == host:
-                    return sr_ref
+        if filter_criteria == 'other-config':
+            key, value = filter_pattern.split('=', 1)
+            for sr_ref, sr_rec in cls.get_all_refs_and_recs(session, 'SR'):
+                if not (key in sr_rec['other_config'] and
+                        sr_rec['other_config'][key] == value):
+                    continue
+                for pbd_ref in sr_rec['PBDs']:
+                    pbd_rec = cls.get_rec(session, 'PBD', pbd_ref)
+                    if pbd_rec and pbd_rec['host'] == host:
+                        return sr_ref
+        elif filter_criteria == 'default-sr' and filter_pattern == 'true':
+            pool_ref = session.call_xenapi('pool.get_all')[0]
+            return session.call_xenapi('pool.get_default_SR', pool_ref)
+        # No SR found!
+        LOG.warning(_("XenAPI is unable to find a Storage Repository to "
+                      "install guest instances on. Please check your "
+                      "configuration and/or configure the flag "
+                      "'sr_matching_filter'"))
         return None
 
     @classmethod
@@ -1082,9 +1110,21 @@ def parse_rrd_update(doc, start, until=None):
 def average_series(data, col, start, until=None):
     vals = [row['values'][col] for row in data
             if (not until or (row['time'] <= until)) and
-                not row['values'][col].is_nan()]
+                row['values'][col].is_finite()]
     if vals:
-        return (sum(vals) / len(vals)).quantize(Decimal('1.0000'))
+        try:
+            return (sum(vals) / len(vals)).quantize(Decimal('1.0000'))
+        except InvalidOperation:
+            # (mdragon) Xenserver occasionally returns odd values in
+            # data that will throw an error on averaging (see bug 918490)
+            # These are hard to find, since, whatever those values are,
+            # Decimal seems to think they are a valid number, sortof.
+            # We *think* we've got the the cases covered, but just in
+            # case, log and return NaN, so we don't break reporting of
+            # other statistics.
+            LOG.error(_("Invalid statistics data from Xenserver: %s")
+                      % str(vals))
+            return Decimal('NaN')
     else:
         return Decimal('0.0000')
 

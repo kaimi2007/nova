@@ -1029,7 +1029,8 @@ class LibvirtConnection(driver.ComputeDriver):
                            block_device_info=block_device_info)
 
         domain = self._create_new_domain(xml)
-        LOG.debug(_("instance %s: is running"), instance['name'])
+        LOG.debug(_("instance %s: is running"), instance['name'],
+                  instance=instance)
         self.firewall_driver.apply_instance_filter(instance, network_info)
 
         def _wait_for_boot():
@@ -1040,7 +1041,7 @@ class LibvirtConnection(driver.ComputeDriver):
                 state = self.get_info(instance_name)['state']
             except exception.NotFound:
                 msg = _("During reboot, %s disappeared.") % instance_name
-                LOG.error(msg)
+                LOG.error(msg, instance=instance)
                 raise utils.LoopingCallDone
 
             if state == power_state.RUNNING:
@@ -1053,7 +1054,7 @@ class LibvirtConnection(driver.ComputeDriver):
                         db.instance_update(context, instance['id'], \
                             {'vm_state': vm_states.OVERCOMMIT})
                 msg = _("Instance %s spawned successfully.") % instance_name
-                LOG.info(msg)
+                LOG.info(msg, instance=instance)
                 raise utils.LoopingCallDone
 
         timer = utils.LoopingCall(_wait_for_boot)
@@ -1080,6 +1081,11 @@ class LibvirtConnection(driver.ComputeDriver):
         fp = open(fpath, 'a+')
         fp.write(data)
         return fpath
+
+    def _inject_files(self, instance, files):
+        disk_path = os.path.join(FLAGS.instances_path,
+                                 instance['name'], 'disk')
+        disk.inject_files(disk_path, files, use_cow=FLAGS.use_cow_images)
 
     @exception.wrap_exception()
     def get_console_output(self, instance):
@@ -1147,7 +1153,7 @@ class LibvirtConnection(driver.ComputeDriver):
         return {'host': host, 'port': port, 'internal_access_path': None}
 
     @staticmethod
-    def _cache_image(fn, target, fname, cow=False, *args, **kwargs):
+    def _cache_image(fn, target, fname, cow=False, size=None, *args, **kwargs):
         """Wrapper for a method that creates an image that caches the image.
 
         This wrapper will save the image into a common store and create a
@@ -1160,7 +1166,11 @@ class LibvirtConnection(driver.ComputeDriver):
         to be unique to a given image.
 
         If cow is True, it will make a CoW image instead of a copy.
+
+        If size is specified, we attempt to resize up to that size.
         """
+
+        generating = 'image_id' not in kwargs
 
         if not os.path.exists(target):
             base_dir = os.path.join(FLAGS.instances_path, '_base')
@@ -1173,20 +1183,36 @@ class LibvirtConnection(driver.ComputeDriver):
                 if not os.path.exists(base):
                     fn(target=base, *args, **kwargs)
 
-            call_if_not_exists(base, fn, *args, **kwargs)
+            if cow or not generating:
+                call_if_not_exists(base, fn, *args, **kwargs)
+            elif generating:
+                # For raw it's quicker to generate both
+                # FIXME(p-draigbrady) the first call here is probably
+                # redundant, as it's of no benefit to cache in base?
+                call_if_not_exists(base, fn, *args, **kwargs)
+                if os.path.exists(target):
+                    os.unlink(target)
+                fn(target=target, *args, **kwargs)
 
             if cow:
+                if size:
+                    disk.extend(base, size)
                 libvirt_utils.create_cow_image(base, target)
-            else:
+            elif not generating:
                 libvirt_utils.copy_image(base, target)
+                # Resize after the copy, as it's usually much faster
+                # to make sparse updates, rather than potentially
+                # naively copying the whole image file.
+                if size:
+                    # FIXME(p-draigbrady) the first call here is probably
+                    # redundant, as it's of no benefit have full size in base?
+                    disk.extend(base, size)
+                    disk.extend(target, size)
 
     @staticmethod
-    def _fetch_image(context, target, image_id, user_id, project_id,
-                     size=None):
-        """Grab image and optionally attempt to resize it"""
+    def _fetch_image(context, target, image_id, user_id, project_id):
+        """Grab image to raw format"""
         images.fetch_to_raw(context, image_id, target, user_id, project_id)
-        if size:
-            disk.extend(target, size)
 
     @staticmethod
     def _create_local(target, local_size, unit='G', fs_format=None):
@@ -1427,6 +1453,10 @@ class LibvirtConnection(driver.ComputeDriver):
 
         if FLAGS.libvirt_type == 'uml':
             libvirt_utils.chown(basepath('disk'), 'root')
+
+        files_to_inject = inst.get('injected_files')
+        if files_to_inject:
+            self._inject_files(inst, files_to_inject)
 
     @staticmethod
     def _volume_in_mapping(mount_device, block_device_info):

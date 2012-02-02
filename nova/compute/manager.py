@@ -49,7 +49,7 @@ from nova.common import cfg
 from nova.compute import instance_types
 from nova.compute import power_state
 from nova.compute import task_states
-from nova.compute.utils import notify_usage_exists
+from nova.compute import utils as compute_utils
 from nova.compute import vm_states
 from nova import exception
 from nova import flags
@@ -57,6 +57,7 @@ import nova.image
 from nova import log as logging
 from nova import manager
 from nova import network
+from nova.network import model as network_model
 from nova.notifier import api as notifier
 from nova import rpc
 from nova import utils
@@ -222,6 +223,12 @@ class ComputeManager(manager.SchedulerDependentManager):
         """Update an instance in the database using kwargs as value."""
         return self.db.instance_update(context, instance_id, kwargs)
 
+    def _set_instance_error_state(self, context, instance_uuid):
+        self._instance_update(context,
+                              instance_uuid,
+                              vm_state=vm_states.ERROR,
+                              task_state=None)
+
     def init_host(self):
         """Initialization for a standalone compute service."""
         self.driver.init_host(host=self.host)
@@ -248,7 +255,7 @@ class ComputeManager(manager.SchedulerDependentManager):
                 try:
                     net_info = self._get_instance_nw_info(context, instance)
                     self.driver.ensure_filtering_rules_for_instance(instance,
-                                                                    net_info)
+                                                self._legacy_nw_info(net_info))
                 except NotImplementedError:
                     LOG.warning(_('Hypervisor driver does not '
                             'support firewall rules'))
@@ -303,10 +310,18 @@ class ComputeManager(manager.SchedulerDependentManager):
     def _get_instance_nw_info(self, context, instance):
         """Get a list of dictionaries of network data of an instance.
         Returns an empty list if stub_network flag is set."""
-        network_info = []
-        if not FLAGS.stub_network:
-            network_info = self.network_api.get_instance_nw_info(context,
-                                                                 instance)
+        if FLAGS.stub_network:
+            return network_model.NetworkInfo()
+
+        # get the network info from network
+        network_info = self.network_api.get_instance_nw_info(context,
+                                                             instance)
+        return network_info
+
+    def _legacy_nw_info(self, network_info):
+        """Converts the model nw_info object to legacy style"""
+        if self.driver.legacy_nwinfo():
+            network_info = compute_utils.legacy_network_info(network_info)
         return network_info
 
     def _setup_block_device_mapping(self, context, instance):
@@ -510,12 +525,13 @@ class ComputeManager(manager.SchedulerDependentManager):
         if FLAGS.stub_network:
             msg = _("Skipping network allocation for instance %s")
             LOG.debug(msg % instance['uuid'])
-            return []
+            return network_model.NetworkInfo()
         self._instance_update(context, instance['uuid'],
                               vm_state=vm_states.BUILDING,
                               task_state=task_states.NETWORKING)
         is_vpn = instance['image_ref'] == str(FLAGS.vpn_image_id)
         try:
+            # allocate and get network info
             network_info = self.network_api.allocate_for_instance(
                                 context, instance, vpn=is_vpn,
                                 requested_networks=requested_networks)
@@ -523,7 +539,9 @@ class ComputeManager(manager.SchedulerDependentManager):
             msg = _("Instance %s failed network setup")
             LOG.exception(msg % instance['uuid'])
             raise
+
         LOG.debug(_("instance network_info: |%s|"), network_info)
+
         return network_info
 
     def _prep_block_device(self, context, instance):
@@ -548,7 +566,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         instance['admin_pass'] = admin_pass
         try:
             self.driver.spawn(context, instance, image_meta,
-                              network_info, block_device_info)
+                         self._legacy_nw_info(network_info), block_device_info)
         except Exception:
             msg = _("Instance %s failed to spawn")
             LOG.exception(msg % instance['uuid'])
@@ -627,9 +645,10 @@ class ComputeManager(manager.SchedulerDependentManager):
                   {'action_str': action_str, 'instance_uuid': instance_uuid},
                   context=context)
 
+        # get network info before tearing down
         network_info = self._get_instance_nw_info(context, instance)
-        if not FLAGS.stub_network:
-            self.network_api.deallocate_for_instance(context, instance)
+        # tear down allocated network structure
+        self._deallocate_network(context, instance)
 
         if instance['power_state'] == power_state.SHUTOFF:
             self.db.instance_destroy(context, instance_id)
@@ -639,7 +658,8 @@ class ComputeManager(manager.SchedulerDependentManager):
         bdms = self._get_instance_volume_bdms(context, instance_id)
         block_device_info = self._get_instance_volume_block_device_info(
             context, instance_id)
-        self.driver.destroy(instance, network_info, block_device_info)
+        self.driver.destroy(instance, self._legacy_nw_info(network_info),
+                            block_device_info)
         for bdm in bdms:
             try:
                 # NOTE(vish): actual driver detach done in driver.destroy, so
@@ -684,7 +704,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         """Terminate an instance on this host."""
         elevated = context.elevated()
         instance = self.db.instance_get_by_uuid(elevated, instance_uuid)
-        notify_usage_exists(instance, current_period=True)
+        compute_utils.notify_usage_exists(instance, current_period=True)
         self._delete_instance(context, instance)
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
@@ -739,6 +759,19 @@ class ComputeManager(manager.SchedulerDependentManager):
         :param injected_files: Files to inject
         :param new_pass: password to set on rebuilt instance
         """
+        try:
+            self._rebuild_instance(context, instance_uuid, kwargs)
+        except exception.ImageNotFound:
+            msg = _("Cannot rebuild instance [%(instance_uuid)s]"
+                    ", because the given image does not exist.")
+            LOG.error(msg % instance_uuid, context=context)
+            self._set_instance_error_state(context, instance_uuid)
+        except Exception as exc:
+            msg = _("Cannot rebuild instance [%(instance_uuid)s]: %(exc)s")
+            LOG.error(msg % locals(), context=context)
+            self._set_instance_error_state(context, instance_uuid)
+
+    def _rebuild_instance(self, context, instance_uuid, kwargs):
         context = context.elevated()
 
         LOG.audit(_("Rebuilding instance %s"), instance_uuid, context=context)
@@ -753,7 +786,7 @@ class ComputeManager(manager.SchedulerDependentManager):
                               task_state=None)
 
         network_info = self._get_instance_nw_info(context, instance)
-        self.driver.destroy(instance, network_info)
+        self.driver.destroy(instance, self._legacy_nw_info(network_info))
 
         self._instance_update(context,
                               instance_uuid,
@@ -776,7 +809,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         image_meta = _get_image_meta(context, instance['image_ref'])
 
         self.driver.spawn(context, instance, image_meta,
-                          network_info, device_info)
+                          self._legacy_nw_info(network_info), device_info)
 
         current_power_state = self._get_power_state(context, instance)
         self._instance_update(context,
@@ -815,7 +848,8 @@ class ComputeManager(manager.SchedulerDependentManager):
                      context=context)
 
         network_info = self._get_instance_nw_info(context, instance)
-        self.driver.reboot(instance, network_info, reboot_type)
+        self.driver.reboot(instance, self._legacy_nw_info(network_info),
+                           reboot_type)
 
         current_power_state = self._get_power_state(context, instance)
         self._instance_update(context,
@@ -980,10 +1014,7 @@ class ComputeManager(manager.SchedulerDependentManager):
                     # Catch all here because this could be anything.
                     LOG.exception(e)
                     if i == max_tries - 1:
-                        self._instance_update(context,
-                                              instance_id,
-                                              task_state=None,
-                                              vm_state=vm_states.ERROR)
+                        self._set_instance_error_state(context, instance_id)
                         # We create a new exception here so that we won't
                         # potentially reveal password information to the
                         # API caller.  The real exception is logged above
@@ -1047,7 +1078,8 @@ class ComputeManager(manager.SchedulerDependentManager):
         image_meta = _get_image_meta(context, instance_ref['image_ref'])
 
         with self.error_out_instance_on_exception(context, instance_uuid):
-            self.driver.rescue(context, instance_ref, network_info, image_meta)
+            self.driver.rescue(context, instance_ref,
+                               self._legacy_nw_info(network_info), image_meta)
 
         current_power_state = self._get_power_state(context, instance_ref)
         self._instance_update(context,
@@ -1068,7 +1100,8 @@ class ComputeManager(manager.SchedulerDependentManager):
         network_info = self._get_instance_nw_info(context, instance_ref)
 
         with self.error_out_instance_on_exception(context, instance_uuid):
-            self.driver.unrescue(instance_ref, network_info)
+            self.driver.unrescue(instance_ref,
+                                 self._legacy_nw_info(network_info))
 
         current_power_state = self._get_power_state(context, instance_ref)
         self._instance_update(context,
@@ -1090,8 +1123,8 @@ class ComputeManager(manager.SchedulerDependentManager):
                                           "resize.confirm.start")
 
         network_info = self._get_instance_nw_info(context, instance_ref)
-        self.driver.confirm_migration(
-                migration_ref, instance_ref, network_info)
+        self.driver.confirm_migration(migration_ref, instance_ref,
+                                      self._legacy_nw_info(network_info))
 
         self._notify_about_instance_usage(instance_ref, "resize.confirm.end",
                                           network_info=network_info)
@@ -1111,7 +1144,7 @@ class ComputeManager(manager.SchedulerDependentManager):
                 migration_ref.instance_uuid)
 
         network_info = self._get_instance_nw_info(context, instance_ref)
-        self.driver.destroy(instance_ref, network_info)
+        self.driver.destroy(instance_ref, self._legacy_nw_info(network_info))
         topic = self.db.queue_get_for(context, FLAGS.compute_topic,
                 migration_ref['source_compute'])
         rpc.cast(context, topic,
@@ -1288,8 +1321,9 @@ class ComputeManager(manager.SchedulerDependentManager):
 
         try:
             self.driver.finish_migration(context, migration_ref, instance_ref,
-                                         disk_info, network_info, image_meta,
-                                         resize_instance)
+                                         disk_info,
+                                         self._legacy_nw_info(network_info),
+                                         image_meta, resize_instance)
         except Exception, error:
             with utils.save_and_reraise_exception():
                 msg = _('%s. Setting instance vm_state to ERROR')
@@ -1498,7 +1532,8 @@ class ComputeManager(manager.SchedulerDependentManager):
         network_info = self._get_instance_nw_info(context, instance)
         LOG.debug(_("network_info to inject: |%s|"), network_info)
 
-        self.driver.inject_network_info(instance, network_info)
+        self.driver.inject_network_info(instance,
+                                        self._legacy_nw_info(network_info))
         return network_info
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
@@ -1774,14 +1809,16 @@ class ComputeManager(manager.SchedulerDependentManager):
         # concorrent request occurs to iptables, then it complains.
         network_info = self._get_instance_nw_info(context, instance_ref)
 
-        fixed_ips = [nw_info[1]['ips'] for nw_info in network_info]
+        # TODO(tr3buchet): figure out how on the earth this is necessary
+        fixed_ips = network_info.fixed_ips()
         if not fixed_ips:
             raise exception.FixedIpNotFoundForInstance(instance_id=instance_id)
 
         max_retry = FLAGS.live_migration_retry_count
         for cnt in range(max_retry):
             try:
-                self.driver.plug_vifs(instance_ref, network_info)
+                self.driver.plug_vifs(instance_ref,
+                                      self._legacy_nw_info(network_info))
                 break
             except exception.ProcessExecutionError:
                 if cnt == max_retry - 1:
@@ -1799,7 +1836,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         # In addition, this method is creating filtering rule
         # onto destination host.
         self.driver.ensure_filtering_rules_for_instance(instance_ref,
-                                                        network_info)
+                                            self._legacy_nw_info(network_info))
 
         # Preparation for block migration
         if block_migration:
@@ -1889,7 +1926,8 @@ class ComputeManager(manager.SchedulerDependentManager):
 
         network_info = self._get_instance_nw_info(ctxt, instance_ref)
         # Releasing security group ingress rule.
-        self.driver.unfilter_instance(instance_ref, network_info)
+        self.driver.unfilter_instance(instance_ref,
+                                      self._legacy_nw_info(network_info))
 
         # Database updating.
         # NOTE(jkoelker) This needs to be converted to network api calls
@@ -1939,13 +1977,15 @@ class ComputeManager(manager.SchedulerDependentManager):
         # No instance booting at source host, but instance dir
         # must be deleted for preparing next block migration
         if block_migration:
-            self.driver.destroy(instance_ref, network_info)
+            self.driver.destroy(instance_ref,
+                                self._legacy_nw_info(network_info))
         else:
             # self.driver.destroy() usually performs  vif unplugging
             # but we must do it explicitly here when block_migration
             # is false, as the network devices at the source must be
             # torn down
-            self.driver.unplug_vifs(instance_ref, network_info)
+            self.driver.unplug_vifs(instance_ref,
+                                    self._legacy_nw_info(network_info))
 
         LOG.info(_('Migrating %(instance_uuid)s to %(dest)s finished'
                    ' successfully.') % locals())
@@ -1966,10 +2006,9 @@ class ComputeManager(manager.SchedulerDependentManager):
         LOG.info(_('Post operation of migraton started for %s .')
                  % instance_ref['uuid'])
         network_info = self._get_instance_nw_info(context, instance_ref)
-        self.driver.post_live_migration_at_destination(context,
-                                                       instance_ref,
-                                                       network_info,
-                                                       block_migration)
+        self.driver.post_live_migration_at_destination(context, instance_ref,
+                                            self._legacy_nw_info(network_info),
+                                            block_migration)
 
     def rollback_live_migration(self, context, instance_ref,
                                 dest, block_migration):
@@ -2021,7 +2060,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         #             from remote volumes if necessary
         block_device_info = \
             self._get_instance_volume_block_device_info(context, instance_id)
-        self.driver.destroy(instance_ref, network_info,
+        self.driver.destroy(instance_ref, self._legacy_nw_info(network_info),
                             block_device_info)
 
     @manager.periodic_task
@@ -2238,10 +2277,7 @@ class ComputeManager(manager.SchedulerDependentManager):
             with utils.save_and_reraise_exception():
                 msg = _('%s. Setting instance vm_state to ERROR')
                 LOG.error(msg % error)
-                self._instance_update(context,
-                                      instance_uuid,
-                                      vm_state=vm_states.ERROR,
-                                      task_state=None)
+                self._set_instance_error_state(context, instance_uuid)
 
     def add_aggregate_host(self, context, aggregate_id, host):
         """Adds a host to a physical hypervisor pool."""
