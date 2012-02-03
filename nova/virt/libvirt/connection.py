@@ -252,6 +252,9 @@ class LibvirtConnection(driver.ComputeDriver):
             global gpus_available
             gpus_available = range(FLAGS.xpus)
 
+        if FLAGS.libvirt_type == 'lxc':
+            FLAGS.use_cow_images = False
+
         # NOTE(nsokolov): moved instance restarting to ComputeManager
         pass
 
