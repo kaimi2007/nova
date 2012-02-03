@@ -76,6 +76,7 @@ from nova.virt import disk
 from nova.virt.disk import api as disk
 from nova.virt import driver
 from nova.virt import images
+from nova.virt.libvirt import imagecache
 from nova.virt.libvirt import utils as libvirt_utils
 from nova import vnc
 from nova.compute import vm_states
@@ -237,6 +238,8 @@ class LibvirtConnection(driver.ComputeDriver):
         self.default_root_device = self._disk_prefix + 'a'
         self.default_ephemeral_device = self._disk_prefix + 'b'
         self.default_swap_device = self._disk_prefix + 'c'
+
+        self.image_cache_manager = imagecache.ImageCacheManager()
 
     @property
     def host_state(self):
@@ -1171,7 +1174,6 @@ class LibvirtConnection(driver.ComputeDriver):
         """
 
         generating = 'image_id' not in kwargs
-
         if not os.path.exists(target):
             base_dir = os.path.join(FLAGS.instances_path, '_base')
             if not os.path.exists(base_dir):
@@ -1213,6 +1215,16 @@ class LibvirtConnection(driver.ComputeDriver):
     def _fetch_image(context, target, image_id, user_id, project_id):
         """Grab image to raw format"""
         images.fetch_to_raw(context, image_id, target, user_id, project_id)
+
+        if FLAGS.checksum_base_images:
+            f = open(target, 'r')
+            checksum = utils.hash_file(f)
+            f.close()
+
+            checksum_fname = '%s.sha1' % target
+            fd = os.open(checksum_filename, os.O_WRONLY, mode=0444)
+            os.write(fd, checksum)
+            os.close(fd)
 
     @staticmethod
     def _create_local(target, local_size, unit='G', fs_format=None):
@@ -1290,7 +1302,7 @@ class LibvirtConnection(driver.ComputeDriver):
 
         inst_type_id = inst['instance_type_id']
         inst_type = instance_types.get_instance_type(inst_type_id)
-        if inst_type['name'] == 'm1.tiny' or suffix == '.rescue':
+        if size == 0 or suffix == '.rescue':
             size = None
             root_fname += "_sm"
         else:
@@ -1424,11 +1436,9 @@ class LibvirtConnection(driver.ComputeDriver):
             if config_drive:  # Should be True or None by now.
                 injection_path = basepath('disk.config')
                 img_id = 'config-drive'
-                disable_auto_fsck = False
             else:
                 injection_path = basepath('disk')
                 img_id = inst.image_ref
-                disable_auto_fsck = True
 
             for injection in ('metadata', 'key', 'net'):
                 if locals()[injection]:
@@ -1438,8 +1448,7 @@ class LibvirtConnection(driver.ComputeDriver):
             try:
                 disk.inject_data(injection_path, key, net, metadata,
                                  partition=target_partition,
-                                 use_cow=FLAGS.use_cow_images,
-                                 disable_auto_fsck=disable_auto_fsck)
+                                 use_cow=FLAGS.use_cow_images)
 
             except Exception as e:
                 # This could be a windows image, or a vmdk format disk
@@ -2355,6 +2364,10 @@ class LibvirtConnection(driver.ComputeDriver):
     def set_host_enabled(self, host, enabled):
         """Sets the specified host's ability to accept new instances."""
         pass
+
+    def manage_image_cache(self, context):
+        """Manage the local cache of images."""
+        self.image_cache_manager.verify_base_images(context)
 
 
 class HostState(object):

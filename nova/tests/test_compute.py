@@ -171,12 +171,12 @@ class BaseTestCase(test.TestCase):
         context = self.context.elevated()
         inst = {}
         inst['name'] = 'm1.small'
-        inst['memory_mb'] = '1024'
-        inst['vcpus'] = '1'
-        inst['root_gb'] = '20'
-        inst['ephemeral_gb'] = '10'
+        inst['memory_mb'] = 1024
+        inst['vcpus'] = 1
+        inst['root_gb'] = 20
+        inst['ephemeral_gb'] = 10
         inst['flavorid'] = '1'
-        inst['swap'] = '2048'
+        inst['swap'] = 2048
         inst['rxtx_factor'] = 1
         inst.update(params)
         return db.instance_type_create(context, inst)['id']
@@ -1036,11 +1036,14 @@ class ComputeTestCase(BaseTestCase):
                                                 instance_uuid,
                                                 'pre-migrating')
 
-        self.assertEquals(len(test_notifier.NOTIFICATIONS), 2)
+        self.assertEquals(len(test_notifier.NOTIFICATIONS), 3)
         msg = test_notifier.NOTIFICATIONS[0]
         self.assertEquals(msg['event_type'],
-                          'compute.instance.resize.prep.start')
+                          'compute.instance.exists')
         msg = test_notifier.NOTIFICATIONS[1]
+        self.assertEquals(msg['event_type'],
+                          'compute.instance.resize.prep.start')
+        msg = test_notifier.NOTIFICATIONS[2]
         self.assertEquals(msg['event_type'],
                           'compute.instance.resize.prep.end')
         self.assertEquals(msg['priority'], 'INFO')
