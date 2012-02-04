@@ -19,7 +19,6 @@ import time
 
 from netaddr import IPNetwork, IPAddress
 
-from nova.common import cfg
 from nova.compute import instance_types
 from nova import context
 from nova import db
@@ -29,6 +28,7 @@ from nova import log as logging
 from nova.network import manager
 from nova.network.quantum import melange_ipam_lib
 from nova.network.quantum import quantum_connection
+from nova.openstack.common import cfg
 from nova import utils
 
 LOG = logging.getLogger("nova.network.quantum.manager")
@@ -474,6 +474,8 @@ class QuantumManager(manager.FloatingIP, manager.FlatManager):
             if vif.get('network_id') is not None:
                 network = db.network_get(admin_context, vif['network_id'])
                 net_tenant_id = net_tenant_dict[network['uuid']]
+                if net_tenant_id is None:
+                    net_tenant_id = FLAGS.quantum_default_tenant_id
                 network = {'id': network['id'],
                            'uuid': network['uuid'],
                            'bridge': 'ovs_flag',

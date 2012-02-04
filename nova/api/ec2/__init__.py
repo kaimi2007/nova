@@ -32,11 +32,11 @@ from nova.api.ec2 import ec2utils
 from nova.api.ec2 import faults
 from nova.api import validator
 from nova.auth import manager
-from nova.common import cfg
 from nova import context
 from nova import exception
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import cfg
 from nova import utils
 from nova import wsgi
 
@@ -185,14 +185,27 @@ class EC2Token(wsgi.Middleware):
         # Not part of authentication args
         auth_params.pop('Signature')
 
-        # Authenticate the request.
-        creds = {'ec2Credentials': {'access': access,
-                                    'signature': signature,
-                                    'host': req.host,
-                                    'verb': req.method,
-                                    'path': req.path,
-                                    'params': auth_params,
-                                   }}
+        if "ec2" in FLAGS.keystone_ec2_url:
+            LOG.warning("Configuration setting for keystone_ec2_url needs "
+                        "to be updated to /tokens only. The /ec2 prefix is "
+                        "being deprecated")
+            # Authenticate the request.
+            creds = {'ec2Credentials': {'access': access,
+                                        'signature': signature,
+                                        'host': req.host,
+                                        'verb': req.method,
+                                        'path': req.path,
+                                        'params': auth_params,
+                                       }}
+        else:
+            # Authenticate the request.
+            creds = {'auth': {'OS-KSEC2:ec2Credentials': {'access': access,
+                                        'signature': signature,
+                                        'host': req.host,
+                                        'verb': req.method,
+                                        'path': req.path,
+                                        'params': auth_params,
+                                       }}}
         creds_json = utils.dumps(creds)
         headers = {'Content-Type': 'application/json'}
 

@@ -31,7 +31,6 @@ import uuid
 
 from eventlet import greenthread
 
-from nova.common import cfg
 from nova.compute import api as compute
 from nova.compute import power_state
 from nova import context as nova_context
@@ -39,6 +38,7 @@ from nova import db
 from nova import exception
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import cfg
 from nova import utils
 from nova.virt import driver
 from nova.virt.xenapi import volume_utils
@@ -418,10 +418,14 @@ class VMOps(object):
 
         # Attach any other disks
         for vdi in vdis[1:]:
-            if generate_swap and vdi['vdi_type'] == 'swap':
-                continue
             vdi_ref = self._session.call_xenapi('VDI.get_by_uuid',
                     vdi['vdi_uuid'])
+
+            if generate_swap and vdi['vdi_type'] == 'swap':
+                # We won't be using it, so don't let it leak
+                VMHelper.destroy_vdi(self._session, vdi_ref)
+                continue
+
             VolumeHelper.create_vbd(session=self._session, vm_ref=vm_ref,
                     vdi_ref=vdi_ref, userdevice=userdevice,
                     bootable=False)
