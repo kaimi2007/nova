@@ -80,6 +80,8 @@ def get_connection(read_only=False):
         conn = proxy.get_connection(read_only)
     elif t == 'vmwareapi':
         conn = vmwareapi_conn.get_connection(read_only)
+    elif t == 'baremetal':
+        conn = proxy.get_connection(read_only)
     else:
         raise Exception('Unknown connection type "%s"' % t)
 

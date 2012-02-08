@@ -17,7 +17,7 @@
 
 from nova.virt.baremetal import tilera
 from nova.virt.baremetal import fake
-from nova.common import cfg
+from nova.openstack.common import cfg
 from nova import flags
 from nova import exception
 

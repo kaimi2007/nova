@@ -40,7 +40,7 @@ from nova import exception
 from nova import flags
 from nova import log as logging
 from nova import utils
-from nova.common import cfg
+from nova.openstack.common import cfg
 from nova.compute import instance_types
 from nova.compute import power_state
 from nova.compute import vm_states
