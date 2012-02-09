@@ -313,11 +313,21 @@ global_opts = [
     cfg.StrOpt('ec2_path',
                default='/services/Cloud',
                help='suffix for ec2'),
+    cfg.ListOpt('osapi_compute_ext_list',
+                default=[],
+                help='Specify list of extensions to load when using osapi_'
+                     'compute_extension option with nova.api.openstack.'
+                     'compute.contrib.select_extensions'),
     cfg.MultiStrOpt('osapi_compute_extension',
                     default=[
                       'nova.api.openstack.compute.contrib.standard_extensions'
                       ],
                     help='osapi compute extension to load'),
+    cfg.ListOpt('osapi_volume_ext_list',
+                default=[],
+                help='Specify list of extensions to load when using osapi_'
+                     'volume_extension option with nova.api.openstack.'
+                     'volume.contrib.select_extensions'),
     cfg.MultiStrOpt('osapi_volume_extension',
                     default=[
                       'nova.api.openstack.volume.contrib.standard_extensions'
@@ -494,6 +504,10 @@ global_opts = [
     cfg.BoolOpt('use_ipv6',
                 default=False,
                 help='use ipv6'),
+    cfg.BoolOpt('enable_instance_password',
+                default=True,
+                help='Allows use of instance password during '
+                       'server creation'),
     cfg.IntOpt('password_length',
                default=12,
                help='Length of generated instance admin passwords'),
