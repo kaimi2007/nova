@@ -76,18 +76,9 @@ log_opts = [
                   'eventlet.wsgi.server=WARN'
                   ],
                 help='list of logger=LEVEL pairs'),
-    cfg.BoolOpt('use_syslog',
-                default=False,
-                help='output to syslog'),
     cfg.BoolOpt('publish_errors',
                 default=False,
                 help='publish error events'),
-    cfg.StrOpt('logfile',
-               default=None,
-               help='output to named file'),
-    cfg.BoolOpt('use_stderr',
-                default=True,
-                help='log to standard error'),
     ]
 
 FLAGS = flags.FLAGS
@@ -132,8 +123,7 @@ logging.addLevelName(AUDIT, 'AUDIT')
 def _dictify_context(context):
     if context is None:
         return None
-    if not isinstance(context, dict) \
-    and getattr(context, 'to_dict', None):
+    if not isinstance(context, dict) and getattr(context, 'to_dict', None):
         context = context.to_dict()
     return context
 
@@ -290,8 +280,8 @@ class NovaFormatter(logging.Formatter):
         else:
             self._fmt = FLAGS.logging_default_format_string
 
-        if record.levelno == logging.DEBUG \
-        and FLAGS.logging_debug_format_suffix:
+        if (record.levelno == logging.DEBUG and
+            FLAGS.logging_debug_format_suffix):
             self._fmt += " " + FLAGS.logging_debug_format_suffix
 
         # Cache this on the record, Logger will respect our formated copy
