@@ -54,7 +54,7 @@ except ImportError:
 
 
 FLAGS = flags.FLAGS
-LOG = logging.getLogger('nova.tests.test_libvirt')
+LOG = logging.getLogger(__name__)
 
 _fake_network_info = fake_network.fake_get_instance_nw_info
 _ipv4_like = fake_network.ipv4_like
@@ -192,6 +192,27 @@ class LibvirtVolumeTestCase(test.TestCase):
         self.assertEqual(tree.find('./source').get('protocol'), 'rbd')
         rbd_name = '%s/%s' % (FLAGS.rbd_pool, name)
         self.assertEqual(tree.find('./source').get('name'), rbd_name)
+        libvirt_driver.disconnect_volume(connection_info, mount_device)
+        connection_info = vol_driver.terminate_connection(vol, self.connr)
+
+    def test_libvirt_lxc_volume(self):
+        self.stubs.Set(os.path, 'exists', lambda x: True)
+        vol_driver = volume_driver.ISCSIDriver()
+        libvirt_driver = volume.LibvirtISCSIVolumeDriver(self.fake_conn)
+        location = '10.0.2.15:3260'
+        name = 'volume-00000001'
+        iqn = 'iqn.2010-10.org.openstack:%s' % name
+        vol = {'id': 1,
+               'name': name,
+               'provider_auth': None,
+               'provider_location': '%s,fake %s' % (location, iqn)}
+        connection_info = vol_driver.initialize_connection(vol, self.connr)
+        mount_device = "vde"
+        xml = libvirt_driver.connect_volume(connection_info, mount_device)
+        tree = xml_to_tree(xml)
+        dev_str = '/dev/disk/by-path/ip-%s-iscsi-%s-lun-0' % (location, iqn)
+        self.assertEqual(tree.get('type'), 'block')
+        self.assertEqual(tree.find('./source').get('dev'), dev_str)
         libvirt_driver.disconnect_volume(connection_info, mount_device)
         connection_info = vol_driver.terminate_connection(vol, self.connr)
 
@@ -939,8 +960,7 @@ class LibvirtConnTestCase(test.TestCase):
         """Confirms pre_block_migration works correctly."""
         # Replace instances_path since this testcase creates tmpfile
         tmpdir = tempfile.mkdtemp()
-        store = FLAGS.instances_path
-        FLAGS.instances_path = tmpdir
+        self.flags(instances_path=tmpdir)
 
         # Test data
         instance_ref = db.instance_create(self.context, self.test_instance)
@@ -960,8 +980,6 @@ class LibvirtConnTestCase(test.TestCase):
 
         shutil.rmtree(tmpdir)
         db.instance_destroy(self.context, instance_ref['id'])
-        # Restore FLAGS.instances_path
-        FLAGS.instances_path = store
 
     @test.skip_if(missing_libvirt(), "Test requires libvirt")
     def test_get_instance_disk_info_works_correctly(self):
@@ -1923,17 +1941,34 @@ disk size: 4.4M''', ''))
             os.unlink(dst_path)
 
     def test_get_fs_info(self):
-        # Use a 1024-byte block size (df -k) because OS X does not support
-        # the -B flag
-        blocksize = 1024
-        stdout, stderr = utils.execute('df', '-k', '/tmp')
-        info_line = ' '.join(stdout.split('\n')[1:])
-        _dev, total, used, free, _percentage, _mntpnt = info_line.split()
 
-        fs_info = libvirt_utils.get_fs_info('/tmp')
-        self.assertEquals(int(total) * blocksize, fs_info['total'])
-        self.assertEquals(int(free) * blocksize, fs_info['free'])
-        self.assertEquals(int(used) * blocksize, fs_info['used'])
+        class FakeStatResult(object):
+
+            def __init__(self):
+                self.f_bsize = 4096
+                self.f_frsize = 4096
+                self.f_blocks = 2000
+                self.f_bfree = 1000
+                self.f_bavail = 900
+                self.f_files = 2000
+                self.f_ffree = 1000
+                self.f_favail = 900
+                self.f_flag = 4096
+                self.f_namemax = 255
+
+        self.path = None
+
+        def fake_statvfs(path):
+            self.path = path
+            return FakeStatResult()
+
+        self.stubs.Set(os, 'statvfs', fake_statvfs)
+
+        fs_info = libvirt_utils.get_fs_info('/some/file/path')
+        self.assertEquals('/some/file/path', self.path)
+        self.assertEquals(8192000, fs_info['total'])
+        self.assertEquals(3686400, fs_info['free'])
+        self.assertEquals(4096000, fs_info['used'])
 
     def test_fetch_image(self):
         self.mox.StubOutWithMock(images, 'fetch')

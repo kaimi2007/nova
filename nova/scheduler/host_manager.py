@@ -47,9 +47,9 @@ host_manager_opts = [
     ]
 
 FLAGS = flags.FLAGS
-FLAGS.add_options(host_manager_opts)
+FLAGS.register_opts(host_manager_opts)
 
-LOG = logging.getLogger('nova.scheduler.host_manager')
+LOG = logging.getLogger(__name__)
 
 
 class ReadOnlyDict(UserDict.IterableUserDict):

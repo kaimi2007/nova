@@ -29,7 +29,7 @@ from nova.tests import utils as test_utils
 libvirt = None
 FLAGS = flags.FLAGS
 
-LOG = logging.getLogger('nova.tests.test_virt_drivers')
+LOG = logging.getLogger(__name__)
 
 
 def catch_notimplementederror(f):
@@ -211,7 +211,8 @@ class _VirtDriverTestCase(test.TestCase):
 
     @catch_notimplementederror
     def test_destroy_instance_nonexistant(self):
-        fake_instance = {'id': 42, 'name': 'I just made this up!'}
+        fake_instance = {'id': 42, 'name': 'I just made this up!',
+                         'uuid': 'bda5fb9e-b347-40e8-8256-42397848cb00'}
         network_info = test_utils.get_test_network_info()
         self.connection.destroy(fake_instance, network_info)
 
@@ -442,9 +443,9 @@ class LibvirtConnTestCase(_VirtDriverTestCase):
 
         # Point _VirtDriverTestCase at the right module
         self.driver_module = nova.virt.libvirt.connection
-        FLAGS.firewall_driver = nova.virt.libvirt.firewall.drivers[0]
         super(LibvirtConnTestCase, self).setUp()
-        self.flags(rescue_image_id="2",
+        self.flags(firewall_driver=nova.virt.libvirt.firewall.drivers[0],
+                   rescue_image_id="2",
                    rescue_kernel_id="3",
                    rescue_ramdisk_id=None)
 

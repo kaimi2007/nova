@@ -22,6 +22,7 @@ from nova import db
 from nova import context
 
 meta = MetaData()
+LOG = logging.getLogger(__name__)
 
 # Just for the ForeignKey and column creation to succeed, these are not the
 # actual definitions of instances or services.
@@ -111,8 +112,8 @@ def upgrade(migrate_engine):
                                           extra_specs)
 
         except Exception:
-            logging.info(repr(table))
-            logging.exception('Exception while creating table')
+            LOG.info(repr(table))
+            LOG.exception('Exception while creating table')
             raise
 
 

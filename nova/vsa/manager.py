@@ -40,9 +40,9 @@ vsa_driver_opt = cfg.StrOpt('vsa_driver',
                             help='Driver to use for controlling VSAs')
 
 FLAGS = flags.FLAGS
-FLAGS.add_option(vsa_driver_opt)
+FLAGS.register_opt(vsa_driver_opt)
 
-LOG = logging.getLogger('nova.vsa.manager')
+LOG = logging.getLogger(__name__)
 
 
 class VsaManager(manager.SchedulerDependentManager):

@@ -83,7 +83,7 @@ from nova.virt.xenapi.vmops import VMOps
 from nova.virt.xenapi.volumeops import VolumeOps
 
 
-LOG = logging.getLogger("nova.virt.xenapi")
+LOG = logging.getLogger(__name__)
 
 xenapi_opts = [
     cfg.StrOpt('xenapi_connection_url',
@@ -152,7 +152,7 @@ xenapi_opts = [
     ]
 
 FLAGS = flags.FLAGS
-FLAGS.add_options(xenapi_opts)
+FLAGS.register_opts(xenapi_opts)
 
 
 def get_connection(_):

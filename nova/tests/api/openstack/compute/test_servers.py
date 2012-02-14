@@ -19,6 +19,7 @@
 import datetime
 import json
 import urlparse
+import uuid
 
 from lxml import etree
 import webob
@@ -216,6 +217,27 @@ class ServersControllerTest(test.TestCase):
         req = fakes.HTTPRequest.blank('/v2/fake/servers/%s' % FAKE_UUID)
         res_dict = self.controller.show(req, FAKE_UUID)
         self.assertEqual(res_dict['server']['id'], FAKE_UUID)
+
+    def test_unique_host_id(self):
+        """Create two servers with the same host and different
+           project_ids and check that the hostId's are unique"""
+        def return_instance_with_host(self, *args):
+            project_id = str(uuid.uuid4())
+            return fakes.stub_instance(id=1, uuid=FAKE_UUID,
+                                       project_id=project_id,
+                                       host='fake_host')
+
+        self.stubs.Set(nova.db, 'instance_get_by_uuid',
+                       return_instance_with_host)
+        self.stubs.Set(nova.db, 'instance_get',
+                       return_instance_with_host)
+
+        req = fakes.HTTPRequest.blank('/v2/fake/servers/%s' % FAKE_UUID)
+        server1 = self.controller.show(req, FAKE_UUID)
+        server2 = self.controller.show(req, FAKE_UUID)
+
+        self.assertNotEqual(server1['server']['hostId'],
+                            server2['server']['hostId'])
 
     def test_get_server_by_id(self):
         self.flags(use_ipv6=True)
@@ -1376,6 +1398,11 @@ class ServerStatusTest(test.TestCase):
                                         task_states.RESIZE_VERIFY)
         self.assertEqual(response['server']['status'], 'VERIFY_RESIZE')
 
+    def test_revert_resize(self):
+        response = self._get_with_state(vm_states.RESIZING,
+                                        task_states.RESIZE_REVERTING)
+        self.assertEqual(response['server']['status'], 'REVERT_RESIZE')
+
     def test_password_update(self):
         response = self._get_with_state(vm_states.ACTIVE,
                                         task_states.UPDATING_PASSWORD)
@@ -1504,6 +1531,27 @@ class ServersControllerCreateTest(test.TestCase):
 
         self._check_admin_pass_len(server)
         self.assertEqual(FAKE_UUID, server['id'])
+
+    def test_create_server_bad_image_href(self):
+        image_href = 1
+        flavor_ref = 'http://localhost/123/flavors/3'
+
+        body = {
+            'server': {
+                'min_count': 1,
+                'name': 'server_test',
+                'imageRef': image_href,
+                'flavorRef': flavor_ref,
+            }
+        }
+        req = fakes.HTTPRequest.blank('/v2/fake/servers')
+        req.method = 'POST'
+        req.body = json.dumps(body)
+        req.headers["content-type"] = "application/json"
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.create,
+                          req,
+                          body)
 
     def test_create_multiple_instances(self):
         """Test creating multiple instances but not asking for
@@ -3181,7 +3229,6 @@ class ServersViewBuilderTest(test.TestCase):
 
         metadata = []
         metadata.append(InstanceMetadata(key="Open", value="Stack"))
-        metadata.append(InstanceMetadata(key="Number", value=1))
         self.instance['metadata'] = metadata
 
         image_bookmark = "http://localhost/fake/images/5"
@@ -3226,10 +3273,7 @@ class ServersViewBuilderTest(test.TestCase):
                         {'version': 6, 'addr': 'fe80::dcad:beff:feef:1'}
                     ]
                 },
-                "metadata": {
-                    "Open": "Stack",
-                    "Number": "1",
-                },
+                "metadata": {"Open": "Stack"},
                 "config_drive": None,
                 "links": [
                     {

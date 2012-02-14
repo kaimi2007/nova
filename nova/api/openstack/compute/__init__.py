@@ -36,7 +36,7 @@ from nova import log as logging
 from nova.openstack.common import cfg
 
 
-LOG = logging.getLogger('nova.api.openstack.compute')
+LOG = logging.getLogger(__name__)
 
 allow_instance_snapshots_opt = \
     cfg.BoolOpt('allow_instance_snapshots',
@@ -44,7 +44,7 @@ allow_instance_snapshots_opt = \
                 help='Permit instance snapshot operations.')
 
 FLAGS = flags.FLAGS
-FLAGS.add_option(allow_instance_snapshots_opt)
+FLAGS.register_opt(allow_instance_snapshots_opt)
 
 
 class APIRouter(nova.api.openstack.APIRouter):

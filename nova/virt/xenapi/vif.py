@@ -32,8 +32,8 @@ xenapi_ovs_integration_bridge_opt = cfg.StrOpt('xenapi_ovs_integration_bridge',
         help='Name of Integration Bridge used by Open vSwitch')
 
 FLAGS = flags.FLAGS
-FLAGS.add_option(xenapi_ovs_integration_bridge_opt)
-LOG = logging.getLogger("nova.virt.xenapi.vif")
+FLAGS.register_opt(xenapi_ovs_integration_bridge_opt)
+LOG = logging.getLogger(__name__)
 
 
 class XenVIFDriver(VIFDriver):

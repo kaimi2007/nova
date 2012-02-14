@@ -50,7 +50,7 @@ from nova.virt.vmwareapi import vim_util
 from nova.virt.vmwareapi.vmops import VMWareVMOps
 
 
-LOG = logging.getLogger("nova.virt.vmwareapi_conn")
+LOG = logging.getLogger(__name__)
 
 vmwareapi_opts = [
     cfg.StrOpt('vmwareapi_host_ip',
@@ -80,7 +80,7 @@ vmwareapi_opts = [
     ]
 
 FLAGS = flags.FLAGS
-FLAGS.add_options(vmwareapi_opts)
+FLAGS.register_opts(vmwareapi_opts)
 
 TIME_BETWEEN_API_CALL_RETRIES = 2.0
 

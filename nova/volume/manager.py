@@ -49,7 +49,7 @@ from nova import utils
 from nova.volume import volume_types
 
 
-LOG = logging.getLogger('nova.volume.manager')
+LOG = logging.getLogger(__name__)
 
 volume_manager_opts = [
     cfg.StrOpt('storage_availability_zone',
@@ -67,7 +67,7 @@ volume_manager_opts = [
     ]
 
 FLAGS = flags.FLAGS
-FLAGS.add_options(volume_manager_opts)
+FLAGS.register_opts(volume_manager_opts)
 
 
 class VolumeManager(manager.SchedulerDependentManager):

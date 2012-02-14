@@ -35,9 +35,9 @@ scheduler_json_config_location_opt = cfg.StrOpt(
         help='Absolute path to scheduler configuration JSON file.')
 
 FLAGS = flags.FLAGS
-FLAGS.add_option(scheduler_json_config_location_opt)
+FLAGS.register_opt(scheduler_json_config_location_opt)
 
-LOG = logging.getLogger('nova.scheduler.scheduler_options')
+LOG = logging.getLogger(__name__)
 
 
 class SchedulerOptions(object):

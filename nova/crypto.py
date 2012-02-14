@@ -42,7 +42,7 @@ from nova.openstack.common import cfg
 from nova import utils
 
 
-LOG = logging.getLogger("nova.crypto")
+LOG = logging.getLogger(__name__)
 
 crypto_opts = [
     cfg.StrOpt('ca_file',
@@ -76,7 +76,7 @@ crypto_opts = [
     ]
 
 FLAGS = flags.FLAGS
-FLAGS.add_options(crypto_opts)
+FLAGS.register_opts(crypto_opts)
 
 
 def ca_folder(project_id=None):

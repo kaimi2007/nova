@@ -32,7 +32,7 @@ import webob.exc
 
 from nova import log as logging
 
-LOG = logging.getLogger('nova.exception')
+LOG = logging.getLogger(__name__)
 
 
 class ConvertedException(webob.exc.WSGIHTTPException):
@@ -80,7 +80,7 @@ class Error(Exception):
         super(Error, self).__init__(message)
 
 
-class ApiError(Error):
+class EC2APIError(Error):
     def __init__(self, message='Unknown', code=None):
         self.msg = message
         self.code = code
@@ -88,7 +88,7 @@ class ApiError(Error):
             outstr = '%s: %s' % (code, message)
         else:
             outstr = '%s' % message
-        super(ApiError, self).__init__(outstr)
+        super(EC2APIError, self).__init__(outstr)
 
 
 class DBError(Error):
@@ -196,6 +196,14 @@ class VirtualInterfaceMacAddressException(NovaException):
                 "with unique mac address failed")
 
 
+class GlanceConnectionFailed(NovaException):
+    message = _("Connection to glance failed") + ": %(reason)s"
+
+
+class MelangeConnectionFailed(NovaException):
+    message = _("Connection to melange failed") + ": %(reason)s"
+
+
 class NotAuthorized(NovaException):
     message = _("Not authorized.")
 
@@ -213,6 +221,14 @@ class PolicyNotAuthorized(NotAuthorized):
 
 class Invalid(NovaException):
     message = _("Unacceptable parameters.")
+
+
+class InvalidSnapshot(Invalid):
+    message = _("Invalid snapshot") + ": %(reason)s"
+
+
+class VolumeUnattached(Invalid):
+    message = _("Volume %(volume_id)s is not attached to anything")
 
 
 class InvalidKeypair(Invalid):
@@ -240,7 +256,11 @@ class InvalidInstanceType(Invalid):
 
 
 class InvalidVolumeType(Invalid):
-    message = _("Invalid volume type %(volume_type)s.")
+    message = _("Invalid volume type") + ": %(reason)s"
+
+
+class InvalidVolume(Invalid):
+    message = _("Invalid volume") + ": %(reason)s"
 
 
 class InvalidPortRange(Invalid):
@@ -843,6 +863,14 @@ class InstanceExists(Duplicate):
     message = _("Instance %(name)s already exists.")
 
 
+class InstanceTypeExists(Duplicate):
+    message = _("Instance Type %(name)s already exists.")
+
+
+class VolumeTypeExists(Duplicate):
+    message = _("Volume Type %(name)s already exists.")
+
+
 class InvalidSharedStorage(NovaException):
     message = _("%(path)s is on shared storage: %(reason)s")
 
@@ -914,9 +942,8 @@ class WillNotSchedule(NovaException):
     message = _("Host %(host)s is not up or doesn't exist.")
 
 
-class QuotaError(ApiError):
-    """Quota Exceeded."""
-    pass
+class QuotaError(NovaException):
+    message = _("Quota exceeded") + ": code=%(code)s"
 
 
 class AggregateNotFound(NotFound):
@@ -946,3 +973,24 @@ class AggregateHostExists(Duplicate):
 
 class DuplicateSfVolumeNames(Duplicate):
     message = _("Detected more than one volume with name %(vol_name)")
+
+
+class VolumeTypeCreateFailed(NovaException):
+    message = _("Cannot create volume_type with "
+                "name %(name)s and specs %(extra_specs)s")
+
+
+class InstanceTypeCreateFailed(NovaException):
+    message = _("Unable to create instance type")
+
+
+class SolidFireAPIException(NovaException):
+    message = _("Bad response from SolidFire API")
+
+
+class SolidFireAPIStatusException(SolidFireAPIException):
+    message = _("Error in SolidFire API response: status=%(status)s")
+
+
+class SolidFireAPIDataException(SolidFireAPIException):
+    message = _("Error in SolidFire API response: data=%(data)s")

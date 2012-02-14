@@ -40,7 +40,7 @@ from nova import utils
 from nova.api.ec2 import ec2utils
 
 
-LOG = logging.getLogger("nova.image.s3")
+LOG = logging.getLogger(__name__)
 
 s3_opts = [
     cfg.StrOpt('image_decryption_dir',
@@ -55,7 +55,7 @@ s3_opts = [
     ]
 
 FLAGS = flags.FLAGS
-FLAGS.add_options(s3_opts)
+FLAGS.register_opts(s3_opts)
 
 
 class S3ImageService(object):
@@ -143,10 +143,6 @@ class S3ImageService(object):
     def show_by_name(self, context, name):
         image = self.service.show_by_name(context, name)
         return self._translate_uuid_to_id(context, image)
-
-    def get(self, context, image_id):
-        image_uuid = self.get_image_uuid(context, image_id)
-        return self.get(self, context, image_uuid)
 
     @staticmethod
     def _conn(context):

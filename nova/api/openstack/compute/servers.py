@@ -37,7 +37,7 @@ from nova.scheduler import api as scheduler_api
 from nova import utils
 
 
-LOG = logging.getLogger('nova.api.openstack.compute.servers')
+LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
 
 
@@ -303,7 +303,7 @@ class ActionDeserializer(CommonDeserializer):
             raise AttributeError("No flavorRef was specified in request")
 
         if node.hasAttribute("auto_disk_config"):
-            rezise['auto_disk_config'] = node.getAttribute("auto_disk_config")
+            resize['auto_disk_config'] = node.getAttribute("auto_disk_config")
 
         return resize
 
@@ -496,12 +496,8 @@ class Controller(wsgi.Controller):
             "InstanceLimitExceeded": error.message,
         }
 
-        expl = code_mappings.get(error.code)
-        if expl:
-            raise exc.HTTPRequestEntityTooLarge(explanation=expl,
-                                                headers={'Retry-After': 0})
-        # if the original error is okay, just reraise it
-        raise exc.HTTPRequestEntityTooLarge(explanation=error.msg,
+        expl = code_mappings.get(error.kwargs['code'], error.message)
+        raise exc.HTTPRequestEntityTooLarge(explanation=expl,
                                             headers={'Retry-After': 0})
 
     def _validate_server_name(self, value):
@@ -961,7 +957,7 @@ class Controller(wsgi.Controller):
 
     def _image_ref_from_req_data(self, data):
         try:
-            return data['server']['imageRef']
+            return unicode(data['server']['imageRef'])
         except (TypeError, KeyError):
             msg = _("Missing imageRef attribute")
             raise exc.HTTPBadRequest(explanation=msg)

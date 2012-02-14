@@ -140,9 +140,9 @@ compute_opts = [
     ]
 
 FLAGS = flags.FLAGS
-FLAGS.add_options(compute_opts)
+FLAGS.register_opts(compute_opts)
 
-LOG = logging.getLogger('nova.compute.manager')
+LOG = logging.getLogger(__name__)
 
 
 def publisher_id(host=None):
@@ -461,7 +461,7 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     def _check_instance_not_already_created(self, context, instance):
         """Ensure an instance with the same name is not already present."""
-        if instance['name'] in self.driver.list_instances():
+        if self.driver.instance_exists(instance['name']):
             raise exception.Error(_("Instance has already been created"))
 
     def _check_image_size(self, context, instance):
@@ -1188,7 +1188,9 @@ class ComputeManager(manager.SchedulerDependentManager):
                               vcpus=instance_type['vcpus'],
                               root_gb=instance_type['root_gb'],
                               ephemeral_gb=instance_type['ephemeral_gb'],
-                              instance_type_id=instance_type['id'])
+                              instance_type_id=instance_type['id'],
+                              vm_state=vm_states.ACTIVE,
+                              task_state=None)
 
         self.driver.finish_revert_migration(instance_ref)
         self.db.migration_update(context, migration_id,

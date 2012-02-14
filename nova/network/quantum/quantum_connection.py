@@ -21,7 +21,7 @@ from nova.network.quantum import client as quantum_client
 from nova.openstack.common import cfg
 
 
-LOG = logging.getLogger("nova.network.quantum.quantum_connection")
+LOG = logging.getLogger(__name__)
 
 quantum_opts = [
     cfg.StrOpt('quantum_connection_host',
@@ -36,7 +36,7 @@ quantum_opts = [
     ]
 
 FLAGS = flags.FLAGS
-FLAGS.add_options(quantum_opts)
+FLAGS.register_opts(quantum_opts)
 
 
 class QuantumClientConnection(object):

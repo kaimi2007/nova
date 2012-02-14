@@ -13,21 +13,19 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from nova import context
 from nova import db
 from nova import exception
 from nova import flags
 from nova import log as logging
 from nova import rpc
 from nova.scheduler import vsa as vsa_sched
-from nova import test
 from nova.tests.scheduler import test_scheduler
 from nova import utils
 from nova.volume import volume_types
 
 
 FLAGS = flags.FLAGS
-LOG = logging.getLogger('nova.tests.scheduler.vsa')
+LOG = logging.getLogger(__name__)
 
 scheduled_volumes = []
 scheduled_volume = {}
@@ -74,7 +72,7 @@ class VsaSchedulerTestCase(test_scheduler.SchedulerTestCase):
 
     def tearDown(self):
         for name in self.created_types_lst:
-            volume_types.purge(self.context.elevated(), name)
+            volume_types.destroy(self.context.elevated(), name)
         super(VsaSchedulerTestCase, self).tearDown()
 
     def _get_vol_creation_request(self, num_vols, drive_ix, size=0):
@@ -89,7 +87,7 @@ class VsaSchedulerTestCase(test_scheduler.SchedulerTestCase):
                                          'drive_type': 'type_' + str(drive_ix),
                                          'drive_size': 1 + 100 * (drive_ix)})
                 self.created_types_lst.append(name)
-            except exception.ApiError:
+            except exception.VolumeTypeExists:
                 # type is already created
                 pass
 

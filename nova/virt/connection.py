@@ -30,7 +30,8 @@ from nova.virt.libvirt import connection as libvirt_conn
 from nova.virt import vmwareapi_conn
 from nova.virt import xenapi_conn
 
-LOG = logging.getLogger("nova.virt.connection")
+
+LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
 
 """

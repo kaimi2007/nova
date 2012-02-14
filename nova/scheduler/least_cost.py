@@ -27,7 +27,7 @@ from nova.openstack.common import cfg
 from nova import log as logging
 
 
-LOG = logging.getLogger('nova.scheduler.least_cost')
+LOG = logging.getLogger(__name__)
 
 least_cost_opts = [
     cfg.ListOpt('least_cost_functions',
@@ -44,7 +44,7 @@ least_cost_opts = [
     ]
 
 FLAGS = flags.FLAGS
-FLAGS.add_options(least_cost_opts)
+FLAGS.register_opts(least_cost_opts)
 
 # TODO(sirp): Once we have enough of these rules, we can break them out into a
 # cost_functions.py file (perhaps in a least_cost_scheduler directory)

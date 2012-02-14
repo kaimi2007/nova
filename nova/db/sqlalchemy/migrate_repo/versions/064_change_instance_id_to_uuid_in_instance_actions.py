@@ -22,7 +22,7 @@ from migrate import ForeignKeyConstraint
 from nova import log as logging
 
 
-LOG = logging.getLogger('nova.db.sqlalchemy.migrate_repo.versions')
+LOG = logging.getLogger(__name__)
 meta = sqlalchemy.MetaData()
 
 
@@ -35,8 +35,6 @@ def upgrade(migrate_engine):
     dialect = migrate_engine.url.get_dialect().name
     instance_actions = _get_table('instance_actions')
     instances = _get_table('instances')
-    uuid_column = Column('instance_uuid', String(36),
-                         ForeignKey('instances.uuid'))
     uuid_column = Column('instance_uuid', String(36))
     uuid_column.create(instance_actions)
 
@@ -59,7 +57,7 @@ def upgrade(migrate_engine):
                                      refcolumns=[instances.c.id],
                                      name=fkey_name).drop()
             except:
-                logging.error(_("foreign key constraint couldn't be removed"))
+                LOG.error(_("foreign key constraint couldn't be removed"))
                 raise
 
     instance_actions.c.instance_id.drop()

@@ -40,9 +40,9 @@ zone_manager_opts = [
     ]
 
 FLAGS = flags.FLAGS
-FLAGS.add_options(zone_manager_opts)
+FLAGS.register_opts(zone_manager_opts)
 
-LOG = logging.getLogger('nova.scheduler.zone_manager')
+LOG = logging.getLogger(__name__)
 
 
 class ZoneState(object):

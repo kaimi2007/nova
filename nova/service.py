@@ -37,7 +37,7 @@ from nova import version
 from nova import wsgi
 
 
-LOG = logging.getLogger('nova.service')
+LOG = logging.getLogger(__name__)
 
 service_opts = [
     cfg.IntOpt('report_interval',
@@ -76,7 +76,7 @@ service_opts = [
     ]
 
 FLAGS = flags.FLAGS
-FLAGS.add_options(service_opts)
+FLAGS.register_opts(service_opts)
 
 
 class Launcher(object):

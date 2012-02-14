@@ -35,7 +35,7 @@ from nova import version
 from nova import wsgi
 
 
-LOG = logging.getLogger('nova.xvpvncproxy')
+LOG = logging.getLogger(__name__)
 
 xvp_proxy_opts = [
     cfg.IntOpt('xvpvncproxy_port',
@@ -47,7 +47,7 @@ xvp_proxy_opts = [
     ]
 
 FLAGS = flags.FLAGS
-FLAGS.add_options(xvp_proxy_opts)
+FLAGS.register_opts(xvp_proxy_opts)
 
 flags.DECLARE('consoleauth_topic', 'nova.consoleauth')
 

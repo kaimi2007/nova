@@ -25,7 +25,7 @@ from nova import log as logging
 from nova.openstack.common import cfg
 
 
-LOG = logging.getLogger('nova.rpc')
+LOG = logging.getLogger(__name__)
 
 rpc_opts = [
     cfg.IntOpt('rpc_thread_pool_size',
@@ -39,7 +39,7 @@ rpc_opts = [
                help='Seconds to wait for a response from call or multicall'),
     ]
 
-flags.FLAGS.add_options(rpc_opts)
+flags.FLAGS.register_opts(rpc_opts)
 
 
 class RemoteError(exception.NovaException):

@@ -80,7 +80,8 @@ import subprocess
 libvirt = None
 Template = None
 
-LOG = logging.getLogger('nova.virt.libvirt_conn')
+
+LOG = logging.getLogger(__name__)
 
 #ISI
 lxc_mounts = {}
@@ -107,9 +108,6 @@ libvirt_opts = [
                default='',
                help='Override the default libvirt URI '
                     '(which is dependent on libvirt_type)'),
-    cfg.BoolOpt('use_cow_images',
-                default=True,
-                help='Whether to use cow images'),
     cfg.StrOpt('cpuinfo_xml_template',
                default=utils.abspath('virt/cpuinfo.xml.template'),
                help='CpuInfo XML Template (Used only live migration now)'),
@@ -165,7 +163,7 @@ libvirt_opts = [
     ]
 
 FLAGS = flags.FLAGS
-FLAGS.add_options(libvirt_opts)
+FLAGS.register_opts(libvirt_opts)
 
 flags.DECLARE('live_migration_retry_count', 'nova.compute.manager')
 flags.DECLARE('vncserver_proxyclient_address', 'nova.vnc')
@@ -213,7 +211,7 @@ class LibvirtConnection(driver.ComputeDriver):
         self.container = None
         self.read_only = read_only
         if FLAGS.firewall_driver not in firewall.drivers:
-            FLAGS['firewall_driver'].SetDefault(firewall.drivers[0])
+            FLAGS.set_default('firewall_driver', firewall.drivers[0])
         fw_class = utils.import_class(FLAGS.firewall_driver)
         self.firewall_driver = fw_class(get_connection=self._get_connection)
         self.vif_driver = utils.import_object(FLAGS.libvirt_vif_driver)
@@ -310,6 +308,14 @@ class LibvirtConnection(driver.ComputeDriver):
             return libvirt.openReadOnly(uri)
         else:
             return libvirt.openAuth(uri, auth, 0)
+
+    def instance_exists(self, instance_id):
+        """Efficient override of base instance_exists method."""
+        try:
+            _ignored = self._conn.lookupByName(instance_id)
+            return True
+        except libvirt.libvirtError:
+            return False
 
     def list_instances(self):
         return [self._conn.lookupByID(x).name()
@@ -474,10 +480,9 @@ class LibvirtConnection(driver.ComputeDriver):
                         is_okay = True
 
                 if not is_okay:
-                    LOG.warning(_("Error from libvirt during destroy of "
-                                  "%(instance_name)s. Code=%(errcode)s "
-                                  "Error=%(e)s") %
-                                locals())
+                    LOG.warning(_("Error from libvirt during destroy. "
+                                  "Code=%(errcode)s Error=%(e)s") %
+                                locals(), instance=instance)
                     raise
 
             try:
@@ -488,8 +493,8 @@ class LibvirtConnection(driver.ComputeDriver):
             except libvirt.libvirtError as e:
                 errcode = e.get_error_code()
                 LOG.warning(_("Error from libvirt during saved instance "
-                              "removal %(instance_name)s. Code=%(errcode)s"
-                              " Error=%(e)s") % locals())
+                              "removal. Code=%(errcode)s Error=%(e)s") %
+                            locals(), instance=instance)
 
             try:
                 # NOTE(justinsb): We remove the domain definition. We probably
@@ -498,10 +503,9 @@ class LibvirtConnection(driver.ComputeDriver):
                 virt_dom.undefine()
             except libvirt.libvirtError as e:
                 errcode = e.get_error_code()
-                LOG.warning(_("Error from libvirt during undefine of "
-                              "%(instance_name)s. Code=%(errcode)s "
-                              "Error=%(e)s") %
-                            locals())
+                LOG.warning(_("Error from libvirt during undefine. "
+                              "Code=%(errcode)s Error=%(e)s") %
+                            locals(), instance=instance)
                 raise
 
         self.unplug_vifs(instance, network_info)
@@ -513,8 +517,8 @@ class LibvirtConnection(driver.ComputeDriver):
             try:
                 state = self.get_info(instance_name)['state']
             except exception.NotFound:
-                msg = _("Instance %s destroyed successfully.") % instance_name
-                LOG.info(msg)
+                LOG.info(_("Instance destroyed successfully."),
+                         instance=instance)
                 raise utils.LoopingCallDone
 
         timer = utils.LoopingCall(_wait_for_destroy)
@@ -544,8 +548,8 @@ class LibvirtConnection(driver.ComputeDriver):
     def _cleanup(self, instance):
         target = os.path.join(FLAGS.instances_path, instance['name'])
         instance_name = instance['name']
-        LOG.info(_('instance %(instance_name)s: deleting instance files'
-                ' %(target)s') % locals())
+        LOG.info(_('Deleting instance files %(target)s') % locals(),
+                 instance=instance)
         if FLAGS.libvirt_type == 'lxc':
             try:
                 disk.destroy_container(self.container)
@@ -561,11 +565,12 @@ class LibvirtConnection(driver.ComputeDriver):
             except:
                 pass
 
-    def get_volume_connector(self, _instance):
+    def get_volume_connector(self, instance):
         if not self._initiator:
             self._initiator = libvirt_utils.get_iscsi_initiator()
             if not self._initiator:
-                LOG.warn(_('Could not determine iscsi initiator name'))
+                LOG.warn(_('Could not determine iscsi initiator name'),
+                         instance=instance)
         return {
             'ip': FLAGS.my_ip,
             'initiator': self._initiator,
@@ -710,9 +715,9 @@ class LibvirtConnection(driver.ComputeDriver):
         xml = self.volume_driver_method('connect_volume',
                                         connection_info,
                                         mount_device)
+
         if FLAGS.libvirt_type == 'lxc':
-            self.attach_volume_lxc(connection_info, instance_name, \
-                                   mountpoint, virt_dom)
+            self._attach_lxc_volume(xml, virt_dom, instance_name)
         else:
             virt_dom.attachDevice(xml)
 
@@ -777,21 +782,66 @@ class LibvirtConnection(driver.ComputeDriver):
             #             migration, so we should still logout even if
             #             the instance doesn't exist here anymore.
             virt_dom = self._lookup_by_name(instance_name)
-            LOG.info(_('detach_volume: FLAGS.libvirt(%s)') \
-                     % FLAGS.libvirt_type)
+            xml = self._get_disk_xml(virt_dom.XMLDesc(0), mount_device)
+            if not xml:
+                raise exception.DiskNotFound(location=mount_device)
             if FLAGS.libvirt_type == 'lxc':
-                self.detach_volume_lxc(connection_info, \
-                                       instance_name, mountpoint, \
-                                       virt_dom)
+                self._detach_lxc_volume(xml, vort_dom, instance_name)
             else:
-                xml = self._get_disk_xml(virt_dom.XMLDesc(0), mount_device)
-                if not xml:
-                    raise exception.DiskNotFound(location=mount_device)
                 virt_dom.detachDevice(xml)
         finally:
             self.volume_driver_method('disconnect_volume',
                                       connection_info,
                                       mount_device)
+
+    @exception.wrap_exception()
+    def _attach_lxc_volume(self, xml, virt_dom, instance_name):
+        LOG.info(_('attaching LXC block device'))
+
+        lxc_container_root = self.get_lxc_container_root(virt_dom)
+        lxc_host_volume = self.get_lxc_host_device(xml)
+        lxc_container_device = self.get_lxc_container_target(xml)
+        lxc_container_target = "%s/%s" % (lxc_container_root,
+                                          lxc_container_device)
+
+        if lxc_container_target:
+            disk.bind(lxc_host_volume, lxc_container_target, instance_name)
+
+    @exception.wrap_exception()
+    def _detach_lxc_volume(self, xml, virt_dom, instance_name):
+        LOG.info(_('detaching LXC block device'))
+
+        lxc_container_root = self.get_lxc_container_root(virt_dom)
+        lxc_host_volume = self.get_lxc_host_device(xml)
+        lxc_container_device = self.get_lxc_container_target(xml)
+        lxc_container_target = "%s/%s" % (lxc_container_root,
+                                          lxc_container_device)
+
+        if lxc_container_target:
+            disk.unbind(lxc_container_target)
+
+    @staticmethod
+    def get_lxc_container_root(virt_dom):
+        xml = virt_dom.XMLDesc(0)
+        doc = ElementTree.fromstring(xml)
+        filesystem_block = doc.findall('./devices/filesystem')
+        for cnt, filesystem_nodes in enumerate(filesystem_block):
+            return filesystem_nodes[cnt].get('dir')
+
+    @staticmethod
+    def get_lxc_host_device(xml):
+        dom = minidom.parseString(xml)
+
+        for device in dom.getElementsByTagName('source'):
+            return device.getAttribute('dev')
+
+    @staticmethod
+    def get_lxc_container_target(xml):
+        dom = minidom.parseString(xml)
+
+        for device in dom.getElementsByTagName('target'):
+            filesystem = device.getAttribute('dev')
+            return 'dev/%s' % filesystem
 
     @exception.wrap_exception()
     def snapshot(self, context, instance, image_href):
@@ -931,8 +981,8 @@ class LibvirtConnection(driver.ComputeDriver):
             try:
                 state = self.get_info(instance_name)['state']
             except exception.NotFound:
-                msg = _("During reboot, %s disappeared.") % instance_name
-                LOG.error(msg)
+                LOG.error(_("During reboot, instance disappeared."),
+                          instance=instance)
                 raise utils.LoopingCallDone
 
             if state == power_state.RUNNING:
@@ -940,8 +990,8 @@ class LibvirtConnection(driver.ComputeDriver):
                 #But devices whitelist needs to be set again
                 if FLAGS.connection_type == 'gpu':
                     allow_gpus(instance)
-                msg = _("Instance %s rebooted successfully.") % instance_name
-                LOG.info(msg)
+                LOG.info(_("Instance rebooted successfully."),
+                         instance=instance)
                 raise utils.LoopingCallDone
 
         timer = utils.LoopingCall(_wait_for_reboot)
@@ -1024,7 +1074,25 @@ class LibvirtConnection(driver.ComputeDriver):
 
     @exception.wrap_exception()
     def poll_unconfirmed_resizes(self, resize_confirm_window):
-        pass
+        """Poll for unconfirmed resizes.
+
+        Look for any unconfirmed resizes that are older than
+        `resize_confirm_window` and automatically confirm them.
+        """
+        ctxt = nova_context.get_admin_context()
+        migrations = db.migration_get_all_unconfirmed(ctxt,
+            resize_confirm_window)
+
+        migrations_info = dict(migration_count=len(migrations),
+                confirm_window=FLAGS.resize_confirm_window)
+
+        if migrations_info["migration_count"] > 0:
+            LOG.info(_("Found %(migration_count)d unconfirmed migrations "
+                    "older than %(confirm_window)d seconds") % migrations_info)
+
+        for migration in migrations:
+            LOG.info(_("Automatically confirming migration %d"), migration.id)
+            self.compute_api.confirm_resize(ctxt, migration.instance_uuid)
 
     # NOTE(ilyaalekseyev): Implementation like in multinics
     # for xenapi(tr3buchet)
@@ -1039,7 +1107,7 @@ class LibvirtConnection(driver.ComputeDriver):
                            block_device_info=block_device_info)
 
         domain = self._create_new_domain(xml)
-        LOG.debug(_("instance is running"), instance=instance)
+        LOG.debug(_("Instance is running"), instance=instance)
         self.firewall_driver.apply_instance_filter(instance, network_info)
 
         def _wait_for_boot():
@@ -1113,7 +1181,7 @@ class LibvirtConnection(driver.ComputeDriver):
             fpath = self._append_to_file(data, console_log)
         elif FLAGS.libvirt_type == 'lxc':
             # LXC is also special
-            LOG.info(_("Unable to read LXC console"))
+            LOG.info(_("Unable to read LXC console"), instance=instance)
         else:
             fpath = console_log
 
@@ -1589,11 +1657,11 @@ class LibvirtConnection(driver.ComputeDriver):
     def to_xml(self, instance, network_info, image_meta=None, rescue=False,
                block_device_info=None):
         # TODO(termie): cache?
-        LOG.debug(_('instance %s: starting toXML method'), instance['name'])
+        LOG.debug(_('Starting toXML method'), instance=instance)
         xml_info = self._prepare_xml_info(instance, network_info, image_meta,
                                           rescue, block_device_info)
         xml = str(Template(self.libvirt_xml, searchList=[xml_info]))
-        LOG.debug(_('instance %s: finished toXML method'), instance['name'])
+        LOG.debug(_('Finished toXML method'), instance=instance)
         return xml
 
     def _lookup_by_name(self, instance_name):

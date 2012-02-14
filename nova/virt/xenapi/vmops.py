@@ -51,7 +51,7 @@ VolumeHelper = volume_utils.VolumeHelper
 NetworkHelper = network_utils.NetworkHelper
 VMHelper = vm_utils.VMHelper
 XenAPI = None
-LOG = logging.getLogger("nova.virt.xenapi.vmops")
+LOG = logging.getLogger(__name__)
 
 xenapi_vmops_opts = [
     cfg.IntOpt('agent_version_timeout',
@@ -72,7 +72,7 @@ xenapi_vmops_opts = [
     ]
 
 FLAGS = flags.FLAGS
-FLAGS.add_options(xenapi_vmops_opts)
+FLAGS.register_opts(xenapi_vmops_opts)
 
 flags.DECLARE('vncserver_proxyclient_address', 'nova.vnc')
 
@@ -107,7 +107,7 @@ class VMOps(object):
         self.poll_rescue_last_ran = None
         VMHelper.XenAPI = self.XenAPI
         if FLAGS.firewall_driver not in firewall.drivers:
-            FLAGS['firewall_driver'].SetDefault(firewall.drivers[0])
+            FLAGS.set_default('firewall_driver', firewall.drivers[0])
         fw_class = utils.import_class(FLAGS.firewall_driver)
         self.firewall_driver = fw_class(xenapi_session=self._session)
         vif_impl = utils.import_class(FLAGS.xenapi_vif_driver)
@@ -186,7 +186,7 @@ class VMOps(object):
 
     def _create_disks(self, context, instance, image_meta):
         disk_image_type = VMHelper.determine_disk_image_type(image_meta)
-        vdis = VMHelper.fetch_image(context, self._session,
+        vdis = VMHelper.create_image(context, self._session,
                 instance, instance.image_ref,
                 instance.user_id, instance.project_id,
                 disk_image_type)
@@ -279,11 +279,11 @@ class VMOps(object):
         ramdisk = None
         try:
             if instance.kernel_id:
-                kernel = VMHelper.fetch_image(context, self._session,
+                kernel = VMHelper.create_kernel_image(context, self._session,
                         instance, instance.kernel_id, instance.user_id,
                         instance.project_id, vm_utils.ImageType.KERNEL)[0]
             if instance.ramdisk_id:
-                ramdisk = VMHelper.fetch_image(context, self._session,
+                ramdisk = VMHelper.create_kernel_image(context, self._session,
                         instance, instance.ramdisk_id, instance.user_id,
                         instance.project_id, vm_utils.ImageType.RAMDISK)[0]
 

@@ -54,7 +54,7 @@ from nova import utils
 import nova.volume
 
 
-LOG = logging.getLogger('nova.tests.compute')
+LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
 flags.DECLARE('stub_network', 'nova.compute.manager')
 flags.DECLARE('live_migration_retry_count', 'nova.compute.manager')
@@ -898,7 +898,7 @@ class ComputeTestCase(BaseTestCase):
                                                        vpn=False).\
             AndRaise(quantum_client.QuantumServerException())
 
-        FLAGS.stub_network = False
+        self.flags(stub_network=False)
 
         self.mox.ReplayAll()
 
@@ -1214,6 +1214,10 @@ class ComputeTestCase(BaseTestCase):
                 migration_ref['id'])
         self.compute.finish_revert_resize(context, inst_ref['uuid'],
                 migration_ref['id'])
+
+        instance = db.instance_get_by_uuid(context, instance['uuid'])
+        self.assertEqual(instance['vm_state'], vm_states.ACTIVE)
+        self.assertEqual(instance['task_state'], None)
 
         inst_ref = db.instance_get_by_uuid(context, instance_uuid)
         instance_type_ref = db.instance_type_get(context,
@@ -2235,6 +2239,11 @@ class ComputeAPITestCase(BaseTestCase):
         instance = db.instance_get_by_uuid(context, instance['uuid'])
 
         self.compute_api.revert_resize(context, instance)
+
+        instance = db.instance_get_by_uuid(context, instance['uuid'])
+        self.assertEqual(instance['vm_state'], vm_states.RESIZING)
+        self.assertEqual(instance['task_state'], task_states.RESIZE_REVERTING)
+
         self.compute.terminate_instance(context, instance['uuid'])
 
     def test_resize_invalid_flavor_fails(self):
@@ -2348,7 +2357,7 @@ class ComputeAPITestCase(BaseTestCase):
         address = '0.1.2.3'
 
         self.compute.run_instance(self.context, instance_uuid)
-        self.assertRaises(exception.ApiError,
+        self.assertRaises(exception.FixedIpNotFoundForInstance,
                           self.compute_api.associate_floating_ip,
                           self.context,
                           instance,
@@ -2973,7 +2982,7 @@ class ComputeAPITestCase(BaseTestCase):
         self.compute_api.delete(self.context, instance)
 
     def test_attach_volume_invalid(self):
-        self.assertRaises(exception.ApiError,
+        self.assertRaises(exception.InvalidDevicePath,
                 self.compute_api.attach_volume,
                 self.context,
                 None,

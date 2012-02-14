@@ -21,7 +21,7 @@ from nova import log as logging
 from nova.openstack.common import cfg
 
 
-LOG = logging.getLogger('nova.exception')
+LOG = logging.getLogger(__name__)
 
 notifier_opts = [
     cfg.StrOpt('default_notification_level',
@@ -33,7 +33,7 @@ notifier_opts = [
     ]
 
 FLAGS = flags.FLAGS
-FLAGS.add_options(notifier_opts)
+FLAGS.register_opts(notifier_opts)
 
 WARN = 'WARN'
 INFO = 'INFO'
