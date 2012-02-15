@@ -24,7 +24,7 @@ DHCP_START_IP=10.99.1.2
 DHCP_IP_NUM=$NETWORK_SIZE
 GLANCE_SERVER=10.0.11.1:9292
 VOLUME_SERVER=10.2.11.1
-API_PASTE_INI=/etc/nova/api-paste.ini.testing
+API_PASTE_INI=/etc/nova/api-paste.ini.feb-2012
 # system specific info:
 BRIDGE_IFACE=
 BAREMETAL_DRIVER=
@@ -63,6 +63,7 @@ else
 fi
 
 FLAT_INTERFACE=$BRIDGE_IFACE
+PUBLIC_INTERFACE=$BRIDGE
 
 # HOST_IP should be set at the IP address of br100 of the cloud controller.
 # For the datacenter machines, we use 10.1.1.1 for HOST_IP.
@@ -123,6 +124,7 @@ fi
 #--flat_network_bridge=br100
 #--FAKE_subdomain=ec2
 #--auth_driver=nova.auth.$AUTH
+#--force_dhcp_release
 if [ "$CMD" == "compute-init" ] ||
      [ "$CMD" == "cloud-init" ]; then
     echo "writing nova.conf"
@@ -132,7 +134,6 @@ if [ "$CMD" == "compute-init" ] ||
 --allow_admin_api
 --dhcpbridge_flagfile=$NOVA_DIR/bin/nova.conf
 --dhcpbridge=$NOVA_DIR/bin/nova-dhcpbridge
---force_dhcp_release
 --cc_host=$CLOUD_HOST_IP
 --ec2_url=http://$HOST_IP:8773/services/Cloud
 --rabbit_host=$CLOUD_HOST_IP
@@ -188,6 +189,7 @@ if [ "$CMD" == "compute-init" ] ||
      [ "$CMD" == "cloud-init" ]; then
     if [ -n "$FLAT_INTERFACE" ]; then
         echo "--flat_interface=$FLAT_INTERFACE" >>$NOVA_DIR/bin/nova.conf
+        echo "--public_interface=$PUBLIC_INTERFACE" >>$NOVA_DIR/bin/nova.conf
     fi
 fi
 
@@ -255,12 +257,12 @@ if [ "$CMD" == "cloud-init" ]; then
      # new one for hpc-trunk
      #$NOVA_DIR/bin/nova-manage network create --bridge_interface=$BRIDGE_IFACE --bridge=$BRIDGE --fixed_range_v4=$DHCP_FIXED_RANGE --num_networks=$NUM_NETWORKS --network_size=$DHCP_IP_NUM --label=$NETWORK_LABEL
      $NOVA_DIR/bin/nova-manage network create --bridge_interface=$BRIDGE_IFACE --bridge=$BRIDGE --num_networks=$NUM_NETWORKS --fixed_range_v4=$DHCP_FIXED_RANGE --network_size=$DHCP_IP_NUM --label=$NETWORK_LABEL
+     #$NOVA_DIR/bin/nova-manage floating create 65.114.169.172/30
      chown -R nova nova/networks
      chgrp -R libvirt nova/networks
 
     echo "launch nova cloud services is not done for testing"
     service openstack-nova-api restart
-    ip -d addr del 169.254.169.254/32 scope link dev lo 
     service openstack-nova-network restart
     service openstack-nova-objectstore restart
     service openstack-nova-scheduler restart

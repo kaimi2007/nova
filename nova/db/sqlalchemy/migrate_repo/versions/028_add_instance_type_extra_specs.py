@@ -79,13 +79,23 @@ def upgrade(migrate_engine):
                 elif (name == 'cg1.small') or \
                      (name == 'cg1.medium') or \
                      (name == 'cg1.large') or  \
-                     (name == 'cg1.xlarge') or \
-                     (name == 'cg1.2xlarge') or \
-                     (name == 'cg1.4xlarge'):
+                     (name == 'cg1.xlarge'):
                     extra_specs = dict(
                                       cpu_arch='x86_64',
                                       xpu_arch='fermi',
                                       xpus=1,
+                                      hypervisor_type='LXC')
+                elif (name == 'cg1.2xlarge'):
+                    extra_specs = dict(
+                                      cpu_arch='x86_64',
+                                      xpu_arch='fermi',
+                                      xpus=2,
+                                      hypervisor_type='LXC')
+                elif (name == 'cg1.4xlarge'):
+                    extra_specs = dict(
+                                      cpu_arch='x86_64',
+                                      xpu_arch='fermi',
+                                      xpus=4,
                                       hypervisor_type='LXC')
                 elif (name == 'sh1.small') or  \
                      (name == 'sh1.medium') or \
