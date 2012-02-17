@@ -310,6 +310,10 @@ class LibvirtConnection(driver.ComputeDriver):
         else:
             return libvirt.openAuth(uri, auth, 0)
 
+    def get_num_instances(self):
+        """Efficient override of base instance_exists method."""
+        return self._conn.numOfDomains()
+
     def instance_exists(self, instance_id):
         """Efficient override of base instance_exists method."""
         try:
@@ -793,7 +797,7 @@ class LibvirtConnection(driver.ComputeDriver):
             if not xml:
                 raise exception.DiskNotFound(location=mount_device)
             if FLAGS.libvirt_type == 'lxc':
-                self._detach_lxc_volume(xml, vort_dom, instance_name)
+                self._detach_lxc_volume(xml, virt_dom, instance_name)
             else:
                 virt_dom.detachDevice(xml)
         finally:

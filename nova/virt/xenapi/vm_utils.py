@@ -25,10 +25,10 @@ import json
 import os
 import pickle
 import re
-import sys
 import tempfile
 import time
 import urllib
+import urlparse
 import uuid
 from decimal import Decimal, InvalidOperation
 from xml.dom import minidom
@@ -856,7 +856,7 @@ class VMHelper(HelperBase):
         except (cls.XenAPI.Failure, IOError, OSError) as e:
             # We look for XenAPI and OS failures.
             LOG.exception(_("instance %s: Failed to fetch glance image"),
-                          instance_id, exc_info=sys.exc_info())
+                          instance_id)
             e.args = e.args + ([dict(vdi_type=ImageType.
                                               to_string(image_type),
                                     vdi_uuid=vdi_uuid,
@@ -1036,14 +1036,8 @@ class VMHelper(HelperBase):
     def compile_diagnostics(cls, session, record):
         """Compile VM diagnostics data"""
         try:
-            host = session.get_xenapi_host()
-            host_ip = session.call_xenapi("host.get_record", host)["address"]
-        except (cls.XenAPI.Failure, KeyError) as e:
-            return {"Unable to retrieve diagnostics": e}
-
-        try:
             diags = {}
-            xml = get_rrd(host_ip, record["uuid"])
+            xml = get_rrd(get_rrd_server(), record["uuid"])
             if xml:
                 rrd = minidom.parseString(xml)
                 for i, node in enumerate(rrd.firstChild.childNodes):
@@ -1063,13 +1057,8 @@ class VMHelper(HelperBase):
         """Compile bandwidth usage, cpu, and disk metrics for all VMs on
            this host"""
         start_time = int(start_time)
-        try:
-            host = session.get_xenapi_host()
-            host_ip = session.call_xenapi("host.get_record", host)["address"]
-        except (cls.XenAPI.Failure, KeyError) as e:
-            raise exception.CouldNotFetchMetrics()
 
-        xml = get_rrd_updates(host_ip, start_time)
+        xml = get_rrd_updates(get_rrd_server(), start_time)
         if xml:
             doc = minidom.parseString(xml)
             return parse_rrd_update(doc, start_time, stop_time)
@@ -1178,29 +1167,41 @@ class VMHelper(HelperBase):
         return None
 
 
-def get_rrd(host, vm_uuid):
+def get_rrd_server():
+    """Return server's scheme and address to use for retrieving RRD XMLs."""
+    xs_url = urlparse.urlparse(FLAGS.xenapi_connection_url)
+    return [xs_url.scheme, xs_url.netloc]
+
+
+def get_rrd(server, vm_uuid):
     """Return the VM RRD XML as a string"""
     try:
-        xml = urllib.urlopen("http://%s:%s@%s/vm_rrd?uuid=%s" % (
+        xml = urllib.urlopen("%s://%s:%s@%s/vm_rrd?uuid=%s" % (
+            server[0],
             FLAGS.xenapi_connection_username,
             FLAGS.xenapi_connection_password,
-            host,
+            server[1],
             vm_uuid))
         return xml.read()
     except IOError:
+        LOG.exception(_('Unable to obtain RRD XML for VM %(vm_uuid)s with '
+                        'server details: %(server)s.') % locals())
         return None
 
 
-def get_rrd_updates(host, start_time):
+def get_rrd_updates(server, start_time):
     """Return the RRD updates XML as a string"""
     try:
-        xml = urllib.urlopen("http://%s:%s@%s/rrd_updates?start=%s" % (
+        xml = urllib.urlopen("%s://%s:%s@%s/rrd_updates?start=%s" % (
+            server[0],
             FLAGS.xenapi_connection_username,
             FLAGS.xenapi_connection_password,
-            host,
+            server[1],
             start_time))
         return xml.read()
     except IOError:
+        LOG.exception(_('Unable to obtain RRD XML updates with '
+                        'server details: %(server)s.') % locals())
         return None
 
 
@@ -1599,7 +1600,10 @@ def _resize_part_and_fs(dev, start, old_sectors, new_sectors):
     partition_path = utils.make_dev_path(dev, partition=1)
 
     # Replay journal if FS wasn't cleanly unmounted
-    utils.execute('e2fsck', '-f', '-y', partition_path, run_as_root=True)
+    # Exit Code 1 = File system errors corrected
+    #           2 = File system errors corrected, system needs a reboot
+    utils.execute('e2fsck', '-f', '-y', partition_path, run_as_root=True,
+                  check_exit_code=[0, 1, 2])
 
     # Remove ext3 journal (making it ext2)
     utils.execute('tune2fs', '-O ^has_journal', partition_path,

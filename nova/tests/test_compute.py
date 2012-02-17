@@ -552,6 +552,17 @@ class ComputeTestCase(BaseTestCase):
         instance = db.instance_get_by_uuid(self.context, instance['uuid'])
 
         self.assertEqual(instance['power_state'], power_state.NOSTATE)
+
+        def fake_driver_get_info(self2, _instance):
+            return {'state': power_state.NOSTATE,
+                    'max_mem': 0,
+                    'mem': 0,
+                    'num_cpu': 2,
+                    'cpu_time': 0}
+
+        self.stubs.Set(nova.virt.fake.FakeConnection, 'get_info',
+                       fake_driver_get_info)
+
         self.assertRaises(exception.Error,
                           self.compute.set_admin_password,
                           self.context,
@@ -1453,7 +1464,7 @@ class ComputeTestCase(BaseTestCase):
 
         # Force the compute manager to do its periodic poll
         ctxt = context.get_admin_context()
-        self.compute.periodic_tasks(ctxt, raise_on_error=True)
+        self.compute._sync_power_states(context.get_admin_context())
 
         instances = db.instance_get_all(context.get_admin_context())
         LOG.info(_("After force-killing instances: %s"), instances)
@@ -2918,37 +2929,6 @@ class ComputeAPITestCase(BaseTestCase):
                 self.assertEqual(instance['reservation_id'], resv_id)
 
         db.instance_destroy(self.context, refs[0]['id'])
-
-    def test_create_with_specified_reservation_id(self):
-        """Verify building instances with a specified
-        reservation_id results in the correct reservation_id
-        being set
-        """
-
-        # We need admin context to be able to specify our own
-        # reservation_ids.
-        context = self.context.elevated()
-        # 1 instance
-        (refs, resv_id) = self.compute_api.create(context,
-                instance_types.get_default_instance_type(), None,
-                min_count=1, max_count=1, reservation_id='meow')
-        try:
-            self.assertEqual(len(refs), 1)
-            self.assertEqual(resv_id, 'meow')
-        finally:
-            self.assertEqual(refs[0]['reservation_id'], resv_id)
-
-        # 2 instances
-        (refs, resv_id) = self.compute_api.create(context,
-                instance_types.get_default_instance_type(), None,
-                min_count=2, max_count=2, reservation_id='woof')
-        try:
-            self.assertEqual(len(refs), 2)
-            self.assertEqual(resv_id, 'woof')
-        finally:
-            for instance in refs:
-                self.assertEqual(instance['reservation_id'], resv_id)
-            db.instance_destroy(self.context, refs[0]['id'])
 
     def test_instance_name_template(self):
         """Test the instance_name template"""

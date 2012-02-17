@@ -369,15 +369,6 @@ global_opts = [
     cfg.ListOpt('memcached_servers',
                 default=None,
                 help='Memcached servers or None for in process cache.'),
-    cfg.StrOpt('zone_name',
-               default='nova',
-               help='name of this zone'),
-    cfg.ListOpt('zone_capabilities',
-                default=['hypervisor=xenserver;kvm', 'os=linux;windows'],
-                help='Key/Multi-value list with the capabilities of the zone'),
-    cfg.StrOpt('build_plan_encryption_key',
-               default=None,
-               help='128bit (hex) encryption key for scheduler build plans.'),
     cfg.StrOpt('instance_usage_audit_period',
                default='month',
                help='time period to generate instance usages for.'),
@@ -453,7 +444,16 @@ global_opts = [
                 help='Cache glance images locally'),
     cfg.BoolOpt('use_cow_images',
                 default=True,
-                help='Whether to use cow images')
+                help='Whether to use cow images'),
+    cfg.StrOpt('compute_api_class',
+                default='nova.compute.api.API',
+                help='The compute API class to use'),
+    cfg.StrOpt('network_api_class',
+                default='nova.network.api.API',
+                help='The network API class to use'),
+    cfg.StrOpt('volume_api_class',
+                default='nova.volume.api.API',
+                help='The volume API class to use'),
     ]
 
 FLAGS.register_opts(global_opts)

@@ -1429,11 +1429,12 @@ def instance_create(context, values):
     context - request context object
     values - dict containing column values.
     """
+    values = values.copy()
     values['metadata'] = _metadata_refs(values.get('metadata'),
                                         models.InstanceMetadata)
     instance_ref = models.Instance()
-    instance_ref['uuid'] = str(utils.gen_uuid())
-
+    if not values.get('uuid'):
+        values['uuid'] = str(utils.gen_uuid())
     instance_ref.update(values)
 
     session = get_session()
@@ -1463,7 +1464,13 @@ def instance_data_get_for_project(context, project_id):
 def instance_destroy(context, instance_id):
     session = get_session()
     with session.begin():
-        instance_ref = instance_get(context, instance_id, session=session)
+        if utils.is_uuid_like(instance_id):
+            instance_ref = instance_get_by_uuid(context, instance_id,
+                    session=session)
+            instance_id = instance_ref['id']
+        else:
+            instance_ref = instance_get(context, instance_id,
+                    session=session)
         session.query(models.Instance).\
                 filter_by(id=instance_id).\
                 update({'deleted': True,
@@ -1487,6 +1494,7 @@ def instance_destroy(context, instance_id):
 
         instance_info_cache_delete(context, instance_ref['uuid'],
                                    session=session)
+    return instance_ref
 
 
 @require_context
@@ -2059,9 +2067,16 @@ def network_count_reserved_ips(context, network_id):
 
 @require_admin_context
 def network_create_safe(context, values):
+    if values.get('vlan'):
+        if model_query(context, models.Network, read_deleted="no")\
+                      .filter_by(vlan=values['vlan'])\
+                      .first():
+            raise exception.DuplicateVlan(vlan=values['vlan'])
+
     network_ref = models.Network()
     network_ref['uuid'] = str(utils.gen_uuid())
     network_ref.update(values)
+
     try:
         network_ref.save()
         return network_ref
@@ -3609,7 +3624,7 @@ def zone_get(context, zone_id):
 
 @require_admin_context
 def zone_get_all(context):
-    return model_query(context, models.Zone, read_deleted="yes").all()
+    return model_query(context, models.Zone, read_deleted="no").all()
 
 
 ####################
@@ -3770,7 +3785,7 @@ def bw_usage_get_all_by_filters(context, filters):
     filters = filters.copy()
 
     # Filters for exact matches that we can do along with the SQL query.
-    exact_match_filter_names = ["instance_id", "network_label",
+    exact_match_filter_names = ["instance_id", "mac",
             "start_period", "last_refreshed", "bw_in", "bw_out"]
 
     # Filter the query
