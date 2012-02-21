@@ -21,6 +21,7 @@ Tests For Compute
 """
 from copy import copy
 import datetime
+import sys
 import time
 from webob import exc
 
@@ -74,8 +75,8 @@ orig_rpc_cast = rpc.cast
 
 def rpc_call_wrapper(context, topic, msg, do_cast=True):
     """Stub out the scheduler creating the instance entry"""
-    if topic == FLAGS.scheduler_topic and \
-            msg['method'] == 'run_instance':
+    if (topic == FLAGS.scheduler_topic and
+        msg['method'] == 'run_instance'):
         request_spec = msg['args']['request_spec']
         scheduler = scheduler_driver.Scheduler
         num_instances = request_spec.get('num_instances', 1)
@@ -191,7 +192,7 @@ class BaseTestCase(test.TestCase):
 
 class ComputeTestCase(BaseTestCase):
     def setUp(self):
-        def fake_get_nw_info(cls, ctxt, instance):
+        def fake_get_nw_info(cls, ctxt, instance, *args, **kwargs):
             self.assertTrue(ctxt.is_admin)
             return fake_network.fake_get_instance_nw_info(self.stubs, 1, 1,
                                                           spectacular=True)
@@ -199,13 +200,15 @@ class ComputeTestCase(BaseTestCase):
         super(ComputeTestCase, self).setUp()
         self.stubs.Set(nova.network.API, 'get_instance_nw_info',
                        fake_get_nw_info)
+        self.stubs.Set(nova.network.API, 'allocate_for_instance',
+                       fake_get_nw_info)
 
     def test_wrap_instance_fault(self):
         inst_uuid = "fake_uuid"
 
         called = {'fault_added': False}
 
-        def did_it_add_fault(_ctxt, _inst_uuid, _e):
+        def did_it_add_fault(*args):
             called['fault_added'] = True
 
         self.stubs.Set(self.compute, 'add_instance_fault_from_exc',
@@ -225,7 +228,7 @@ class ComputeTestCase(BaseTestCase):
 
         called = {'fault_added': False}
 
-        def did_it_add_fault(_ctxt, _inst_uuid, _e):
+        def did_it_add_fault(*args):
             called['fault_added'] = True
 
         self.stubs.Set(self.compute, 'add_instance_fault_from_exc',
@@ -267,6 +270,35 @@ class ComputeTestCase(BaseTestCase):
             instance = instances[0]
 
             self.assertTrue(instance.config_drive)
+        finally:
+            db.instance_destroy(self.context, instance['id'])
+
+    def test_default_access_ip(self):
+        self.flags(default_access_ip_network_name='test1', stub_network=False)
+        instance = self._create_fake_instance()
+
+        try:
+            self.compute.run_instance(self.context, instance['uuid'],
+                    is_first_time=True)
+            instances = db.instance_get_all(context.get_admin_context())
+            instance = instances[0]
+
+            self.assertEqual(instance.access_ip_v4, '192.168.1.100')
+            self.assertEqual(instance.access_ip_v6, '2001:db8:0:1::1')
+        finally:
+            db.instance_destroy(self.context, instance['id'])
+
+    def test_no_default_access_ip(self):
+        instance = self._create_fake_instance()
+
+        try:
+            self.compute.run_instance(self.context, instance['uuid'],
+                    is_first_time=True)
+            instances = db.instance_get_all(context.get_admin_context())
+            instance = instances[0]
+
+            self.assertFalse(instance.access_ip_v4)
+            self.assertFalse(instance.access_ip_v6)
         finally:
             db.instance_destroy(self.context, instance['id'])
 
@@ -563,7 +595,7 @@ class ComputeTestCase(BaseTestCase):
         self.stubs.Set(nova.virt.fake.FakeConnection, 'get_info',
                        fake_driver_get_info)
 
-        self.assertRaises(exception.Error,
+        self.assertRaises(exception.Invalid,
                           self.compute.set_admin_password,
                           self.context,
                           instance['uuid'])
@@ -595,7 +627,7 @@ class ComputeTestCase(BaseTestCase):
 
         #error raised from the driver should not reveal internal information
         #so a new error is raised
-        self.assertRaises(exception.Error,
+        self.assertRaises(exception.NovaException,
                           self.compute.set_admin_password,
                           self.context, instance_uuid)
 
@@ -884,7 +916,7 @@ class ComputeTestCase(BaseTestCase):
         """Ensure failure when running an instance that already exists"""
         instance = self._create_fake_instance()
         self.compute.run_instance(self.context, instance['uuid'])
-        self.assertRaises(exception.Error,
+        self.assertRaises(exception.Invalid,
                           self.compute.run_instance,
                           self.context,
                           instance['uuid'])
@@ -903,11 +935,11 @@ class ComputeTestCase(BaseTestCase):
                        fake_get_nw_info)
         self.mox.StubOutWithMock(self.compute.network_api,
                                  "allocate_for_instance")
-        self.compute.network_api.allocate_for_instance(mox.IgnoreArg(),
-                                                       mox.IgnoreArg(),
-                                                       requested_networks=None,
-                                                       vpn=False).\
-            AndRaise(quantum_client.QuantumServerException())
+        self.compute.network_api.allocate_for_instance(
+                mox.IgnoreArg(),
+                mox.IgnoreArg(),
+                requested_networks=None,
+                vpn=False).AndRaise(quantum_client.QuantumServerException())
 
         self.flags(stub_network=False)
 
@@ -929,9 +961,9 @@ class ComputeTestCase(BaseTestCase):
         instance = self._create_fake_instance()
 
         self.mox.StubOutWithMock(self.compute, "_setup_block_device_mapping")
-        self.compute._setup_block_device_mapping(mox.IgnoreArg(),
-                                                 mox.IgnoreArg()).\
-            AndRaise(rpc.common.RemoteError('', '', ''))
+        self.compute._setup_block_device_mapping(
+                mox.IgnoreArg(),
+                mox.IgnoreArg()).AndRaise(rpc.common.RemoteError('', '', ''))
 
         self.mox.ReplayAll()
 
@@ -1350,11 +1382,12 @@ class ComputeTestCase(BaseTestCase):
         self.mox.StubOutWithMock(self.compute.driver, 'get_instance_disk_info')
         self.compute.driver.get_instance_disk_info(inst_ref.name)
 
-        rpc.call(c, topic, {"method": "pre_live_migration",
-                            "args": {'instance_id': instance_id,
-                                     'block_migration': True,
-                                     'disk': None}}).\
-                            AndRaise(rpc.common.RemoteError('', '', ''))
+        rpc.call(c, topic,
+                 {"method": "pre_live_migration",
+                  "args": {'instance_id': instance_id,
+                           'block_migration': True,
+                           'disk': None}
+                 }).AndRaise(rpc.common.RemoteError('', '', ''))
         # mocks for rollback
         rpc.call(c, topic, {"method": "remove_volume_connection",
                             "args": {'instance_id': instance_id,
@@ -1472,13 +1505,68 @@ class ComputeTestCase(BaseTestCase):
         self.assertEqual(power_state.NOSTATE, instances[0]['power_state'])
 
     def test_add_instance_fault(self):
+        exc_info = None
+        instance_uuid = str(utils.gen_uuid())
+
+        def fake_db_fault_create(ctxt, values):
+            self.assertTrue(values['details'].startswith('test'))
+            self.assertTrue('raise NotImplementedError' in values['details'])
+            del values['details']
+
+            expected = {
+                'code': 500,
+                'message': 'NotImplementedError',
+                'instance_uuid': instance_uuid,
+            }
+            self.assertEquals(expected, values)
+
+        try:
+            raise NotImplementedError('test')
+        except:
+            exc_info = sys.exc_info()
+
+        self.stubs.Set(nova.db, 'instance_fault_create', fake_db_fault_create)
+
+        ctxt = context.get_admin_context()
+        self.compute.add_instance_fault_from_exc(ctxt, instance_uuid,
+                                                 NotImplementedError('test'),
+                                                 exc_info)
+
+    def test_add_instance_fault_user_error(self):
+        exc_info = None
+        instance_uuid = str(utils.gen_uuid())
+
+        def fake_db_fault_create(ctxt, values):
+
+            expected = {
+                'code': 400,
+                'message': 'Invalid',
+                'details': 'fake details',
+                'instance_uuid': instance_uuid,
+            }
+            self.assertEquals(expected, values)
+
+        user_exc = exception.Invalid('fake details', code=400)
+
+        try:
+            raise user_exc
+        except:
+            exc_info = sys.exc_info()
+
+        self.stubs.Set(nova.db, 'instance_fault_create', fake_db_fault_create)
+
+        ctxt = context.get_admin_context()
+        self.compute.add_instance_fault_from_exc(ctxt, instance_uuid,
+            user_exc, exc_info)
+
+    def test_add_instance_fault_no_exc_info(self):
         instance_uuid = str(utils.gen_uuid())
 
         def fake_db_fault_create(ctxt, values):
             expected = {
                 'code': 500,
                 'message': 'NotImplementedError',
-                'details': '',
+                'details': 'test',
                 'instance_uuid': instance_uuid,
             }
             self.assertEquals(expected, values)
@@ -1487,25 +1575,7 @@ class ComputeTestCase(BaseTestCase):
 
         ctxt = context.get_admin_context()
         self.compute.add_instance_fault_from_exc(ctxt, instance_uuid,
-                                                 NotImplementedError())
-
-    def test_add_instance_fault_http_exception(self):
-        instance_uuid = str(utils.gen_uuid())
-
-        def fake_db_fault_create(ctxt, values):
-            expected = {
-                'code': 404,
-                'message': 'HTTPNotFound',
-                'details': 'Error Details',
-                'instance_uuid': instance_uuid,
-            }
-            self.assertEquals(expected, values)
-
-        self.stubs.Set(nova.db, 'instance_fault_create', fake_db_fault_create)
-
-        ctxt = context.get_admin_context()
-        self.compute.add_instance_fault_from_exc(ctxt, instance_uuid,
-                                        exc.HTTPNotFound("Error Details"))
+                                                 NotImplementedError('test'))
 
 
 class ComputeAPITestCase(BaseTestCase):

@@ -21,6 +21,7 @@ import json
 import urlparse
 import uuid
 
+import iso8601
 from lxml import etree
 import webob
 
@@ -889,7 +890,8 @@ class ServersControllerTest(test.TestCase):
         def fake_get_all(compute_self, context, search_opts=None):
             self.assertNotEqual(search_opts, None)
             self.assertTrue('changes-since' in search_opts)
-            changes_since = datetime.datetime(2011, 1, 24, 17, 8, 1)
+            changes_since = datetime.datetime(2011, 1, 24, 17, 8, 1,
+                                              tzinfo=iso8601.iso8601.UTC)
             self.assertEqual(search_opts['changes-since'], changes_since)
             self.assertTrue('deleted' not in search_opts)
             return [fakes.stub_instance(100, uuid=server_uuid)]
@@ -1423,8 +1425,8 @@ class ServersControllerCreateTest(test.TestCase):
 
         def rpc_call_wrapper(context, topic, msg):
             """Stub out the scheduler creating the instance entry"""
-            if topic == FLAGS.scheduler_topic and \
-                    msg['method'] == 'run_instance':
+            if (topic == FLAGS.scheduler_topic and
+                msg['method'] == 'run_instance'):
                 request_spec = msg['args']['request_spec']
                 num_instances = request_spec.get('num_instances', 1)
                 instances = []
@@ -2138,7 +2140,7 @@ class ServersControllerCreateTest(test.TestCase):
         res = self.controller.create(req, body).obj
 
         server = res['server']
-        self.assertTrue('adminPass' in body['server'] )
+        self.assertTrue('adminPass' in body['server'])
         self.assertTrue('adminPass' not in server)
 
     def test_create_instance_admin_pass_empty(self):
@@ -2399,8 +2401,8 @@ class TestServerCreateRequestXMLDeserializer(test.TestCase):
         self.assertDictMatch(request['body'], expected)
 
     def test_spec_request(self):
-        image_bookmark_link = "http://servers.api.openstack.org/1234/" + \
-                              "images/52415800-8b69-11e0-9b19-734f6f006e54"
+        image_bookmark_link = ("http://servers.api.openstack.org/1234/"
+                               "images/52415800-8b69-11e0-9b19-734f6f006e54")
         serial_request = """
 <server xmlns="http://docs.openstack.org/compute/api/v2"
         imageRef="%s"
@@ -2417,8 +2419,8 @@ class TestServerCreateRequestXMLDeserializer(test.TestCase):
         expected = {
             "server": {
                 "name": "new-server-test",
-                "imageRef": "http://servers.api.openstack.org/1234/" + \
-                            "images/52415800-8b69-11e0-9b19-734f6f006e54",
+                "imageRef": ("http://servers.api.openstack.org/1234/"
+                             "images/52415800-8b69-11e0-9b19-734f6f006e54"),
                 "flavorRef": "52415800-8b69-11e0-9b19-734f1195ff37",
                 "metadata": {"My Server Name": "Apache1"},
                 "personality": [
@@ -2868,8 +2870,64 @@ class ServersViewBuilderTest(test.TestCase):
             }
         }
 
+        self.request.context = nova.context.RequestContext('fake', 'fake')
         output = self.view_builder.show(self.request, self.instance)
         self.assertDictMatch(output, expected_server)
+
+    def test_build_server_detail_with_fault_no_details_not_admin(self):
+        self.instance['vm_state'] = vm_states.ERROR
+        self.instance['fault'] = {
+            'code': 500,
+            'instance_uuid': self.uuid,
+            'message': "Error",
+            'details': 'Stock details for test',
+            'created_at': datetime.datetime(2010, 10, 10, 12, 0, 0),
+        }
+
+        expected_fault = {"code": 500,
+                          "created": "2010-10-10T12:00:00Z",
+                          "message": "Error"}
+
+        self.request.context = nova.context.RequestContext('fake', 'fake')
+        output = self.view_builder.show(self.request, self.instance)
+        self.assertDictMatch(output['server']['fault'], expected_fault)
+
+    def test_build_server_detail_with_fault_admin(self):
+        self.instance['vm_state'] = vm_states.ERROR
+        self.instance['fault'] = {
+            'code': 500,
+            'instance_uuid': self.uuid,
+            'message': "Error",
+            'details': 'Stock details for test',
+            'created_at': datetime.datetime(2010, 10, 10, 12, 0, 0),
+        }
+
+        expected_fault = {"code": 500,
+                          "created": "2010-10-10T12:00:00Z",
+                          "message": "Error",
+                          'details': 'Stock details for test'}
+
+        self.request.context = nova.context.get_admin_context()
+        output = self.view_builder.show(self.request, self.instance)
+        self.assertDictMatch(output['server']['fault'], expected_fault)
+
+    def test_build_server_detail_with_fault_no_details_admin(self):
+        self.instance['vm_state'] = vm_states.ERROR
+        self.instance['fault'] = {
+            'code': 500,
+            'instance_uuid': self.uuid,
+            'message': "Error",
+            'details': '',
+            'created_at': datetime.datetime(2010, 10, 10, 12, 0, 0),
+        }
+
+        expected_fault = {"code": 500,
+                          "created": "2010-10-10T12:00:00Z",
+                          "message": "Error"}
+
+        self.request.context = nova.context.get_admin_context()
+        output = self.view_builder.show(self.request, self.instance)
+        self.assertDictMatch(output['server']['fault'], expected_fault)
 
     def test_build_server_detail_with_fault_but_active(self):
         self.instance['vm_state'] = vm_states.ACTIVE
@@ -2881,66 +2939,8 @@ class ServersViewBuilderTest(test.TestCase):
             'details': "Stock details for test",
             'created_at': datetime.datetime(2010, 10, 10, 12, 0, 0),
         }
-
-        image_bookmark = "http://localhost/fake/images/5"
-        flavor_bookmark = "http://localhost/fake/flavors/1"
-        self_link = "http://localhost/v2/fake/servers/%s" % self.uuid
-        bookmark_link = "http://localhost/fake/servers/%s" % self.uuid
-        expected_server = {
-            "server": {
-                "id": self.uuid,
-                "user_id": "fake",
-                "tenant_id": "fake",
-                "updated": "2010-11-11T11:00:00Z",
-                "created": "2010-10-10T12:00:00Z",
-                "progress": 100,
-                "name": "test_server",
-                "status": "ACTIVE",
-                "accessIPv4": "",
-                "accessIPv6": "",
-                "hostId": '',
-                "key_name": '',
-                "image": {
-                    "id": "5",
-                    "links": [
-                        {
-                            "rel": "bookmark",
-                            "href": image_bookmark,
-                        },
-                    ],
-                },
-                "flavor": {
-                    "id": "1",
-                  "links": [
-                                            {
-                          "rel": "bookmark",
-                          "href": flavor_bookmark,
-                      },
-                  ],
-                },
-                "addresses": {
-                    'test1': [
-                        {'version': 4, 'addr': '192.168.1.100'},
-                        {'version': 6, 'addr': '2001:db8:0:1::1'}
-                    ]
-                },
-                "metadata": {},
-                "config_drive": None,
-                "links": [
-                    {
-                        "rel": "self",
-                        "href": self_link,
-                    },
-                    {
-                        "rel": "bookmark",
-                        "href": bookmark_link,
-                    },
-                ],
-            }
-        }
-
         output = self.view_builder.show(self.request, self.instance)
-        self.assertDictMatch(output, expected_server)
+        self.assertFalse('fault' in output['server'])
 
     def test_build_server_detail_active_status(self):
         #set the power state of the instance to running

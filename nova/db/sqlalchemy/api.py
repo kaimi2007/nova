@@ -1603,7 +1603,7 @@ def instance_get_all_by_filters(context, filters):
     filters = filters.copy()
 
     if 'changes-since' in filters:
-        changes_since = filters['changes-since']
+        changes_since = utils.normalize_time(filters['changes-since'])
         query_prefix = query_prefix.\
                             filter(models.Instance.updated_at > changes_since)
 
@@ -1685,7 +1685,9 @@ def instance_get_active_by_window_joined(context, begin, end=None,
     session = get_session()
     query = session.query(models.Instance)
 
-    query = query.options(joinedload('security_groups')).\
+    query = query.options(joinedload('info_cache')).\
+                  options(joinedload('security_groups')).\
+                  options(joinedload('metadata')).\
                   options(joinedload('instance_type')).\
                   filter(or_(models.Instance.terminated_at == None,
                              models.Instance.terminated_at > begin))
@@ -3807,7 +3809,7 @@ def bw_usage_update(context,
 
     with session.begin():
         bwusage = model_query(context, models.BandwidthUsage,
-                              read_deleted="yes").\
+                              session=session, read_deleted="yes").\
                       filter_by(instance_id=instance_id).\
                       filter_by(start_period=start_period).\
                       filter_by(mac=mac).\

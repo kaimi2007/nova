@@ -34,7 +34,7 @@ from nova.compat import flagfile
 from nova.openstack.common import cfg
 
 
-class NovaConfigOpts(cfg.ConfigOpts):
+class NovaConfigOpts(cfg.CommonConfigOpts):
 
     def __init__(self, *args, **kwargs):
         super(NovaConfigOpts, self).__init__(*args, **kwargs)
@@ -59,30 +59,31 @@ def DECLARE(name, module_string, flag_values=FLAGS):
 
 
 def _get_my_ip():
-    """Returns the actual ip of the local machine."""
+    """
+    Returns the actual ip of the local machine.
+
+    This code figures out what source address would be used if some traffic
+    were to be sent out to some well known address on the Internet. In this
+    case, a Google DNS server is used, but the specific address does not
+    matter much.  No traffic is actually sent.
+    """
     try:
         csock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         csock.connect(('8.8.8.8', 80))
         (addr, port) = csock.getsockname()
         csock.close()
         return addr
-    except socket.error as ex:
+    except socket.error:
         return "127.0.0.1"
 
 
 log_opts = [
-    cfg.BoolOpt('verbose',
-                default=False,
-                help='show debug output'),
     cfg.StrOpt('logdir',
                default=None,
                help='output to a per-service log file in named directory'),
     cfg.StrOpt('logfile',
                default=None,
                help='output to named file'),
-    cfg.BoolOpt('use_syslog',
-                default=False,
-                help='output to syslog'),
     cfg.BoolOpt('use_stderr',
                 default=True,
                 help='log to standard error'),
@@ -454,6 +455,12 @@ global_opts = [
     cfg.StrOpt('volume_api_class',
                 default='nova.volume.api.API',
                 help='The volume API class to use'),
-    ]
+    cfg.StrOpt('security_group_handler',
+               default='nova.network.quantum.sg.NullSecurityGroupHandler',
+               help='security group handler class'),
+    cfg.StrOpt('default_access_ip_network_name',
+               default=None,
+               help='Name of network to use to set access ips for instances'),
+]
 
 FLAGS.register_opts(global_opts)

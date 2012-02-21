@@ -15,3 +15,5 @@ nova.egg-info
 po/*.pot
 bin/nova.conf
 networks/*
+*.mo
+tools/conf/nova.conf*

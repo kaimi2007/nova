@@ -1037,7 +1037,8 @@ class VMHelper(HelperBase):
         """Compile VM diagnostics data"""
         try:
             diags = {}
-            xml = get_rrd(get_rrd_server(), record["uuid"])
+            vm_uuid = record["uuid"]
+            xml = get_rrd(get_rrd_server(), vm_uuid)
             if xml:
                 rrd = minidom.parseString(xml)
                 for i, node in enumerate(rrd.firstChild.childNodes):
@@ -1049,7 +1050,8 @@ class VMHelper(HelperBase):
                             _ref_zero = ref[0].firstChild.data
                             diags[_ref_zero] = ref[6].firstChild.data
             return diags
-        except cls.XenAPI.Failure as e:
+        except expat.ExpatError as e:
+            LOG.exception(_('Unable to parse rrd of %(vm_uuid)s') % locals())
             return {"Unable to retrieve diagnostics": e}
 
     @classmethod
@@ -1704,8 +1706,11 @@ def _mounted_processing(device, key, net, metadata):
                 if not _find_guest_agent(tmpdir, FLAGS.xenapi_agent_path):
                     LOG.info(_('Manipulating interface files '
                             'directly'))
-                    disk.inject_data_into_fs(tmpdir, key, net, metadata,
-                        utils.execute)
+                    # for xenapi, we don't 'inject' admin_password here,
+                    # it's handled at instance startup time
+                    disk.inject_data_into_fs(tmpdir,
+                                             key, net, None, metadata,
+                                             utils.execute)
             finally:
                 utils.execute('umount', dev_path, run_as_root=True)
         else:

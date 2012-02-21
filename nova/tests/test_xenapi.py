@@ -132,6 +132,7 @@ class XenAPIVolumeTestCase(test.TestCase):
                 'volume_id': 1,
                 'target_iqn': 'iqn.2010-10.org.openstack:volume-00000001',
                 'target_portal': '127.0.0.1:3260,fake',
+                'target_lun': None,
                 'auth_method': 'CHAP',
                 'auth_method': 'fake',
                 'auth_method': 'fake',
@@ -243,8 +244,25 @@ class XenAPIVMTestCase(test.TestCase):
         self.assertEqual(server_info[1], 'myaddress')
 
     def test_get_diagnostics(self):
+        def fake_get_rrd(host, vm_uuid):
+            with open('xenapi/vm_rrd.xml') as f:
+                return re.sub(r'\s', '', f.read())
+        self.stubs.Set(vm_utils, 'get_rrd', fake_get_rrd)
+
+        fake_diagnostics = {
+            'vbd_xvdb_write': '0.0',
+            'memory_target': '10961792000.0000',
+            'memory_internal_free': '3612860.6020',
+            'memory': '10961792000.0000',
+            'vbd_xvda_write': '0.0',
+            'cpu0': '0.0110',
+            'vif_0_tx': '752.4007',
+            'vbd_xvda_read': '0.0',
+            'vif_0_rx': '4837.8805'
+        }
         instance = self._create_instance()
-        self.conn.get_diagnostics(instance)
+        expected = self.conn.get_diagnostics(instance)
+        self.assertDictMatch(fake_diagnostics, expected)
 
     def test_instance_snapshot_fails_with_no_primary_vdi(self):
         def create_bad_vbd(vm_ref, vdi_ref):
@@ -519,8 +537,8 @@ class XenAPIVMTestCase(test.TestCase):
         # Change the default host_call_plugin to one that'll return
         # a swap disk
         orig_func = stubs.FakeSessionForVMTests.host_call_plugin
-        stubs.FakeSessionForVMTests.host_call_plugin = \
-                stubs.FakeSessionForVMTests.host_call_plugin_swap
+        _host_call_plugin = stubs.FakeSessionForVMTests.host_call_plugin_swap
+        stubs.FakeSessionForVMTests.host_call_plugin = _host_call_plugin
         # Stubbing out firewall driver as previous stub sets a particular
         # stub for async plugin calls
         stubs.stubout_firewall_driver(self.stubs, self.conn)
@@ -960,8 +978,8 @@ class XenAPIMigrateInstance(test.TestCase):
         self.assertEqual(self.fake_vm_start_called, True)
 
     def test_finish_migrate_no_local_storage(self):
-        tiny_type_id = \
-                instance_types.get_instance_type_by_name('m1.tiny')['id']
+        tiny_type = instance_types.get_instance_type_by_name('m1.tiny')
+        tiny_type_id = tiny_type['id']
         self.instance_values.update({'instance_type_id': tiny_type_id,
                                      'root_gb': 0})
         instance = db.instance_create(self.context, self.instance_values)
@@ -1556,10 +1574,10 @@ class XenAPIDom0IptablesFirewallTestCase(test.TestCase):
         ipv6_addr_per_network = 1
         networks_count = 5
         instance_ref = self._create_instance_ref()
-        network_info = fake_network.\
-                        fake_get_instance_nw_info(self.stubs,
-                                                  networks_count,
-                                                  ipv4_addr_per_network)
+        _get_instance_nw_info = fake_network.fake_get_instance_nw_info
+        network_info = _get_instance_nw_info(self.stubs,
+                                             networks_count,
+                                             ipv4_addr_per_network)
         ipv4_len = len(self.fw.iptables.ipv4['filter'].rules)
         ipv6_len = len(self.fw.iptables.ipv6['filter'].rules)
         inst_ipv4, inst_ipv6 = self.fw.instance_rules(instance_ref,
@@ -1687,8 +1705,8 @@ class XenAPISRSelectionTestCase(test.TestCase):
         helper = vm_utils.VMHelper
         helper.XenAPI = session.get_imported_xenapi()
         host_ref = xenapi_fake.get_all('host')[0]
-        local_sr = xenapi_fake.\
-                    create_sr(name_label='Fake Storage',
+        local_sr = xenapi_fake.create_sr(
+                              name_label='Fake Storage',
                               type='lvm',
                               other_config={'i18n-original-value-name_label':
                                             'Local storage',
@@ -1705,11 +1723,10 @@ class XenAPISRSelectionTestCase(test.TestCase):
         helper = vm_utils.VMHelper
         helper.XenAPI = session.get_imported_xenapi()
         host_ref = xenapi_fake.get_all('host')[0]
-        local_sr = xenapi_fake.\
-                    create_sr(name_label='Fake Storage',
-                              type='lvm',
-                              other_config={'my_fake_sr': 'true'},
-                              host_ref=host_ref)
+        local_sr = xenapi_fake.create_sr(name_label='Fake Storage',
+                                         type='lvm',
+                                         other_config={'my_fake_sr': 'true'},
+                                         host_ref=host_ref)
         expected = helper.safe_find_sr(session)
         self.assertEqual(local_sr, expected)
 

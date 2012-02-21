@@ -154,6 +154,13 @@ class NovaException(Exception):
 
     def __init__(self, message=None, **kwargs):
         self.kwargs = kwargs
+
+        if 'code' not in self.kwargs:
+            try:
+                self.kwargs['code'] = self.code
+            except AttributeError:
+                pass
+
         if not message:
             try:
                 message = self.message % kwargs
@@ -192,6 +199,7 @@ class MelangeConnectionFailed(NovaException):
 
 class NotAuthorized(NovaException):
     message = _("Not authorized.")
+    code = 401
 
 
 class AdminRequired(NotAuthorized):
@@ -204,6 +212,7 @@ class PolicyNotAuthorized(NotAuthorized):
 
 class Invalid(NovaException):
     message = _("Unacceptable parameters.")
+    code = 400
 
 
 class InvalidSnapshot(Invalid):
@@ -375,11 +384,11 @@ class InvalidDiskFormat(Invalid):
 
 
 class ImageUnacceptable(Invalid):
-    message = _("Image %(image_id)s is unacceptable") + ": %(reason)s"
+    message = _("Image %(image_id)s is unacceptable: %(reason)s")
 
 
 class InstanceUnacceptable(Invalid):
-    message = _("Instance %(instance_id)s is unacceptable") + ": %(reason)s"
+    message = _("Instance %(instance_id)s is unacceptable: %(reason)s")
 
 
 class InvalidEc2Id(Invalid):
@@ -388,14 +397,11 @@ class InvalidEc2Id(Invalid):
 
 class NotFound(NovaException):
     message = _("Resource could not be found.")
+    code = 404
 
 
 class FlagNotSet(NotFound):
     message = _("Required flag %(flag)s not set.")
-
-
-class InstanceNotFound(NotFound):
-    message = _("Instance %(instance_id)s could not be found.")
 
 
 class VolumeNotFound(NotFound):
@@ -668,12 +674,12 @@ class SecurityGroupNotFoundForRule(SecurityGroupNotFound):
 
 class SecurityGroupExistsForInstance(Invalid):
     message = _("Security group %(security_group_id)s is already associated"
-                 " with the instance %(instance_id)s")
+                " with the instance %(instance_id)s")
 
 
 class SecurityGroupNotExistsForInstance(Invalid):
     message = _("Security group %(security_group_id)s is not associated with"
-                 " the instance %(instance_id)s")
+                " the instance %(instance_id)s")
 
 
 class MigrationNotFound(NotFound):
@@ -975,3 +981,11 @@ class SolidFireAPIDataException(SolidFireAPIException):
 
 class DuplicateVlan(Duplicate):
     message = _("Detected existing vlan with id %(vlan)")
+
+
+class InstanceNotFound(NotFound):
+    message = _("Instance %(instance_id)s could not be found.")
+
+
+class InvalidInstanceIDMalformed(Invalid):
+        message = _("Invalid id: %(val) (expecting \"i-...\").")
