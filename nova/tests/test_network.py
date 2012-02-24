@@ -849,7 +849,7 @@ class CommonNetworkTestCase(test.TestCase):
         super(CommonNetworkTestCase, self).setUp()
         self.context = context.RequestContext('fake', 'fake')
 
-    def fake_create_fixed_ips(self, context, network_id):
+    def fake_create_fixed_ips(self, context, network_id, fixed_cidr=None):
         return None
 
     def test_remove_fixed_ip_from_instance(self):
@@ -1288,6 +1288,12 @@ class FloatingIPTestCase(test.TestCase):
         # If this fails in either, it does not handle having no addresses
         self.network.deallocate_for_instance(self.context,
                 instance_id=instance_ref['id'])
+        self.network.deallocate_for_instance(self.context,
+                instance_id=instance_ref['id'])
+
+    def test_deallocation_deleted_instance(self):
+        instance_ref = db.api.instance_create(self.context,
+                {"project_id": self.project_id, "deleted": True})
         self.network.deallocate_for_instance(self.context,
                 instance_id=instance_ref['id'])
 

@@ -286,6 +286,10 @@ class InvalidAggregateAction(Invalid):
                 "%(aggregate_id)s. Reason: %(reason)s.")
 
 
+class InvalidGroup(Invalid):
+    message = _("Group not valid. Reason: %(reason)s")
+
+
 class InstanceInvalidState(Invalid):
     message = _("Instance %(instance_uuid)s in %(attr)s %(state)s. Cannot "
                 "%(method)s while the instance is in this state.")
@@ -445,6 +449,11 @@ class SnapshotNotFound(NotFound):
 
 class VolumeIsBusy(NovaException):
     message = _("deleting volume %(volume_name)s that has snapshot")
+
+
+class SnapshotIsBusy(NovaException):
+    message = _("deleting snapshot %(snapshot_name)s that has "
+                "dependent volumes")
 
 
 class ISCSITargetNotFoundForVolume(NotFound):

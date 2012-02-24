@@ -558,11 +558,12 @@ def compute_node_create(context, values, session=None):
 
 
 @require_admin_context
-def compute_node_update(context, compute_id, values):
+def compute_node_update(context, compute_id, values, auto_adjust):
     """Creates a new ComputeNode and populates the capacity fields
     with the most recent data."""
     session = get_session()
-    _adjust_compute_node_values_for_utilization(context, values, session)
+    if auto_adjust:
+        _adjust_compute_node_values_for_utilization(context, values, session)
     with session.begin(subtransactions=True):
         compute_ref = compute_node_get(context, compute_id, session=session)
         compute_ref.update(values)
@@ -2909,6 +2910,41 @@ def security_group_exists(context, project_id, group_name):
 
 
 @require_context
+def security_group_in_use(context, group_id):
+    session = get_session()
+    with session.begin():
+        # Are there any other groups that haven't been deleted
+        # that include this group in their rules?
+        rules = session.query(models.SecurityGroupIngressRule).\
+                filter_by(group_id=group_id).\
+                filter_by(deleted=False).\
+                all()
+        for r in rules:
+            num_groups = session.query(models.SecurityGroup).\
+                        filter_by(deleted=False).\
+                        filter_by(id=r.parent_group_id).\
+                        count()
+            if num_groups:
+                return True
+
+        # Are there any instances that haven't been deleted
+        # that include this group?
+        inst_assoc = session.query(models.SecurityGroupInstanceAssociation).\
+                filter_by(security_group_id=group_id).\
+                filter_by(deleted=False).\
+                all()
+        for ia in inst_assoc:
+            num_instances = session.query(models.Instance).\
+                        filter_by(deleted=False).\
+                        filter_by(id=ia.instance_id).\
+                        count()
+            if num_instances:
+                return True
+
+    return False
+
+
+@require_context
 def security_group_create(context, values):
     security_group_ref = models.SecurityGroup()
     # FIXME(devcamcar): Unless I do this, rules fails with lazy load exception
@@ -4346,12 +4382,24 @@ def _aggregate_get_query(context, model_class, id_field, id,
 
 @require_admin_context
 def aggregate_create(context, values, metadata=None):
-    try:
+    session = get_session()
+    aggregate = _aggregate_get_query(context,
+                                     models.Aggregate,
+                                     models.Aggregate.name,
+                                     values['name'],
+                                     session=session,
+                                     read_deleted='yes').first()
+    if not aggregate:
         aggregate = models.Aggregate()
         values.setdefault('operational_state', aggregate_states.CREATED)
         aggregate.update(values)
-        aggregate.save()
-    except exception.DBError:
+        aggregate.save(session=session)
+    elif aggregate.deleted:
+        aggregate.update({'deleted': False,
+                          'deleted_at': None,
+                          'availability_zone': values['availability_zone']})
+        aggregate.save(session=session)
+    else:
         raise exception.AggregateNameExists(aggregate_name=values['name'])
     if metadata:
         aggregate_metadata_add(context, aggregate.id, metadata)
@@ -4369,6 +4417,20 @@ def aggregate_get(context, aggregate_id, read_deleted='no'):
         raise exception.AggregateNotFound(aggregate_id=aggregate_id)
 
     return aggregate
+
+
+@require_admin_context
+def aggregate_get_by_host(context, host, read_deleted='no'):
+    aggregate_host = _aggregate_get_query(context,
+                                          models.AggregateHost,
+                                          models.AggregateHost.host,
+                                          host,
+                                          read_deleted='no').first()
+
+    if not aggregate_host:
+        raise exception.AggregateHostNotFound(host=host)
+
+    return aggregate_get(context, aggregate_host.aggregate_id, read_deleted)
 
 
 @require_admin_context

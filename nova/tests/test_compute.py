@@ -19,11 +19,10 @@
 """
 Tests For Compute
 """
-from copy import copy
+import copy
 import datetime
 import sys
 import time
-from webob import exc
 
 import mox
 import webob.exc
@@ -1577,6 +1576,138 @@ class ComputeTestCase(BaseTestCase):
         self.compute.add_instance_fault_from_exc(ctxt, instance_uuid,
                                                  NotImplementedError('test'))
 
+    def test_cleanup_running_deleted_instances(self):
+        admin_context = context.get_admin_context()
+        deleted_at = utils.utcnow() - datetime.timedelta(hours=1, minutes=5)
+        instance = self._create_fake_instance({"deleted_at": deleted_at,
+                                          "deleted": True})
+
+        self.compute.host = instance['host']
+
+        self.mox.StubOutWithMock(self.compute.driver, 'list_instances')
+        self.compute.driver.list_instances().AndReturn([instance['name']])
+        FLAGS.running_deleted_instance_timeout = 3600
+        FLAGS.running_deleted_instance_action = 'reap'
+
+        self.mox.StubOutWithMock(self.compute.db, "instance_get_all_by_host")
+        self.compute.db.instance_get_all_by_host(admin_context,
+                                                 self.compute.host
+                                                ).AndReturn([instance])
+
+        self.mox.StubOutWithMock(self.compute, "_shutdown_instance")
+        self.compute._shutdown_instance(admin_context, instance,
+                                        'Terminating').AndReturn(None)
+
+        self.mox.StubOutWithMock(self.compute, "_cleanup_volumes")
+        self.compute._cleanup_volumes(admin_context,
+                                      instance['id']).AndReturn(None)
+
+        self.mox.ReplayAll()
+        self.compute._cleanup_running_deleted_instances(admin_context)
+
+    def test_running_deleted_instances(self):
+        self.mox.StubOutWithMock(self.compute.driver, 'list_instances')
+        self.compute.driver.list_instances().AndReturn(['herp', 'derp'])
+        self.compute.host = 'host'
+
+        instance1 = mox.MockAnything()
+        instance1.name = 'herp'
+        instance1.deleted = True
+        instance1.deleted_at = "sometimeago"
+
+        instance2 = mox.MockAnything()
+        instance2.name = 'derp'
+        instance2.deleted = False
+        instance2.deleted_at = None
+
+        self.mox.StubOutWithMock(utils, 'is_older_than')
+        utils.is_older_than('sometimeago',
+                    FLAGS.running_deleted_instance_timeout).AndReturn(True)
+
+        self.mox.StubOutWithMock(self.compute.db, "instance_get_all_by_host")
+        self.compute.db.instance_get_all_by_host('context',
+                                                 'host').AndReturn(
+                                                                [instance1,
+                                                                 instance2])
+        self.mox.ReplayAll()
+        val = self.compute._running_deleted_instances('context')
+        self.assertEqual(val, [instance1])
+
+    def test_heal_instance_info_cache(self):
+        # Update on every call for the test
+        self.flags(heal_instance_info_cache_interval=-1)
+        ctxt = context.get_admin_context()
+
+        instance_map = {}
+        instances = []
+        for x in xrange(5):
+            uuid = 'fake-uuid-%s' % x
+            instance_map[uuid] = {'uuid': uuid, 'host': FLAGS.host}
+            instances.append(instance_map[uuid])
+
+        call_info = {'get_all_by_host': 0, 'get_by_uuid': 0,
+                'get_nw_info': 0, 'expected_instance': None}
+
+        def fake_instance_get_all_by_host(context, host):
+            call_info['get_all_by_host'] += 1
+            return instances[:]
+
+        def fake_instance_get_by_uuid(context, instance_uuid):
+            if instance_uuid not in instance_map:
+                raise exception.InstanceNotFound
+            call_info['get_by_uuid'] += 1
+            return instance_map[instance_uuid]
+
+        def fake_get_instance_nw_info(context, instance):
+            # Note that this exception gets caught in compute/manager
+            # and is ignored.  However, the below increment of
+            # 'get_nw_info' won't happen, and you'll get an assert
+            # failure checking it below.
+            self.assertEqual(instance, call_info['expected_instance'])
+            call_info['get_nw_info'] += 1
+
+        self.stubs.Set(db, 'instance_get_all_by_host',
+                fake_instance_get_all_by_host)
+        self.stubs.Set(db, 'instance_get_by_uuid',
+                fake_instance_get_by_uuid)
+        self.stubs.Set(self.compute.network_api, 'get_instance_nw_info',
+                fake_get_instance_nw_info)
+
+        call_info['expected_instance'] = instances[0]
+        self.compute._heal_instance_info_cache(ctxt)
+        self.assertEqual(call_info['get_all_by_host'], 1)
+        self.assertEqual(call_info['get_by_uuid'], 0)
+        self.assertEqual(call_info['get_nw_info'], 1)
+
+        call_info['expected_instance'] = instances[1]
+        self.compute._heal_instance_info_cache(ctxt)
+        self.assertEqual(call_info['get_all_by_host'], 1)
+        self.assertEqual(call_info['get_by_uuid'], 1)
+        self.assertEqual(call_info['get_nw_info'], 2)
+
+        # Make an instance switch hosts
+        instances[2]['host'] = 'not-me'
+        # Make an instance disappear
+        instance_map.pop(instances[3]['uuid'])
+        # '2' and '3' should be skipped..
+        call_info['expected_instance'] = instances[4]
+        self.compute._heal_instance_info_cache(ctxt)
+        self.assertEqual(call_info['get_all_by_host'], 1)
+        # Incremented for '2' and '4'.. '3' caused a raise above.
+        self.assertEqual(call_info['get_by_uuid'], 3)
+        self.assertEqual(call_info['get_nw_info'], 3)
+        # Should be no more left.
+        self.assertEqual(len(self.compute._instance_uuids_to_heal), 0)
+
+        # This should cause a DB query now so we get first instance
+        # back again
+        call_info['expected_instance'] = instances[0]
+        self.compute._heal_instance_info_cache(ctxt)
+        self.assertEqual(call_info['get_all_by_host'], 2)
+        # Stays the same, beacuse the instance came from the DB
+        self.assertEqual(call_info['get_by_uuid'], 3)
+        self.assertEqual(call_info['get_nw_info'], 4)
+
 
 class ComputeAPITestCase(BaseTestCase):
 
@@ -1611,7 +1742,7 @@ class ComputeAPITestCase(BaseTestCase):
         inst_type['memory_mb'] = 1
 
         def fake_show(*args):
-            img = copy(self.fake_image)
+            img = copy.copy(self.fake_image)
             img['min_ram'] = 2
             return img
         self.stubs.Set(fake_image._FakeImageService, 'show', fake_show)
@@ -1632,7 +1763,7 @@ class ComputeAPITestCase(BaseTestCase):
         inst_type['root_gb'] = 1
 
         def fake_show(*args):
-            img = copy(self.fake_image)
+            img = copy.copy(self.fake_image)
             img['min_disk'] = 2
             return img
         self.stubs.Set(fake_image._FakeImageService, 'show', fake_show)
@@ -1654,7 +1785,7 @@ class ComputeAPITestCase(BaseTestCase):
         inst_type['memory_mb'] = 2
 
         def fake_show(*args):
-            img = copy(self.fake_image)
+            img = copy.copy(self.fake_image)
             img['min_ram'] = 2
             img['min_disk'] = 2
             return img
@@ -1672,7 +1803,7 @@ class ComputeAPITestCase(BaseTestCase):
         inst_type['memory_mb'] = 1
 
         def fake_show(*args):
-            return copy(self.fake_image)
+            return copy.copy(self.fake_image)
         self.stubs.Set(fake_image._FakeImageService, 'show', fake_show)
 
         (refs, resv_id) = self.compute_api.create(self.context,
@@ -2116,7 +2247,7 @@ class ComputeAPITestCase(BaseTestCase):
         """
 
         def fake_show(*args):
-            img = copy(self.fake_image)
+            img = copy.copy(self.fake_image)
             img['disk_format'] = 'vhd'
             return img
         self.stubs.Set(fake_image._FakeImageService, 'show', fake_show)
@@ -2148,7 +2279,7 @@ class ComputeAPITestCase(BaseTestCase):
         """
 
         def fake_show(*args):
-            img = copy(self.fake_image)
+            img = copy.copy(self.fake_image)
             img['disk_format'] = 'raw'
             img['min_ram'] = 512
             img['min_disk'] = 1
@@ -2178,7 +2309,7 @@ class ComputeAPITestCase(BaseTestCase):
         """
 
         def fake_show(*args):
-            img = copy(self.fake_image)
+            img = copy.copy(self.fake_image)
             img['disk_format'] = 'raw'
             img['min_disk'] = 1
             return img
@@ -3062,12 +3193,16 @@ class ComputeAPITestCase(BaseTestCase):
         def fake_check_attach(*args, **kwargs):
             pass
 
+        def fake_reserve_volume(*args, **kwargs):
+            pass
+
         def fake_volume_get(self, context, volume_id):
             return {'id': volume_id}
 
         self.stubs.Set(nova.volume.api.API, 'get', fake_volume_get)
         self.stubs.Set(nova.volume.api.API, 'check_attach', fake_check_attach)
-
+        self.stubs.Set(nova.volume.api.API, 'reserve_volume',
+                       fake_reserve_volume)
         instance = self._create_fake_instance()
         self.compute_api.attach_volume(self.context, instance, 1, '/dev/vdb')
 

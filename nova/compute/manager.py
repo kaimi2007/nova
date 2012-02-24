@@ -118,6 +118,10 @@ compute_opts = [
                default=3600,
                help="Number of periodic scheduler ticks to wait between "
                     "runs of the image cache manager."),
+    cfg.IntOpt("heal_instance_info_cache_interval",
+               default=60,
+               help="Number of seconds between instance info_cache self "
+                        "healing updates"),
     cfg.StrOpt("cpu_arch",
                default="x86_64",
                help="Architecture the instance runs on"),
@@ -226,6 +230,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         self.network_manager = utils.import_object(FLAGS.network_manager)
         self._last_host_check = 0
         self._last_bw_usage_poll = 0
+        self._last_info_cache_heal = 0
 
         super(ComputeManager, self).__init__(service_name="compute",
                                              *args, **kwargs)
@@ -274,7 +279,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         """Retrieve the power state for the given instance."""
         LOG.debug(_('Checking state'), instance=instance)
         try:
-            return self.driver.get_info(instance['name'])["state"]
+            return self.driver.get_info(instance)["state"]
         except exception.NotFound:
             return power_state.FAILED
 
@@ -1480,6 +1485,12 @@ class ComputeManager(manager.SchedulerDependentManager):
         return self.driver.host_power_action(host, action)
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
+    def host_maintenance_mode(self, context, host, mode):
+        """Start/Stop host maintenance window. On start, it triggers
+        guest VMs evacuation."""
+        return self.driver.host_maintenance_mode(host, mode)
+
+    @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     def set_host_enabled(self, context, host=None, enabled=None):
         """Sets the specified host's ability to accept new instances."""
         return self.driver.set_host_enabled(host, enabled)
@@ -1669,12 +1680,21 @@ class ComputeManager(manager.SchedulerDependentManager):
         context = context.elevated()
         instance_ref = self.db.instance_get_by_uuid(context, instance_uuid)
         instance_id = instance_ref['id']
+        msg = _("instance %(instance_uuid)s: attaching volume %(volume_id)s"
+                " to %(mountpoint)s")
         LOG.audit(_('Attaching volume %(volume_id)s to %(mountpoint)s'),
                   locals(), context=context, instance=instance_ref)
-        connector = self.driver.get_volume_connector(instance_ref)
-        connection_info = self.volume_api.initialize_connection(context,
-                                                                volume,
-                                                                connector)
+        try:
+            connector = self.driver.get_volume_connector(instance_ref)
+            connection_info = self.volume_api.initialize_connection(context,
+                                                                    volume,
+                                                                    connector)
+        except Exception:  # pylint: disable=W0702
+            with utils.save_and_reraise_exception():
+                msg = _("instance %(instance_uuid)s: attach failed"
+                        " %(mountpoint)s, removing")
+                LOG.exception(msg % locals(), context=context)
+                self.volume_api.unreserve_volume(context, volume)
         try:
             self.driver.attach_volume(connection_info,
                                       instance_ref['name'],
@@ -2109,6 +2129,59 @@ class ComputeManager(manager.SchedulerDependentManager):
                             block_device_info)
 
     @manager.periodic_task
+    def _heal_instance_info_cache(self, context):
+        """Called periodically.  On every call, try to update the
+        info_cache's network information for another instance by
+        calling to the network manager.
+
+        This is implemented by keeping a cache of uuids of instances
+        that live on this host.  On each call, we pop one off of a
+        list, pull the DB record, and try the call to the network API.
+        If anything errors, we don't care.  It's possible the instance
+        has been deleted, etc.
+        """
+        heal_interval = FLAGS.heal_instance_info_cache_interval
+        if not heal_interval:
+            return
+        curr_time = time.time()
+        if self._last_info_cache_heal + heal_interval > curr_time:
+            return
+        self._last_info_cache_heal = curr_time
+
+        instance_uuids = getattr(self, '_instance_uuids_to_heal', None)
+        instance = None
+
+        while not instance or instance['host'] != self.host:
+            if instance_uuids:
+                try:
+                    instance = self.db.instance_get_by_uuid(context,
+                        instance_uuids.pop(0))
+                except exception.InstanceNotFound:
+                    # Instance is gone.  Try to grab another.
+                    continue
+            else:
+                # No more in our copy of uuids.  Pull from the DB.
+                db_instances = self.db.instance_get_all_by_host(
+                        context, self.host)
+                if not db_instances:
+                    # None.. just return.
+                    return
+                instance = db_instances.pop(0)
+                instance_uuids = [inst['uuid'] for inst in db_instances]
+                self._instance_uuids_to_heal = instance_uuids
+
+        # We have an instance now and it's ours
+        try:
+            # Call to network API to get instance info.. this will
+            # force an update to the instance's info_cache
+            self.network_api.get_instance_nw_info(context, instance)
+            LOG.debug(_("Updated the info_cache for instance %s") %
+                    instance['uuid'])
+        except Exception:
+            # We don't care about any failures
+            pass
+
+    @manager.periodic_task
     def _poll_rebooting_instances(self, context):
         if FLAGS.reboot_timeout > 0:
             self.driver.poll_rebooting_instances(FLAGS.reboot_timeout)
@@ -2192,16 +2265,14 @@ class ComputeManager(manager.SchedulerDependentManager):
         for db_instance in db_instances:
             # Allow other periodic tasks to do some work...
             greenthread.sleep(0)
-            name = db_instance["name"]
             db_power_state = db_instance['power_state']
             try:
-                vm_instance = self.driver.get_info(name)
+                vm_instance = self.driver.get_info(db_instance)
                 vm_power_state = vm_instance.state
             except exception.InstanceNotFound:
-                msg = _("Instance %(name)s found in database but "
-                        "not known by hypervisor. Setting power "
-                        "state to NOSTATE") % locals()
-                LOG.warn(msg)
+                LOG.warn(_("Instance found in database but not known by "
+                           "hypervisor. Setting power state to NOSTATE"),
+                         locals(), instance=db_instance)
                 vm_power_state = power_state.NOSTATE
 
             if vm_power_state == db_power_state:
@@ -2295,42 +2366,46 @@ class ComputeManager(manager.SchedulerDependentManager):
         if action == "noop":
             return
 
-        present_name_labels = set(self.driver.list_instances())
-
         # NOTE(sirp): admin contexts don't ordinarily return deleted records
         with utils.temporary_mutation(context, read_deleted="yes"):
-            instances = self.db.instance_get_all_by_host(context, self.host)
-            for instance in instances:
-                present = instance.name in present_name_labels
-                erroneously_running = instance.deleted and present
-                old_enough = (not instance.deleted_at or utils.is_older_than(
-                        instance.deleted_at,
-                        FLAGS.running_deleted_instance_timeout))
+            for instance in self._running_deleted_instances(context):
+                if action == "log":
+                    LOG.warning(_("Detected instance  with name label "
+                                  "'%(name_label)s' which is marked as "
+                                  "DELETED but still present on host."),
+                                locals(), instance=instance)
 
-                if erroneously_running and old_enough:
-                    instance_id = instance['id']
-                    instance_uuid = instance['uuid']
-                    name_label = instance['name']
+                elif action == 'reap':
+                    name = instance['name']
+                    LOG.info(_("Destroying instance with name label "
+                               "'%(name)s' which is marked as "
+                               "DELETED but still present on host."),
+                             locals(), instance=instance)
+                    self._shutdown_instance(context, instance, 'Terminating')
+                    self._cleanup_volumes(context, instance['id'])
+                else:
+                    raise Exception(_("Unrecognized value '%(action)s'"
+                                      " for FLAGS.running_deleted_"
+                                      "instance_action"), locals(),
+                                    instance=instance)
 
-                    if action == "log":
-                        LOG.warning(_("Detected instance  with name label "
-                                      "'%(name_label)s' which is marked as "
-                                      "DELETED but still present on host."),
-                                    locals(), instance=instance)
-
-                    elif action == 'reap':
-                        LOG.info(_("Destroying instance with name label "
-                                   "'%(name_label)s' which is marked as "
-                                   "DELETED but still present on host."),
-                                 locals(), instance=instance)
-                        self._shutdown_instance(
-                                context, instance, 'Terminating', True)
-                        self._cleanup_volumes(context, instance_id)
-                    else:
-                        raise Exception(_("Unrecognized value '%(action)s'"
-                                          " for FLAGS.running_deleted_"
-                                          "instance_action"), locals(),
-                                        instance=instance)
+    def _running_deleted_instances(self, context):
+        """Returns a list of instances nova thinks is deleted,
+        but the hypervisor thinks is still running. This method
+        should be pushed down to the virt layer for efficiency.
+        """
+        def deleted_instance(instance):
+            present = instance.name in present_name_labels
+            erroneously_running = instance.deleted and present
+            old_enough = (not instance.deleted_at or utils.is_older_than(
+                instance.deleted_at,
+                FLAGS.running_deleted_instance_timeout))
+            if erroneously_running and old_enough:
+                return True
+            return False
+        present_name_labels = set(self.driver.list_instances())
+        instances = self.db.instance_get_all_by_host(context, self.host)
+        return [i for i in instances if deleted_instance(i)]
 
     @contextlib.contextmanager
     def error_out_instance_on_exception(self, context, instance_uuid):
@@ -2362,16 +2437,21 @@ class ComputeManager(manager.SchedulerDependentManager):
         try:
             self.driver.remove_from_aggregate(context,
                                               aggregate, host, **kwargs)
-        except exception.AggregateError:
+        except (exception.AggregateError,
+                exception.InvalidAggregateAction) as e:
             error = sys.exc_info()
-            self._undo_aggregate_operation(context, self.db.aggregate_host_add,
-                                           aggregate.id, host)
+            self._undo_aggregate_operation(
+                                    context, self.db.aggregate_host_add,
+                                    aggregate.id, host,
+                                    isinstance(e, exception.AggregateError))
             raise error[0], error[1], error[2]
 
-    def _undo_aggregate_operation(self, context, op, aggregate_id, host):
+    def _undo_aggregate_operation(self, context, op, aggregate_id,
+                                  host, set_error=True):
         try:
-            status = {'operational_state': aggregate_states.ERROR}
-            self.db.aggregate_update(context, aggregate_id, status)
+            if set_error:
+                status = {'operational_state': aggregate_states.ERROR}
+                self.db.aggregate_update(context, aggregate_id, status)
             op(context, aggregate_id, host)
         except Exception:
             LOG.exception(_('Aggregate %(aggregate_id)s: unrecoverable state '

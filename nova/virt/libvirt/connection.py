@@ -468,10 +468,8 @@ class LibvirtConnection(driver.ComputeDriver):
 
     def _destroy(self, instance, network_info, block_device_info=None,
                  cleanup=True):
-        instance_name = instance['name']
-
         try:
-            virt_dom = self._lookup_by_name(instance_name)
+            virt_dom = self._lookup_by_name(instance['name'])
         except exception.NotFound:
             virt_dom = None
 
@@ -524,10 +522,8 @@ class LibvirtConnection(driver.ComputeDriver):
 
         def _wait_for_destroy():
             """Called at an interval until the VM is gone."""
-            instance_name = instance['name']
-
             try:
-                state = self.get_info(instance_name)['state']
+                state = self.get_info(instance)['state']
             except exception.NotFound:
                 LOG.info(_("Instance destroyed successfully."),
                          instance=instance)
@@ -994,10 +990,8 @@ class LibvirtConnection(driver.ComputeDriver):
 
         def _wait_for_reboot():
             """Called at an interval until the VM is running again."""
-            instance_name = instance['name']
-
             try:
-                state = self.get_info(instance_name)['state']
+                state = self.get_info(instance)['state']
             except exception.NotFound:
                 LOG.error(_("During reboot, instance disappeared."),
                           instance=instance)
@@ -1142,10 +1136,8 @@ class LibvirtConnection(driver.ComputeDriver):
 
         def _wait_for_boot():
             """Called at an interval until the VM is running."""
-            instance_name = instance['name']
-
             try:
-                state = self.get_info(instance_name)['state']
+                state = self.get_info(instance)['state']
             except exception.NotFound:
                 LOG.error(_("During reboot, instance disappeared."),
                           instance=instance)
@@ -1255,6 +1247,11 @@ class LibvirtConnection(driver.ComputeDriver):
 
         If size is specified, we attempt to resize up to that size.
         """
+
+        # NOTE(mikal): Checksums aren't created here, even if the image cache
+        # manager is enabled, as that would slow down VM startup. If both
+        # cache management and checksumming are enabled, then the checksum
+        # will be created on the first pass of the image cache manager.
 
         generating = 'image_id' not in kwargs
         if not os.path.exists(target):
@@ -1705,7 +1702,7 @@ class LibvirtConnection(driver.ComputeDriver):
                     "[Error Code %(error_code)s] %(ex)s") % locals()
             raise exception.Error(msg)
 
-    def get_info(self, instance_name):
+    def get_info(self, instance):
         """Retrieve information from libvirt for a specific instance name.
 
         If a libvirt error is encountered during lookup, we might raise a
@@ -1713,7 +1710,7 @@ class LibvirtConnection(driver.ComputeDriver):
         libvirt error is.
 
         """
-        virt_dom = self._lookup_by_name(instance_name)
+        virt_dom = self._lookup_by_name(instance['name'])
         (state, max_mem, mem, num_cpu, cpu_time) = virt_dom.info()
         return {'state': state,
                 'max_mem': max_mem,
@@ -2230,7 +2227,7 @@ class LibvirtConnection(driver.ComputeDriver):
         def wait_for_live_migration():
             """waiting for live migration completion"""
             try:
-                self.get_info(instance_ref.name)['state']
+                self.get_info(instance_ref)['state']
             except exception.NotFound:
                 timer.stop()
                 post_method(ctxt, instance_ref, dest, block_migration)
@@ -2455,6 +2452,11 @@ class LibvirtConnection(driver.ComputeDriver):
         """Reboots, shuts down or powers up the host."""
         raise NotImplementedError()
 
+    def host_maintenance_mode(self, host, mode):
+        """Start/Stop host maintenance window. On start, it triggers
+        guest VMs evacuation."""
+        raise NotImplementedError()
+
     def set_host_enabled(self, host, enabled):
         """Sets the specified host's ability to accept new instances."""
         pass
@@ -2517,17 +2519,17 @@ class LibvirtConnection(driver.ComputeDriver):
 
         return disk_info_text
 
-    def _wait_for_running(self, instance_name):
+    def _wait_for_running(self, instance):
         try:
-            state = self.get_info(instance_name)['state']
+            state = self.get_info(instance)['state']
         except exception.NotFound:
-            msg = _("During wait running, %s disappeared.") % instance_name
-            LOG.error(msg)
+            LOG.error(_("During wait running, instance disappeared."),
+                      instance=instance)
             raise utils.LoopingCallDone
 
         if state == power_state.RUNNING:
-            msg = _("Instance %s running successfully.") % instance_name
-            LOG.info(msg)
+            LOG.info(_("Instance running successfully."),
+                     instance=instance)
             raise utils.LoopingCallDone
 
     @exception.wrap_exception()
@@ -2569,7 +2571,7 @@ class LibvirtConnection(driver.ComputeDriver):
 
         self.firewall_driver.apply_instance_filter(instance, network_info)
 
-        timer = utils.LoopingCall(self._wait_for_running, instance['name'])
+        timer = utils.LoopingCall(self._wait_for_running, instance)
         return timer.start(interval=0.5, now=True)
 
     @exception.wrap_exception()
@@ -2591,7 +2593,7 @@ class LibvirtConnection(driver.ComputeDriver):
         domain = self._create_new_domain(xml)
         self.firewall_driver.apply_instance_filter(instance, network_info)
 
-        timer = utils.LoopingCall(self._wait_for_running, instance['name'])
+        timer = utils.LoopingCall(self._wait_for_running, instance)
         return timer.start(interval=0.5, now=True)
 
     def confirm_migration(self, migration, instance, network_info):

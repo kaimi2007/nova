@@ -94,7 +94,7 @@ class QuantumManager(manager.FloatingIP, manager.FlatManager):
             self.init_host_floating_ips()
         # Set up all the forwarding rules for any network that has a
         # gateway set.
-        networks = self.get_all_networks()
+        networks = self.get_all_networks(context.get_admin_context())
         cidrs = []
         for net in networks:
             if net['gateway']:
@@ -114,11 +114,10 @@ class QuantumManager(manager.FloatingIP, manager.FlatManager):
         else:
             return FLAGS.node_availability_zone
 
-    def get_all_networks(self):
+    def get_all_networks(self, context):
         networks = []
-        admin_context = context.get_admin_context()
-        networks.extend(self.ipam.get_global_networks(admin_context))
-        networks.extend(self.ipam.get_project_networks(admin_context))
+        networks.extend(self.ipam.get_global_networks(context))
+        networks.extend(self.ipam.get_project_networks(context))
         return networks
 
     def create_networks(self, context, label, cidr, multi_host, num_networks,
@@ -288,6 +287,7 @@ class QuantumManager(manager.FloatingIP, manager.FlatManager):
         project_id = kwargs['project_id']
         LOG.debug(_("network allocations for instance %s"), project_id)
         requested_networks = kwargs.get('requested_networks')
+        instance = db.instance_get(context, instance_id)
 
         net_proj_pairs = self.ipam.get_project_and_global_net_ids(context,
                                                                 project_id)
@@ -316,7 +316,6 @@ class QuantumManager(manager.FloatingIP, manager.FlatManager):
                                                  project_id)
 
             # talk to Quantum API to create and attach port.
-            instance = db.instance_get(context, instance_id)
             nova_id = self._get_nova_id(instance)
             # Tell the ipam library to allocate an IP
             ips = self.ipam.allocate_fixed_ips(context, project_id,
