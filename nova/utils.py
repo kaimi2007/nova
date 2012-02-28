@@ -31,9 +31,11 @@ import pyclbr
 import random
 import re
 import shlex
+import shutil
 import socket
 import struct
 import sys
+import tempfile
 import time
 import types
 import uuid
@@ -1525,3 +1527,35 @@ def read_file_as_root(file_path):
         return out
     except exception.ProcessExecutionError:
         raise exception.FileNotFound(file_path=file_path)
+
+
+@contextlib.contextmanager
+def temporary_chown(path, owner_uid=None):
+    """Temporarily chown a path.
+
+    :params owner_uid: UID of temporary owner (defaults to current user)
+    """
+    if owner_uid is None:
+        owner_uid = os.getuid()
+
+    orig_uid = os.stat(path).st_uid
+
+    if orig_uid != owner_uid:
+        execute('chown', owner_uid, path, run_as_root=True)
+    try:
+        yield
+    finally:
+        if orig_uid != owner_uid:
+            execute('chown', orig_uid, path, run_as_root=True)
+
+
+@contextlib.contextmanager
+def tempdir(**kwargs):
+    tmpdir = tempfile.mkdtemp(**kwargs)
+    try:
+        yield tmpdir
+    finally:
+        try:
+            shutil.rmtree(tmpdir)
+        except OSError, e:
+            LOG.debug(_('Could not remove tmpdir: %s'), str(e))

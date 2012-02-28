@@ -41,11 +41,11 @@ Supports KVM, LXC, QEMU, UML, and XEN.
 
 import hashlib
 import functools
+import glob
 import multiprocessing
 import os
 import shutil
 import sys
-import tempfile
 import uuid
 import subprocess
 from xml.dom import minidom
@@ -942,24 +942,22 @@ class LibvirtConnection(driver.ComputeDriver):
                 x = p.communicate()
 
         # Export the snapshot to a raw image
-        temp_dir = tempfile.mkdtemp()
-        try:
-            out_path = os.path.join(temp_dir, snapshot_name)
-            libvirt_utils.extract_snapshot(disk_path, source_format,
-                                           snapshot_name, out_path,
-                                           image_format)
-            # Upload that image to the image service
-            with libvirt_utils.file_open(out_path) as image_file:
-                image_service.update(context,
-                                     image_href,
-                                     metadata,
-                                     image_file)
+        with utils.tempdir() as tmpdir:
+            try:
+                out_path = os.path.join(tmpdir, snapshot_name)
+                libvirt_utils.extract_snapshot(disk_path, source_format,
+                                               snapshot_name, out_path,
+                                               image_format)
+                # Upload that image to the image service
+                with libvirt_utils.file_open(out_path) as image_file:
+                    image_service.update(context,
+                                         image_href,
+                                         metadata,
+                                         image_file)
 
-        finally:
-            # Clean up
-            shutil.rmtree(temp_dir)
-            if FLAGS.libvirt_type != 'lxc':
-                snapshot_ptr.delete(0)
+            finally:
+                if FLAGS.libvirt_type != 'lxc':
+                    snapshot_ptr.delete(0)
 
     @exception.wrap_exception()
     def reboot(self, instance, network_info, reboot_type=None, xml=None):
@@ -1075,6 +1073,10 @@ class LibvirtConnection(driver.ComputeDriver):
         unrescue_xml = libvirt_utils.load_file(unrescue_xml_path)
         libvirt_utils.file_delete(unrescue_xml_path)
         self.reboot(instance, network_info, xml=unrescue_xml)
+        rescue_files = os.path.join(FLAGS.instances_path, instance['name'],
+                                    "*.rescue")
+        for rescue_file in glob.iglob(rescue_files):
+            libvirt_utils.file_delete(rescue_file)
 
     @exception.wrap_exception()
     def poll_rebooting_instances(self, timeout):

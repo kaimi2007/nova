@@ -25,7 +25,6 @@ import json
 import os
 import pickle
 import re
-import tempfile
 import time
 import urllib
 import urlparse
@@ -1651,25 +1650,30 @@ def _sparse_copy(src_path, dst_path, virtual_size, block_size=4096):
                 "virtual_size=%(virtual_size)d block_size=%(block_size)d"),
                 locals())
 
-    with open(src_path, "r") as src:
-        with open(dst_path, "w") as dst:
-            data = src.read(min(block_size, left))
-            while data:
-                if data == EMPTY_BLOCK:
-                    dst.seek(block_size, os.SEEK_CUR)
-                    left -= block_size
-                    bytes_read += block_size
-                    skipped_bytes += block_size
-                else:
-                    dst.write(data)
-                    data_len = len(data)
-                    left -= data_len
-                    bytes_read += data_len
+    # NOTE(sirp): we need read/write access to the devices; since we don't have
+    # the luxury of shelling out to a sudo'd command, we temporarily take
+    # ownership of the devices.
+    with utils.temporary_chown(src_path):
+        with utils.temporary_chown(dst_path):
+            with open(src_path, "r") as src:
+                with open(dst_path, "w") as dst:
+                    data = src.read(min(block_size, left))
+                    while data:
+                        if data == EMPTY_BLOCK:
+                            dst.seek(block_size, os.SEEK_CUR)
+                            left -= block_size
+                            bytes_read += block_size
+                            skipped_bytes += block_size
+                        else:
+                            dst.write(data)
+                            data_len = len(data)
+                            left -= data_len
+                            bytes_read += data_len
 
-                if left <= 0:
-                    break
+                        if left <= 0:
+                            break
 
-                data = src.read(min(block_size, left))
+                        data = src.read(min(block_size, left))
 
     duration = time.time() - start_time
     compression_pct = float(skipped_bytes) / bytes_read * 100
@@ -1745,8 +1749,7 @@ def _mounted_processing(device, key, net, metadata):
     """Callback which runs with the image VDI attached"""
     # NB: Partition 1 hardcoded
     dev_path = utils.make_dev_path(device, partition=1)
-    tmpdir = tempfile.mkdtemp()
-    try:
+    with utils.tempdir() as tmpdir:
         # Mount only Linux filesystems, to avoid disturbing NTFS images
         err = _mount_filesystem(dev_path, tmpdir)
         if not err:
@@ -1765,9 +1768,6 @@ def _mounted_processing(device, key, net, metadata):
         else:
             LOG.info(_('Failed to mount filesystem (expected for '
                 'non-linux instances): %s') % err)
-    finally:
-        # remove temporary directory
-        os.rmdir(tmpdir)
 
 
 def _prepare_injectables(inst, networks_info):
