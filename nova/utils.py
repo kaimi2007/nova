@@ -903,10 +903,13 @@ def cleanup_file_locks():
         pid = match.group(1)
         LOG.debug(_('Found sentinel %(filename)s for pid %(pid)s' %
                     {'filename': filename, 'pid': pid}))
-        if not os.path.exists(os.path.join('/proc', pid)):
+        try:
+            os.kill(int(pid), 0)
+        except OSError, e:
+            # PID wasn't found
             delete_if_exists(os.path.join(FLAGS.lock_path, filename))
             LOG.debug(_('Cleaned sentinel %(filename)s for pid %(pid)s' %
-                        {'filename': filename, 'pid': pid}))
+                    {'filename': filename, 'pid': pid}))
 
     # cleanup lock files
     for filename in files:
@@ -1559,3 +1562,23 @@ def tempdir(**kwargs):
             shutil.rmtree(tmpdir)
         except OSError, e:
             LOG.debug(_('Could not remove tmpdir: %s'), str(e))
+
+
+def strcmp_const_time(s1, s2):
+    """Constant-time string comparison.
+
+    :params s1: the first string
+    :params s2: the second string
+
+    :return: True if the strings are equal.
+
+    This function takes two strings and compares them.  It is intended to be
+    used when doing a comparison for authentication purposes to help guard
+    against timing attacks.
+    """
+    if len(s1) != len(s2):
+        return False
+    result = 0
+    for (a, b) in zip(s1, s2):
+        result |= ord(a) ^ ord(b)
+    return result == 0

@@ -278,8 +278,8 @@ class Instance(BASE, NovaBase):
     # EC2 disable_api_termination
     disable_terminate = Column(Boolean(), default=False, nullable=False)
 
-    # Openstack zone name
-    zone_name = Column(String(255))
+    # Openstack compute cell name
+    cell_name = Column(String(255))
 
 
 class InstanceInfoCache(BASE, NovaBase):
@@ -870,9 +870,9 @@ class InstanceTypeExtraSpecs(BASE, NovaBase):
                  'InstanceTypeExtraSpecs.deleted == False)')
 
 
-class Zone(BASE, NovaBase):
-    """Represents a child zone of this zone."""
-    __tablename__ = 'zones'
+class Cell(BASE, NovaBase):
+    """Represents parent and child cells of this cell."""
+    __tablename__ = 'cells'
     id = Column(Integer, primary_key=True)
     name = Column(String(255))
     api_url = Column(String(255))
@@ -959,7 +959,6 @@ class BandwidthUsage(BASE, NovaBase):
     """Cache for instance bandwidth usage data pulled from the hypervisor"""
     __tablename__ = 'bw_usage_cache'
     id = Column(Integer, primary_key=True, nullable=False)
-    instance_id = Column(Integer, nullable=False)
     mac = Column(String(255), nullable=False)
     start_period = Column(DateTime, nullable=False)
     last_refreshed = Column(DateTime)

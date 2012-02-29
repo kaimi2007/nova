@@ -1464,29 +1464,29 @@ def instance_type_destroy(context, name):
 ####################
 
 
-def zone_create(context, values):
-    """Create a new child Zone entry."""
-    return IMPL.zone_create(context, values)
+def cell_create(context, values):
+    """Create a new child Cell entry."""
+    return IMPL.cell_create(context, values)
 
 
-def zone_update(context, zone_id, values):
-    """Update a child Zone entry."""
-    return IMPL.zone_update(context, zone_id, values)
+def cell_update(context, cell_id, values):
+    """Update a child Cell entry."""
+    return IMPL.cell_update(context, cell_id, values)
 
 
-def zone_delete(context, zone_id):
-    """Delete a child Zone."""
-    return IMPL.zone_delete(context, zone_id)
+def cell_delete(context, cell_id):
+    """Delete a child Cell."""
+    return IMPL.cell_delete(context, cell_id)
 
 
-def zone_get(context, zone_id):
-    """Get a specific child Zone."""
-    return IMPL.zone_get(context, zone_id)
+def cell_get(context, cell_id):
+    """Get a specific child Cell."""
+    return IMPL.cell_get(context, cell_id)
 
 
-def zone_get_all(context):
-    """Get all child Zones."""
-    return IMPL.zone_get_all(context)
+def cell_get_all(context):
+    """Get all child Cells."""
+    return IMPL.cell_get_all(context)
 
 
 ####################
@@ -1539,9 +1539,9 @@ def agent_build_update(context, agent_build_id, values):
 ####################
 
 
-def bw_usage_get_by_instance(context, instance_id, start_period):
+def bw_usage_get_by_macs(context, macs, start_period):
     """Return bw usages for an instance in a given audit period."""
-    return IMPL.bw_usage_get_by_instance(context, instance_id, start_period)
+    return IMPL.bw_usage_get_by_macs(context, macs, start_period)
 
 
 def bw_usage_get_all_by_filters(context, filters):
@@ -1550,14 +1550,12 @@ def bw_usage_get_all_by_filters(context, filters):
 
 
 def bw_usage_update(context,
-                    instance_id,
                     mac,
                     start_period,
                     bw_in, bw_out):
     """Update cached bw usage for an instance and network
        Creates new record if needed."""
     return IMPL.bw_usage_update(context,
-                                instance_id,
                                 mac,
                                 start_period,
                                 bw_in, bw_out)

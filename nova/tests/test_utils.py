@@ -405,6 +405,11 @@ class GenericUtilsTestCase(test.TestCase):
         self.assertRaises(exception.FileNotFound,
                           utils.read_file_as_root, 'bad')
 
+    def test_strcmp_const_time(self):
+        self.assertTrue(utils.strcmp_const_time('abc123', 'abc123'))
+        self.assertFalse(utils.strcmp_const_time('a', 'aaaaa'))
+        self.assertFalse(utils.strcmp_const_time('ABC123', 'abc123'))
+
 
 class IsUUIDLikeTestCase(test.TestCase):
     def assertUUIDLike(self, val, expected):
@@ -864,7 +869,7 @@ class TestLockCleanup(test.TestCase):
         """verify locks for dead processes are cleaned up"""
 
         # create sentinels for two processes, us and a 'dead' one
-        # no actve lock
+        # no active lock
         sentinel1 = self._create_sentinel(self.hostname, self.pid)
         sentinel2 = self._create_sentinel(self.hostname, self.dead_pid)
 

@@ -3614,47 +3614,47 @@ def instance_type_destroy(context, name):
 
 
 @require_admin_context
-def zone_create(context, values):
-    zone = models.Zone()
-    zone.update(values)
-    zone.save()
-    return zone
+def cell_create(context, values):
+    cell = models.Cell()
+    cell.update(values)
+    cell.save()
+    return cell
 
 
-def _zone_get_by_id_query(context, zone_id, session=None):
-    return model_query(context, models.Zone, session=session).\
-                       filter_by(id=zone_id)
-
-
-@require_admin_context
-def zone_update(context, zone_id, values):
-    zone = zone_get(context, zone_id)
-    zone.update(values)
-    zone.save()
-    return zone
+def _cell_get_by_id_query(context, cell_id, session=None):
+    return model_query(context, models.Cell, session=session).\
+                       filter_by(id=cell_id)
 
 
 @require_admin_context
-def zone_delete(context, zone_id):
+def cell_update(context, cell_id, values):
+    cell = cell_get(context, cell_id)
+    cell.update(values)
+    cell.save()
+    return cell
+
+
+@require_admin_context
+def cell_delete(context, cell_id):
     session = get_session()
     with session.begin():
-        _zone_get_by_id_query(context, zone_id, session=session).\
+        _cell_get_by_id_query(context, cell_id, session=session).\
                 delete()
 
 
 @require_admin_context
-def zone_get(context, zone_id):
-    result = _zone_get_by_id_query(context, zone_id).first()
+def cell_get(context, cell_id):
+    result = _cell_get_by_id_query(context, cell_id).first()
 
     if not result:
-        raise exception.ZoneNotFound(zone_id=zone_id)
+        raise exception.CellNotFound(cell_id=cell_id)
 
     return result
 
 
 @require_admin_context
-def zone_get_all(context):
-    return model_query(context, models.Zone, read_deleted="no").all()
+def cell_get_all(context):
+    return model_query(context, models.Cell, read_deleted="no").all()
 
 
 ####################
@@ -3795,9 +3795,9 @@ def agent_build_update(context, agent_build_id, values):
 ####################
 
 @require_context
-def bw_usage_get_by_instance(context, instance_id, start_period):
+def bw_usage_get_by_macs(context, macs, start_period):
     return model_query(context, models.BandwidthUsage, read_deleted="yes").\
-                   filter_by(instance_id=instance_id).\
+                   filter(models.BandwidthUsage.mac.in_(macs)).\
                    filter_by(start_period=start_period).\
                    all()
 
@@ -3827,7 +3827,6 @@ def bw_usage_get_all_by_filters(context, filters):
 
 @require_context
 def bw_usage_update(context,
-                    instance_id,
                     mac,
                     start_period,
                     bw_in, bw_out,
@@ -3838,14 +3837,12 @@ def bw_usage_update(context,
     with session.begin():
         bwusage = model_query(context, models.BandwidthUsage,
                               session=session, read_deleted="yes").\
-                      filter_by(instance_id=instance_id).\
                       filter_by(start_period=start_period).\
                       filter_by(mac=mac).\
                       first()
 
         if not bwusage:
             bwusage = models.BandwidthUsage()
-            bwusage.instance_id = instance_id
             bwusage.start_period = start_period
             bwusage.mac = mac
 
