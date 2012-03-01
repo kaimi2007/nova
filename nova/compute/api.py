@@ -335,6 +335,7 @@ class API(base.Base):
             'architecture': architecture,
             'vm_mode': vm_mode,
             'root_device_name': root_device_name,
+            'progress': 0,
             'auto_disk_config': auto_disk_config}
 
         LOG.debug(_("Going to run %s instances...") % num_instances)
@@ -462,7 +463,7 @@ class API(base.Base):
     #NOTE(bcwaldon): No policy check since this is only used by scheduler and
     # the compute api. That should probably be cleaned up, though.
     def create_db_entry_for_new_instance(self, context, instance_type, image,
-            base_options, security_group, block_device_mapping, num=1):
+            base_options, security_group, block_device_mapping):
         """Create an entry in the DB for this new instance,
         including any related table updates (such as security group,
         etc).
@@ -483,8 +484,8 @@ class API(base.Base):
                     security_group_name)
             security_groups.append(group['id'])
 
-        instance = dict(launch_index=num, **base_options)
-        instance = self.db.instance_create(context, instance)
+        base_options.setdefault('launch_index', 0)
+        instance = self.db.instance_create(context, base_options)
         instance_id = instance['id']
         instance_uuid = instance['uuid']
 
@@ -1310,6 +1311,9 @@ class API(base.Base):
         if not new_instance_type:
             raise exception.FlavorNotFound(flavor_id=flavor_id)
 
+        # NOTE(markwash): look up the image early to avoid auth problems later
+        image = self.image_service.show(context, instance['image_ref'])
+
         current_memory_mb = current_instance_type['memory_mb']
         new_memory_mb = new_instance_type['memory_mb']
 
@@ -1320,6 +1324,7 @@ class API(base.Base):
                     instance,
                     vm_state=vm_states.RESIZING,
                     task_state=task_states.RESIZE_PREP,
+                    progress=0,
                     **kwargs)
 
         request_spec = {
@@ -1335,8 +1340,9 @@ class API(base.Base):
         args = {
             "topic": FLAGS.compute_topic,
             "instance_uuid": instance['uuid'],
-            "update_db": False,
             "instance_type_id": new_instance_type['id'],
+            "image": image,
+            "update_db": False,
             "request_spec": utils.to_primitive(request_spec),
             "filter_properties": filter_properties,
         }

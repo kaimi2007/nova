@@ -111,9 +111,6 @@ compute_opts = [
                help="Action to take if a running deleted instance is detected."
                     "Valid options are 'noop', 'log' and 'reap'. "
                     "Set to 'noop' to disable."),
-    cfg.BoolOpt("use_image_cache_manager",
-                default=False,
-                help="Whether to manage images in the local cache."),
     cfg.IntOpt("image_cache_manager_interval",
                default=3600,
                help="Number of periodic scheduler ticks to wait between "
@@ -422,7 +419,7 @@ class ComputeManager(manager.SchedulerDependentManager):
                 LOG.info(_("Instance %(instance_uuid)s did not exist in the "
                          "DB, but I will shut it down anyway using a special "
                          "context") % locals())
-                ctxt = nova.context.get_admin_context(True)
+                ctxt = nova.context.get_admin_context('yes')
                 self.terminate_instance(ctxt, instance_uuid)
         except Exception as ex:
             LOG.info(_("exception terminating the instance "
@@ -1250,7 +1247,8 @@ class ComputeManager(manager.SchedulerDependentManager):
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
     @wrap_instance_fault
-    def prep_resize(self, context, instance_uuid, instance_type_id, **kwargs):
+    def prep_resize(self, context, instance_uuid, instance_type_id, image,
+                    **kwargs):
         """Initiates the process of moving a running instance to another host.
 
         Possibly changes the RAM and disk size in the process.
@@ -1290,7 +1288,8 @@ class ComputeManager(manager.SchedulerDependentManager):
         rpc.cast(context, topic,
                 {'method': 'resize_instance',
                  'args': {'instance_uuid': instance_ref['uuid'],
-                          'migration_id': migration_ref['id']}})
+                          'migration_id': migration_ref['id'],
+                          'image': image}})
 
         usage_info = utils.usage_from_instance(instance_ref,
                               new_instance_type=new_instance_type['name'],
@@ -1301,7 +1300,7 @@ class ComputeManager(manager.SchedulerDependentManager):
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
     @wrap_instance_fault
-    def resize_instance(self, context, instance_uuid, migration_id):
+    def resize_instance(self, context, instance_uuid, migration_id, image):
         """Starts the migration of a running instance to another host."""
         migration_ref = self.db.migration_get(context, migration_id)
         instance_ref = self.db.instance_get_by_uuid(context,
@@ -1335,11 +1334,13 @@ class ComputeManager(manager.SchedulerDependentManager):
                                       migration_ref['dest_compute'])
         params = {'migration_id': migration_id,
                   'disk_info': disk_info,
-                  'instance_uuid': instance_ref['uuid']}
+                  'instance_uuid': instance_ref['uuid'],
+                  'image': image}
         rpc.cast(context, topic, {'method': 'finish_resize',
                                   'args': params})
 
-    def _finish_resize(self, context, instance_ref, migration_ref, disk_info):
+    def _finish_resize(self, context, instance_ref, migration_ref, disk_info,
+                       image):
         resize_instance = False
         old_instance_type_id = migration_ref['old_instance_type_id']
         new_instance_type_id = migration_ref['new_instance_type_id']
@@ -1358,13 +1359,10 @@ class ComputeManager(manager.SchedulerDependentManager):
 
         network_info = self._get_instance_nw_info(context, instance_ref)
 
-        # Have to look up image here since we depend on disk_format later
-        image_meta = _get_image_meta(context, instance_ref['image_ref'])
-
         self.driver.finish_migration(context, migration_ref, instance_ref,
                                      disk_info,
                                      self._legacy_nw_info(network_info),
-                                     image_meta, resize_instance)
+                                     image, resize_instance)
 
         self._instance_update(context,
                               instance_ref.uuid,
@@ -1378,7 +1376,8 @@ class ComputeManager(manager.SchedulerDependentManager):
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
     @wrap_instance_fault
-    def finish_resize(self, context, instance_uuid, migration_id, disk_info):
+    def finish_resize(self, context, instance_uuid, migration_id, disk_info,
+                      image):
         """Completes the migration process.
 
         Sets up the newly transferred disk and turns on the instance at its
@@ -1392,7 +1391,7 @@ class ComputeManager(manager.SchedulerDependentManager):
 
         try:
             self._finish_resize(context, instance_ref, migration_ref,
-                                disk_info)
+                                disk_info, image)
         except Exception, error:
             with utils.save_and_reraise_exception():
                 msg = _('%s. Setting instance vm_state to ERROR')
@@ -2263,7 +2262,7 @@ class ComputeManager(manager.SchedulerDependentManager):
             db_power_state = db_instance['power_state']
             try:
                 vm_instance = self.driver.get_info(db_instance)
-                vm_power_state = vm_instance.state
+                vm_power_state = vm_instance['state']
             except exception.InstanceNotFound:
                 LOG.warn(_("Instance found in database but not known by "
                            "hypervisor. Setting power state to NOSTATE"),
@@ -2457,7 +2456,7 @@ class ComputeManager(manager.SchedulerDependentManager):
     def _run_image_cache_manager_pass(self, context):
         """Run a single pass of the image cache manager."""
 
-        if not FLAGS.use_image_cache_manager:
+        if FLAGS.image_cache_manager_interval == 0:
             return
 
         try:
