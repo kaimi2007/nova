@@ -121,7 +121,6 @@ class BaseTestCase(test.TestCase):
                                               self.project_id)
         test_notifier.NOTIFICATIONS = []
         self.mox = mox.Mox()
-        self.total_waits = 0
 
         def fake_show(meh, context, id):
             return {'id': 1, 'min_disk': None, 'min_ram': None,
@@ -889,7 +888,7 @@ class ComputeTestCase(BaseTestCase):
         test_notifier.NOTIFICATIONS = []
         self.compute.terminate_instance(self.context, inst_ref['uuid'])
 
-        self.assertEquals(len(test_notifier.NOTIFICATIONS), 3)
+        self.assertEquals(len(test_notifier.NOTIFICATIONS), 5)
         msg = test_notifier.NOTIFICATIONS[0]
         self.assertEquals(msg['priority'], 'INFO')
         self.assertEquals(msg['event_type'], 'compute.instance.exists')
@@ -898,6 +897,11 @@ class ComputeTestCase(BaseTestCase):
         self.assertEquals(msg['priority'], 'INFO')
         self.assertEquals(msg['event_type'], 'compute.instance.delete.start')
         msg1 = test_notifier.NOTIFICATIONS[2]
+        self.assertEquals(msg1['event_type'],
+                                            'compute.instance.shutdown.start')
+        msg1 = test_notifier.NOTIFICATIONS[3]
+        self.assertEquals(msg1['event_type'], 'compute.instance.shutdown.end')
+        msg1 = test_notifier.NOTIFICATIONS[4]
         self.assertEquals(msg1['event_type'], 'compute.instance.delete.end')
         payload = msg['payload']
         self.assertEquals(payload['tenant_id'], self.project_id)
@@ -2577,7 +2581,6 @@ class ComputeAPITestCase(BaseTestCase):
 
     def test_get(self):
         """Test get instance"""
-        self.maxDiff = None
         c = context.get_admin_context()
         exp_instance = self._create_fake_instance()
         expected = dict(exp_instance.iteritems())
@@ -2593,7 +2596,6 @@ class ComputeAPITestCase(BaseTestCase):
 
     def test_get_with_integer_id(self):
         """Test get instance with an integer id"""
-        self.maxDiff = None
         c = context.get_admin_context()
         exp_instance = self._create_fake_instance()
         expected = dict(exp_instance.iteritems())
