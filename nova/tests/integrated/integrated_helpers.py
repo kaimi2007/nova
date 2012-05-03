@@ -69,6 +69,8 @@ class _IntegratedTestBase(test.TestCase):
             image_id = str(image_href).split('/')[-1]
             return (nova.image.fake.FakeImageService(), image_id)
         self.stubs.Set(nova.image, 'get_image_service', fake_get_image_service)
+        self.flags(compute_scheduler_driver='nova.scheduler.'
+                    'chance.ChanceScheduler')
 
         # set up services
         self.compute = self.start_service('compute')
@@ -93,6 +95,12 @@ class _IntegratedTestBase(test.TestCase):
     def _get_flags(self):
         """An opportunity to setup flags, before the services are started."""
         f = {}
+
+        # Ensure tests only listen on localhost
+        f['ec2_listen'] = '127.0.0.1'
+        f['osapi_compute_listen'] = '127.0.0.1'
+        f['osapi_volume_listen'] = '127.0.0.1'
+        f['metadata_listen'] = '127.0.0.1'
 
         # Auto-assign ports to allow concurrent tests
         f['ec2_listen_port'] = 0

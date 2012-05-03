@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright (c) 2010 Openstack, LLC.
+# Copyright (c) 2010 OpenStack, LLC.
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
 #
@@ -16,16 +16,14 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-"""
-Tests For Console proxy.
-"""
+"""Tests For Console proxy."""
 
 from nova import context
 from nova import db
 from nova import exception
 from nova import flags
+from nova.openstack.common import importutils
 from nova import test
-from nova import utils
 
 FLAGS = flags.FLAGS
 flags.DECLARE('console_driver', 'nova.console.manager')
@@ -37,7 +35,7 @@ class ConsoleTestCase(test.TestCase):
         super(ConsoleTestCase, self).setUp()
         self.flags(console_driver='nova.console.fake.FakeConsoleProxy',
                    stub_compute=True)
-        self.console = utils.import_object(FLAGS.console_manager)
+        self.console = importutils.import_object(FLAGS.console_manager)
         self.user_id = 'fake'
         self.project_id = 'fake'
         self.context = context.RequestContext(self.user_id, self.project_id)

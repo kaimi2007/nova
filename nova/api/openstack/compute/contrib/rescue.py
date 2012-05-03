@@ -1,4 +1,4 @@
-#   Copyright 2011 Openstack, LLC.
+#   Copyright 2011 OpenStack, LLC.
 #
 #   Licensed under the Apache License, Version 2.0 (the "License"); you may
 #   not use this file except in compliance with the License. You may obtain
@@ -17,6 +17,7 @@
 import webob
 from webob import exc
 
+from nova.api.openstack import common
 from nova.api.openstack import extensions as exts
 from nova.api.openstack import wsgi
 from nova import compute
@@ -56,7 +57,12 @@ class RescueController(wsgi.Controller):
             password = utils.generate_password(FLAGS.password_length)
 
         instance = self._get_instance(context, id)
-        self.compute_api.rescue(context, instance, rescue_password=password)
+        try:
+            self.compute_api.rescue(context, instance,
+                                    rescue_password=password)
+        except exception.InstanceInvalidState as state_error:
+            common.raise_http_conflict_for_instance_invalid_state(state_error,
+                                                                  'rescue')
         return {'adminPass': password}
 
     @wsgi.action('unrescue')
@@ -66,7 +72,11 @@ class RescueController(wsgi.Controller):
         context = req.environ["nova.context"]
         authorize(context)
         instance = self._get_instance(context, id)
-        self.compute_api.unrescue(context, instance)
+        try:
+            self.compute_api.unrescue(context, instance)
+        except exception.InstanceInvalidState as state_error:
+            common.raise_http_conflict_for_instance_invalid_state(state_error,
+                                                                  'unrescue')
         return webob.Response(status_int=202)
 
 

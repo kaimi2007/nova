@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright (c) 2011 Openstack, LLC.
+# Copyright (c) 2011 OpenStack, LLC.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -35,6 +35,7 @@ filterlist = [
     # nova/network/linux_net.py: 'ip', 'addr', 'show', 'dev', interface, ..
     # nova/network/linux_net.py: 'ip', 'link', 'set', dev, "address", ..
     # nova/network/linux_net.py: 'ip', 'link', 'set', dev, 'up'
+    # nova/network/linux_net.py: 'ip', 'tuntap', 'add', dev, 'mode', 'tap'
     filters.CommandFilter("/sbin/ip", "root"),
 
     # nova/network/linux_net.py: 'ip[6]tables-save' % (cmd,), '-t', ...
@@ -86,4 +87,7 @@ filterlist = [
 
     # nova/network/linux_net.py: 'ovs-ofctl', ....
     filters.CommandFilter("/usr/bin/ovs-ofctl", "root"),
+
+    # nova/network/linux_net.py: 'sysctl', ....
+    filters.CommandFilter("/sbin/sysctl", "root"),
     ]

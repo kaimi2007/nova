@@ -1,4 +1,4 @@
-# Copyright (c) 2011 Openstack, LLC.
+# Copyright (c) 2011 OpenStack, LLC.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -64,7 +64,7 @@ class SchedulerOptions(object):
             return os.path.getmtime(filename)
         except os.error, e:
             LOG.exception(_("Could not stat scheduler options file "
-                            "%(filename)s: '%(e)s'", locals()))
+                            "%(filename)s: '%(e)s'"), locals())
             raise
 
     def _load_file(self, handle):

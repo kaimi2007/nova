@@ -96,7 +96,7 @@ LOG = logging.getLogger(__name__)
 if FLAGS.memcached_servers:
     import memcache
 else:
-    from nova.testing.fake import memcache
+    from nova.common import memorycache as memcache
 
 
 # TODO(vish): make an abstract base class with the same public methods
@@ -199,7 +199,7 @@ class LdapDriver(object):
         return False
 
     def __local_cache(key_fmt):  # pylint: disable=E0213
-        """Wrap function to cache it's result in self.__cache.
+        """Wrap function to cache its result in self.__cache.
         Works only with functions with one fixed argument.
         """
         def do_wrap(fn):

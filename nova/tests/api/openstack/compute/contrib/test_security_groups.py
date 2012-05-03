@@ -25,11 +25,14 @@ from nova.api.openstack.compute.contrib import security_groups
 from nova.api.openstack import wsgi
 import nova.db
 from nova import exception
+from nova import flags
 from nova import test
 from nova.tests.api.openstack import fakes
 
 
 FAKE_UUID = 'a47ae74e-ab08-447f-8eee-ffd43fc46c16'
+
+FLAGS = flags.FLAGS
 
 
 class AttrDict(dict):
@@ -114,9 +117,6 @@ class TestSecurityGroups(test.TestCase):
         self.server_controller = (
             security_groups.ServerSecurityGroupController())
         self.manager = security_groups.SecurityGroupActionController()
-
-    def tearDown(self):
-        super(TestSecurityGroups, self).tearDown()
 
     def test_create_security_group(self):
         sg = security_group_template()
@@ -219,6 +219,18 @@ class TestSecurityGroups(test.TestCase):
         sg = security_group_template(description=12)
 
         req = fakes.HTTPRequest.blank('/v2/fake/os-security-groups')
+        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
+                          req, {'security_group': sg})
+
+    def test_create_security_group_quota_limit(self):
+        req = fakes.HTTPRequest.blank('/v2/fake/os-security-groups')
+        for num in range(1, FLAGS.quota_security_groups):
+            name = 'test%s' % num
+            sg = security_group_template(name=name)
+            res_dict = self.controller.create(req, {'security_group': sg})
+            self.assertEqual(res_dict['security_group']['name'], name)
+
+        sg = security_group_template()
         self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
                           req, {'security_group': sg})
 
@@ -557,9 +569,6 @@ class TestSecurityGroupRules(test.TestCase):
 
         self.controller = security_groups.SecurityGroupRulesController()
 
-    def tearDown(self):
-        super(TestSecurityGroupRules, self).tearDown()
-
     def test_create_by_cidr(self):
         rule = security_group_rule_template(cidr='10.2.3.124/24')
 
@@ -790,11 +799,86 @@ class TestSecurityGroupRules(test.TestCase):
                           req, {'security_group_rule': rule})
 
     def test_create_with_same_group_parent_id_and_group_id(self):
-        rule = security_group_rule_template(group_id=2)
+        rule = security_group_rule_template(group_id=1, parent_group_id=1)
+
+        req = fakes.HTTPRequest.blank('/v2/fake/os-security-group-rules')
+        res_dict = self.controller.create(req, {'security_group_rule': rule})
+        security_group_rule = res_dict['security_group_rule']
+        self.assertNotEquals(security_group_rule['id'], 0)
+        self.assertEquals(security_group_rule['parent_group_id'], 1)
+        self.assertEquals(security_group_rule['id'], 1)
+
+    def _test_create_with_no_ports_and_no_group(self, proto):
+        rule = {'ip_protocol': proto, 'parent_group_id': '2'}
 
         req = fakes.HTTPRequest.blank('/v2/fake/os-security-group-rules')
         self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
                           req, {'security_group_rule': rule})
+
+    def  _test_create_with_no_ports(self, proto):
+        rule = {'ip_protocol': proto, 'parent_group_id': '2', 'group_id': '1'}
+
+        req = fakes.HTTPRequest.blank('/v2/fake/os-security-group-rules')
+        res_dict = self.controller.create(req, {'security_group_rule': rule})
+
+        security_group_rule = res_dict['security_group_rule']
+        expected_rule = {
+            'from_port': 1, 'group': {'tenant_id': '123', 'name': 'test'},
+            'ip_protocol': proto, 'to_port': 65535, 'parent_group_id': 2,
+            'ip_range': {}, 'id': 1
+        }
+        if proto == 'icmp':
+            expected_rule['to_port'] = -1
+            expected_rule['from_port'] = -1
+        self.assertTrue(security_group_rule == expected_rule)
+
+    def test_create_with_no_ports_icmp(self):
+        self._test_create_with_no_ports_and_no_group('icmp')
+        self._test_create_with_no_ports('icmp')
+
+    def test_create_with_no_ports_tcp(self):
+        self._test_create_with_no_ports_and_no_group('tcp')
+        self._test_create_with_no_ports('tcp')
+
+    def test_create_with_no_ports_udp(self):
+        self._test_create_with_no_ports_and_no_group('udp')
+        self._test_create_with_no_ports('udp')
+
+    def  _test_create_with_ports(self, id_val, proto, from_port, to_port):
+        rule = {
+            'ip_protocol': proto, 'from_port': from_port, 'to_port': to_port,
+            'parent_group_id': '2', 'group_id': '1'
+        }
+        req = fakes.HTTPRequest.blank('/v2/fake/os-security-group-rules')
+        res_dict = self.controller.create(req, {'security_group_rule': rule})
+
+        security_group_rule = res_dict['security_group_rule']
+        expected_rule = {
+            'from_port': from_port,
+            'group': {'tenant_id': '123', 'name': 'test'},
+            'ip_protocol': proto, 'to_port': to_port, 'parent_group_id': 2,
+            'ip_range': {}, 'id': id_val
+        }
+        self.assertTrue(security_group_rule['ip_protocol'] == proto)
+        self.assertTrue(security_group_rule['id'] == id_val)
+        self.assertTrue(security_group_rule['from_port'] == from_port)
+        self.assertTrue(security_group_rule['to_port'] == to_port)
+        self.assertTrue(security_group_rule == expected_rule)
+
+    def test_create_with_ports_icmp(self):
+        self._test_create_with_ports(1, 'icmp', 0, 1)
+        self._test_create_with_ports(2, 'icmp', 0, 0)
+        self._test_create_with_ports(3, 'icmp', 1, 0)
+
+    def test_create_with_ports_tcp(self):
+        self._test_create_with_ports(1, 'tcp', 1, 1)
+        self._test_create_with_ports(2, 'tcp', 1, 65535)
+        self._test_create_with_ports(3, 'tcp', 65535, 65535)
+
+    def test_create_with_ports_udp(self):
+        self._test_create_with_ports(1, 'udp', 1, 1)
+        self._test_create_with_ports(2, 'udp', 1, 65535)
+        self._test_create_with_ports(3, 'udp', 65535, 65535)
 
     def test_delete(self):
         rule = security_group_rule_template(id=10)
@@ -824,6 +908,22 @@ class TestSecurityGroupRules(test.TestCase):
                                       '/22222222222222')
         self.assertRaises(webob.exc.HTTPNotFound, self.controller.delete,
                           req, '22222222222222')
+
+    def test_create_rule_quota_limit(self):
+        req = fakes.HTTPRequest.blank('/v2/fake/os-security-group-rules')
+        for num in range(100, 100 + FLAGS.quota_security_group_rules):
+            rule = {
+                'ip_protocol': 'tcp', 'from_port': num,
+                'to_port': num, 'parent_group_id': '2', 'group_id': '1'
+            }
+            self.controller.create(req, {'security_group_rule': rule})
+
+        rule = {
+            'ip_protocol': 'tcp', 'from_port': '121', 'to_port': '121',
+            'parent_group_id': '2', 'group_id': '1'
+        }
+        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
+                          req, {'security_group_rule': rule})
 
 
 class TestSecurityGroupRulesXMLDeserializer(unittest.TestCase):

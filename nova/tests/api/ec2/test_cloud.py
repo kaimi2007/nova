@@ -19,20 +19,24 @@
 
 import base64
 import copy
+import datetime
 import functools
-import tempfile
 import os
+import string
+import tempfile
 
 from nova.api.ec2 import cloud
 from nova.api.ec2 import ec2utils
 from nova.api.ec2 import inst_state
 from nova.compute import power_state
+from nova.compute import utils as compute_utils
 from nova.compute import vm_states
 from nova import context
 from nova import db
 from nova import exception
 from nova import flags
 from nova.image import fake
+from nova.image import s3
 from nova import log as logging
 from nova import rpc
 from nova import test
@@ -91,9 +95,11 @@ class CloudTestCase(test.TestCase):
         def dumb(*args, **kwargs):
             pass
 
-        self.stubs.Set(utils, 'usage_from_instance', dumb)
+        self.stubs.Set(compute_utils, 'notify_about_instance_usage', dumb)
         # set up our cloud
         self.cloud = cloud.CloudController()
+        self.flags(compute_scheduler_driver='nova.scheduler.'
+                'chance.ChanceScheduler')
 
         # set up services
         self.compute = self.start_service('compute')
@@ -160,6 +166,24 @@ class CloudTestCase(test.TestCase):
                                   public_ip=address)
         db.floating_ip_destroy(self.context, address)
 
+    def test_describe_specific_address(self):
+        """Makes sure describe specific address works"""
+        addresses = ["10.10.10.10", "10.10.10.11"]
+        for address in addresses:
+            db.floating_ip_create(self.context,
+                                  {'address': address,
+                                   'pool': 'nova'})
+            self.cloud.allocate_address(self.context)
+        result = self.cloud.describe_addresses(self.context)
+        self.assertEqual(len(result['addressesSet']), 2)
+        result = self.cloud.describe_addresses(self.context,
+                                               public_ip=['10.10.10.10'])
+        self.assertEqual(len(result['addressesSet']), 1)
+        for address in addresses:
+            self.cloud.release_address(self.context,
+                                       public_ip=address)
+            db.floating_ip_destroy(self.context, address)
+
     def test_allocate_address(self):
         address = "10.10.10.10"
         allocate = self.cloud.allocate_address
@@ -215,7 +239,8 @@ class CloudTestCase(test.TestCase):
                                         public_ip=address)
         self.cloud.release_address(self.context,
                                   public_ip=address)
-        self.network.deallocate_fixed_ip(self.context, fixed_ips[0]['address'])
+        self.network.deallocate_fixed_ip(self.context, fixed_ips[0]['address'],
+                                         inst['host'])
         db.instance_destroy(self.context, inst['id'])
         db.floating_ip_destroy(self.context, address)
 
@@ -264,6 +289,18 @@ class CloudTestCase(test.TestCase):
         self.assertEqual(descript, group_descript)
         delete = self.cloud.delete_security_group
         self.assertTrue(delete(self.context, 'testgrp'))
+
+    def test_security_group_quota_limit(self):
+        self.flags(quota_security_groups=10)
+        for i in range(1, 10):
+            name = 'test name %i' % i
+            descript = 'test description %i' % i
+            create = self.cloud.create_security_group
+            result = create(self.context, name, descript)
+
+        # 11'th group should fail
+        self.assertRaises(exception.EC2APIError,
+                          create, self.context, 'foo', 'bar')
 
     def test_delete_security_group_by_id(self):
         sec = db.security_group_create(self.context,
@@ -376,7 +413,7 @@ class CloudTestCase(test.TestCase):
                                        'userId': u'someuser'}],
                            'ipProtocol': 'udp',
                            'ipRanges': [],
-                           'toPort': 65536},
+                           'toPort': 65535},
                           {'fromPort': 80,
                            'groups': [{'groupName': u'othergroup2',
                                        'userId': u'someuser'}],
@@ -430,6 +467,73 @@ class CloudTestCase(test.TestCase):
         self.assertRaises(exception.EC2APIError, authz, self.context,
                           group_name=sec['name'], **kwargs)
 
+    def test_security_group_ingress_quota_limit(self):
+        self.flags(quota_security_group_rules=20)
+        kwargs = {'project_id': self.context.project_id, 'name': 'test'}
+        sec_group = db.security_group_create(self.context, kwargs)
+        authz = self.cloud.authorize_security_group_ingress
+        for i in range(100, 120):
+            kwargs = {'to_port': i, 'from_port': i, 'ip_protocol': 'tcp'}
+            authz(self.context, group_id=sec_group['id'], **kwargs)
+
+        kwargs = {'to_port': 121, 'from_port': 121, 'ip_protocol': 'tcp'}
+        self.assertRaises(exception.EC2APIError, authz, self.context,
+                              group_id=sec_group['id'], **kwargs)
+
+    def _test_authorize_security_group_no_ports_with_source_group(self, proto):
+        kwargs = {'project_id': self.context.project_id, 'name': 'test'}
+        sec = db.security_group_create(self.context, kwargs)
+
+        authz = self.cloud.authorize_security_group_ingress
+        auth_kwargs = {'ip_protocol': proto,
+                       'groups': {'1': {'user_id': self.context.user_id,
+                                        'group_name': u'test'}}}
+        self.assertTrue(authz(self.context, group_name=sec['name'],
+                        **auth_kwargs))
+
+        describe = self.cloud.describe_security_groups
+        groups = describe(self.context, group_name=['test'])
+        self.assertEquals(len(groups['securityGroupInfo']), 1)
+        actual_rules = groups['securityGroupInfo'][0]['ipPermissions']
+        expected_rules = [{'groups': [{'groupName': 'test',
+                                       'userId': self.context.user_id}],
+                           'ipProtocol': proto,
+                           'ipRanges': []}]
+        if proto == 'icmp':
+            expected_rules[0]['fromPort'] = -1
+            expected_rules[0]['toPort'] = -1
+        else:
+            expected_rules[0]['fromPort'] = 1
+            expected_rules[0]['toPort'] = 65535
+        self.assertTrue(expected_rules == actual_rules)
+        describe = self.cloud.describe_security_groups
+        groups = describe(self.context, group_name=['test'])
+
+        db.security_group_destroy(self.context, sec['id'])
+
+    def _test_authorize_security_group_no_ports_no_source_group(self, proto):
+        kwargs = {'project_id': self.context.project_id, 'name': 'test'}
+        sec = db.security_group_create(self.context, kwargs)
+
+        authz = self.cloud.authorize_security_group_ingress
+        auth_kwargs = {'ip_protocol': proto}
+        self.assertRaises(exception.EC2APIError, authz, self.context,
+                          group_name=sec['name'], **auth_kwargs)
+
+        db.security_group_destroy(self.context, sec['id'])
+
+    def test_authorize_security_group_no_ports_icmp(self):
+        self._test_authorize_security_group_no_ports_with_source_group('icmp')
+        self._test_authorize_security_group_no_ports_no_source_group('icmp')
+
+    def test_authorize_security_group_no_ports_tcp(self):
+        self._test_authorize_security_group_no_ports_with_source_group('tcp')
+        self._test_authorize_security_group_no_ports_no_source_group('tcp')
+
+    def test_authorize_security_group_no_ports_udp(self):
+        self._test_authorize_security_group_no_ports_with_source_group('udp')
+        self._test_authorize_security_group_no_ports_no_source_group('udp')
+
     def test_revoke_security_group_ingress_missing_group_name_or_id(self):
         kwargs = {'to_port': '999', 'from_port': '999', 'ip_protocol': 'tcp'}
         revoke = self.cloud.revoke_security_group_ingress
@@ -447,11 +551,13 @@ class CloudTestCase(test.TestCase):
         self.cloud.authorize_security_group_ingress(self.context,
                 group_name='testgrp1', **kwargs)
 
-        self.assertRaises(exception.InvalidGroup,
-                          self.cloud.delete_security_group,
-                          self.context, 'testgrp2')
-        self.cloud.delete_security_group(self.context, 'testgrp1')
+        group1 = db.security_group_get_by_name(self.context,
+                                               self.project_id, 'testgrp1')
+        get_rules = db.security_group_rule_get_by_security_group
+
+        self.assertTrue(get_rules(self.context, group1.id))
         self.cloud.delete_security_group(self.context, 'testgrp2')
+        self.assertFalse(get_rules(self.context, group1.id))
 
     def test_delete_security_group_in_use_by_instance(self):
         """Ensure that a group can not be deleted if in use by an instance."""
@@ -653,6 +759,62 @@ class CloudTestCase(test.TestCase):
         db.service_destroy(self.context, comp1['id'])
         db.service_destroy(self.context, comp2['id'])
 
+    def test_describe_instances_sorting(self):
+        """Makes sure describe_instances works and is sorted as expected."""
+        self.flags(use_ipv6=True)
+
+        self._stub_instance_get_with_fixed_ips('get_all')
+        self._stub_instance_get_with_fixed_ips('get')
+
+        image_uuid = 'cedef40a-ed67-4d10-800e-17455edce175'
+        inst_base = {
+                'reservation_id': 'a',
+                'image_ref': image_uuid,
+                'instance_type_id': 1,
+                'vm_state': 'active'
+        }
+
+        inst1_kwargs = {}
+        inst1_kwargs.update(inst_base)
+        inst1_kwargs['host'] = 'host1'
+        inst1_kwargs['hostname'] = 'server-1111'
+        inst1_kwargs['created_at'] = datetime.datetime(2012, 5, 1, 1, 1, 1)
+        inst1 = db.instance_create(self.context, inst1_kwargs)
+
+        inst2_kwargs = {}
+        inst2_kwargs.update(inst_base)
+        inst2_kwargs['host'] = 'host2'
+        inst2_kwargs['hostname'] = 'server-2222'
+        inst2_kwargs['created_at'] = datetime.datetime(2012, 2, 1, 1, 1, 1)
+        inst2 = db.instance_create(self.context, inst2_kwargs)
+
+        inst3_kwargs = {}
+        inst3_kwargs.update(inst_base)
+        inst3_kwargs['host'] = 'host3'
+        inst3_kwargs['hostname'] = 'server-3333'
+        inst3_kwargs['created_at'] = datetime.datetime(2012, 2, 5, 1, 1, 1)
+        inst3 = db.instance_create(self.context, inst3_kwargs)
+
+        comp1 = db.service_create(self.context, {'host': 'host1',
+                                                 'availability_zone': 'zone1',
+                                                 'topic': "compute"})
+
+        comp2 = db.service_create(self.context, {'host': 'host2',
+                                                 'availability_zone': 'zone2',
+                                                 'topic': "compute"})
+
+        result = self.cloud.describe_instances(self.context)
+        result = result['reservationSet'][0]['instancesSet']
+        self.assertEqual(result[0]['launchTime'], inst2_kwargs['created_at'])
+        self.assertEqual(result[1]['launchTime'], inst3_kwargs['created_at'])
+        self.assertEqual(result[2]['launchTime'], inst1_kwargs['created_at'])
+
+        db.instance_destroy(self.context, inst1['id'])
+        db.instance_destroy(self.context, inst2['id'])
+        db.instance_destroy(self.context, inst3['id'])
+        db.service_destroy(self.context, comp1['id'])
+        db.service_destroy(self.context, comp2['id'])
+
     def test_describe_instance_state(self):
         """Makes sure describe_instances for instanceState works."""
 
@@ -736,6 +898,23 @@ class CloudTestCase(test.TestCase):
         self.assertEqual(result1[0]['instanceId'],
                          ec2utils.id_to_ec2_id(inst2.id))
 
+    def test_describe_instances_with_image_deleted(self):
+        image_uuid = 'aebef54a-ed67-4d10-912f-14455edce176'
+        args1 = {'reservation_id': 'a',
+                 'image_ref': image_uuid,
+                 'instance_type_id': 1,
+                 'host': 'host1',
+                 'vm_state': 'active'}
+        inst1 = db.instance_create(self.context, args1)
+        args2 = {'reservation_id': 'b',
+                 'image_ref': image_uuid,
+                 'instance_type_id': 1,
+                 'host': 'host1',
+                 'vm_state': 'active'}
+        inst2 = db.instance_create(self.context, args2)
+        result = self.cloud.describe_instances(self.context)
+        self.assertEqual(len(result['reservationSet']), 2)
+
     def _block_device_mapping_create(self, instance_id, mappings):
         volumes = []
         for bdm in mappings:
@@ -766,42 +945,43 @@ class CloudTestCase(test.TestCase):
                                    'root_device_name': '/dev/sdc1'})
 
         instance_id = inst1['id']
+        instance_uuid = inst1['uuid']
         mappings0 = [
-            {'instance_id': instance_id,
+            {'instance_uuid': instance_uuid,
              'device_name': '/dev/sdb1',
              'snapshot_id': '1',
              'volume_id': '2'},
-            {'instance_id': instance_id,
+            {'instance_uuid': instance_uuid,
              'device_name': '/dev/sdb2',
              'volume_id': '3',
              'volume_size': 1},
-            {'instance_id': instance_id,
+            {'instance_uuid': instance_uuid,
              'device_name': '/dev/sdb3',
              'delete_on_termination': True,
              'snapshot_id': '4',
              'volume_id': '5'},
-            {'instance_id': instance_id,
+            {'instance_uuid': instance_uuid,
              'device_name': '/dev/sdb4',
              'delete_on_termination': False,
              'snapshot_id': '6',
              'volume_id': '7'},
-            {'instance_id': instance_id,
+            {'instance_uuid': instance_uuid,
              'device_name': '/dev/sdb5',
              'snapshot_id': '8',
              'volume_id': '9',
              'volume_size': 0},
-            {'instance_id': instance_id,
+            {'instance_uuid': instance_uuid,
              'device_name': '/dev/sdb6',
              'snapshot_id': '10',
              'volume_id': '11',
              'volume_size': 1},
-            {'instance_id': instance_id,
+            {'instance_uuid': instance_uuid,
              'device_name': '/dev/sdb7',
              'no_device': True},
-            {'instance_id': instance_id,
+            {'instance_uuid': instance_uuid,
              'device_name': '/dev/sdb8',
              'virtual_name': 'swap'},
-            {'instance_id': instance_id,
+            {'instance_uuid': instance_uuid,
              'device_name': '/dev/sdb9',
              'virtual_name': 'ephemeral3'}]
 
@@ -811,9 +991,9 @@ class CloudTestCase(test.TestCase):
     def _tearDownBlockDeviceMapping(self, inst1, inst2, volumes):
         for vol in volumes:
             db.volume_destroy(self.context, vol['id'])
-        for id in (inst1['id'], inst2['id']):
+        for uuid in (inst1['uuid'], inst2['uuid']):
             for bdm in db.block_device_mapping_get_all_by_instance(
-                self.context, id):
+                self.context, uuid):
                 db.block_device_mapping_destroy(self.context, bdm['id'])
         db.instance_destroy(self.context, inst2['id'])
         db.instance_destroy(self.context, inst1['id'])
@@ -864,8 +1044,8 @@ class CloudTestCase(test.TestCase):
         (inst1, inst2, volumes) = self._setUpBlockDeviceMapping()
 
         result = {}
-        self.cloud._format_instance_bdm(self.context, inst1['id'], '/dev/sdb1',
-                                        result)
+        self.cloud._format_instance_bdm(self.context, inst1['uuid'],
+                                        '/dev/sdb1', result)
         self.assertSubDictMatch(
             {'rootDeviceType': self._expected_instance_bdm1['rootDeviceType']},
             result)
@@ -873,8 +1053,8 @@ class CloudTestCase(test.TestCase):
             self._expected_block_device_mapping0, result['blockDeviceMapping'])
 
         result = {}
-        self.cloud._format_instance_bdm(self.context, inst2['id'], '/dev/sdc1',
-                                        result)
+        self.cloud._format_instance_bdm(self.context, inst2['uuid'],
+                                        '/dev/sdc1', result)
         self.assertSubDictMatch(
             {'rootDeviceType': self._expected_instance_bdm2['rootDeviceType']},
             result)
@@ -1153,7 +1333,7 @@ class CloudTestCase(test.TestCase):
         modify_image_attribute = self.cloud.modify_image_attribute
 
         fake_metadata = {
-            'id': 1,
+            'id': 'cedef40a-ed67-4d10-800e-17455edce175',
             'container_format': 'ami',
             'properties': {
                 'kernel_id': 'cedef40a-ed67-4d10-800e-17455edce175',
@@ -1162,11 +1342,17 @@ class CloudTestCase(test.TestCase):
             'is_public': False}
 
         def fake_show(meh, context, id):
-            return fake_metadata
+            return copy.deepcopy(fake_metadata)
 
         def fake_update(meh, context, image_id, metadata, data=None):
-            fake_metadata.update(metadata)
-            return fake_metadata
+            self.assertEqual(metadata['properties']['kernel_id'],
+                             fake_metadata['properties']['kernel_id'])
+            self.assertEqual(metadata['properties']['ramdisk_id'],
+                             fake_metadata['properties']['ramdisk_id'])
+            self.assertTrue(metadata['is_public'])
+            image = copy.deepcopy(fake_metadata)
+            image.update(metadata)
+            return image
 
         self.stubs.Set(fake._FakeImageService, 'show', fake_show)
         self.stubs.Set(fake._FakeImageService, 'show_by_name', fake_show)
@@ -1174,7 +1360,89 @@ class CloudTestCase(test.TestCase):
         result = modify_image_attribute(self.context, 'ami-00000001',
                                           'launchPermission', 'add',
                                            user_group=['all'])
-        self.assertEqual(True, result['is_public'])
+        self.assertTrue(result['is_public'])
+
+    def test_register_image(self):
+        register_image = self.cloud.register_image
+
+        def fake_create(*args, **kwargs):
+            # NOTE(vish): We are mocking s3 so make sure we have converted
+            #             to ids instead of uuids.
+            return {'id': 1,
+            'container_format': 'ami',
+            'properties': {
+                'kernel_id': 1,
+                'ramdisk_id': 1,
+                'type': 'machine'},
+            'is_public': False}
+
+        self.stubs.Set(s3.S3ImageService, 'create', fake_create)
+        image_location = 'fake_bucket/fake.img.manifest.xml'
+        result = register_image(self.context, image_location)
+        self.assertEqual(result['imageId'], 'ami-00000001')
+
+    def test_register_image_empty(self):
+        register_image = self.cloud.register_image
+        self.assertRaises(exception.EC2APIError, register_image, self.context,
+                          image_location=None)
+
+    def test_register_image_name(self):
+        register_image = self.cloud.register_image
+
+        def fake_create(_self, context, metadata, data=None):
+            self.assertEqual(metadata['name'], self.expected_name)
+            metadata['id'] = 1
+            metadata['container_format'] = 'ami'
+            metadata['is_public'] = False
+            return metadata
+
+        self.stubs.Set(s3.S3ImageService, 'create', fake_create)
+        self.expected_name = 'fake_bucket/fake.img.manifest.xml'
+        result = register_image(self.context,
+                                image_location=self.expected_name,
+                                name=None)
+        self.expected_name = 'an image name'
+        result = register_image(self.context,
+                                image_location='some_location',
+                                name=self.expected_name)
+
+    def test_format_image(self):
+        image = {
+            'id': 1,
+            'container_format': 'ami',
+            'name': 'name',
+            'owner': 'someone',
+            'properties': {
+                'image_location': 'location',
+                'kernel_id': 1,
+                'ramdisk_id': 1,
+                'type': 'machine'},
+            'is_public': False}
+        expected = {'name': 'name',
+                    'imageOwnerId': 'someone',
+                    'isPublic': False,
+                    'imageId': 'ami-00000001',
+                    'imageState': None,
+                    'rootDeviceType': 'instance-store',
+                    'architecture': None,
+                    'imageLocation': 'location',
+                    'kernelId': 'aki-00000001',
+                    'ramdiskId': 'ari-00000001',
+                    'rootDeviceName': '/dev/sda1',
+                    'imageType': 'machine',
+                    'description': None}
+        result = self.cloud._format_image(image)
+        self.assertDictMatch(result, expected)
+        image['properties']['image_location'] = None
+        expected['imageLocation'] = 'None (name)'
+        result = self.cloud._format_image(image)
+        self.assertDictMatch(result, expected)
+        image['name'] = None
+        image['properties']['image_location'] = 'location'
+        expected['imageLocation'] = 'location'
+        expected['name'] = 'location'
+        result = self.cloud._format_image(image)
+        self.assertDictMatch(result, expected)
 
     def test_deregister_image(self):
         deregister_image = self.cloud.deregister_image
@@ -1272,6 +1540,21 @@ class CloudTestCase(test.TestCase):
         self.assertEqual(dummypub, keydata['public_key'])
         self.assertEqual(dummyfprint, keydata['fingerprint'])
 
+    def test_create_key_pair(self):
+        good_names = ('a', 'a' * 255, string.ascii_letters + ' -_')
+        bad_names = ('', 'a' * 256, '*', '/')
+
+        for key_name in good_names:
+            result = self.cloud.create_key_pair(self.context,
+                                                key_name)
+            self.assertEqual(result['keyName'], key_name)
+
+        for key_name in bad_names:
+            self.assertRaises(exception.EC2APIError,
+                              self.cloud.create_key_pair,
+                              self.context,
+                              key_name)
+
     def test_delete_key_pair(self):
         self._create_key('test')
         self.cloud.delete_key_pair(self.context, 'test')
@@ -1296,7 +1579,7 @@ class CloudTestCase(test.TestCase):
         def dumb(*args, **kwargs):
             pass
 
-        self.stubs.Set(utils, 'usage_from_instance', dumb)
+        self.stubs.Set(compute_utils, 'notify_about_instance_usage', dumb)
         # NOTE(comstud): Make 'cast' behave like a 'call' which will
         # ensure that operations complete
         self.stubs.Set(rpc, 'cast', rpc.call)
@@ -1884,6 +2167,7 @@ class CloudTestCase(test.TestCase):
         def fake_get(ctxt, instance_id):
             return {
                 'id': 0,
+                'uuid': 'e5fe5518-0288-4fa3-b0c4-c79764101b85',
                 'root_device_name': '/dev/sdh',
                 'security_groups': [{'name': 'fake0'}, {'name': 'fake1'}],
                 'vm_state': vm_states.STOPPED,

@@ -17,9 +17,11 @@
 import nova.context
 
 from nova import flags
+from nova import log as logging
 from nova.openstack.common import cfg
 from nova import rpc
 
+LOG = logging.getLogger(__name__)
 
 notification_topic_opt = cfg.ListOpt('notification_topics',
         default=['notifications', ],
@@ -41,4 +43,4 @@ def notify(message):
             rpc.notify(context, topic, message)
         except Exception, e:
             LOG.exception(_("Could not send notification to %(topic)s. "
-                            "Payload=%(message)s" % locals()))
+                            "Payload=%(message)s"), locals())

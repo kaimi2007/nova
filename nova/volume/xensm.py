@@ -16,15 +16,15 @@ from nova import exception
 from nova import flags
 from nova import log as logging
 from nova import utils
-from nova.volume.driver import VolumeDriver
-from nova.virt.xenapi_conn import XenAPISession
-from nova.virt.xenapi.volumeops import VolumeOps
+from nova.virt.xenapi import connection as xenapi_conn
+from nova.virt.xenapi import volumeops
+import nova.volume.driver
 
 LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
 
 
-class XenSMDriver(VolumeDriver):
+class XenSMDriver(nova.volume.driver.VolumeDriver):
 
     def _convert_config_params(self, conf_str):
         params = dict([item.split("=") for item in conf_str.split()])
@@ -103,8 +103,8 @@ class XenSMDriver(VolumeDriver):
         username = FLAGS.xenapi_connection_username
         password = FLAGS.xenapi_connection_password
         try:
-            session = XenAPISession(url, username, password)
-            self._volumeops = VolumeOps(session)
+            session = xenapi_conn.XenAPISession(url, username, password)
+            self._volumeops = volumeops.VolumeOps(session)
         except Exception as ex:
             LOG.exception(ex)
             raise exception.Error(_("Failed to initiate session"))
@@ -117,7 +117,7 @@ class XenSMDriver(VolumeDriver):
         """Setup includes creating or introducing storage repos
            existing in the database and destroying deleted ones."""
 
-        # TODO purge storage repos
+        # TODO(renukaapte) purge storage repos
         self.ctxt = ctxt
         self._create_storage_repos(ctxt)
 
@@ -127,7 +127,7 @@ class XenSMDriver(VolumeDriver):
 
         # For now the scheduling logic will be to try to fit the volume in
         # the first available backend.
-        # TODO better scheduling once APIs are in place
+        # TODO(renukaapte) better scheduling once APIs are in place
         sm_vol_rec = None
         backends = self.db.sm_backend_conf_get_all(self.ctxt)
         for backend in backends:
@@ -191,7 +191,6 @@ class XenSMDriver(VolumeDriver):
 
     def create_export(self, context, volume):
         """Exports the volume."""
-        # !!! TODO
         pass
 
     def remove_export(self, context, volume):

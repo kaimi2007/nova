@@ -14,16 +14,15 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from xml.etree import ElementTree
+from lxml import etree
 
 from nova import flags
 from nova import test
 from nova import utils
 from nova.virt import firewall
-from nova.virt import vif
+from nova.virt.libvirt import config
 from nova.virt.libvirt import connection
-from nova.virt.libvirt.vif import LibvirtBridgeDriver, \
-                LibvirtOpenVswitchDriver, LibvirtOpenVswitchVirtualPortDriver
+from nova.virt.libvirt import vif
 
 FLAGS = flags.FLAGS
 
@@ -53,6 +52,7 @@ class LibvirtVifTestCase(test.TestCase):
     }
 
     instance = {
+        'name': 'instance-name',
         'uuid': 'instance-uuid'
     }
 
@@ -66,43 +66,24 @@ class LibvirtVifTestCase(test.TestCase):
             return None, None
 
         self.stubs.Set(utils, 'execute', fake_execute)
-        t = __import__('Cheetah.Template', globals(), locals(),
-                       ['Template'], -1)
-        self.Template = t.Template
-        xml_file = open(FLAGS.libvirt_xml_template)
-        self.xml_template = xml_file.read()
 
-    def _create_xml_info(self, vif_type, nics):
-        return     {
-                    'type': 'qemu',
-                    'name': 'fake-name',
-                    'uuid': 'fake-uuid',
-                    'memory_kb': 100 * 1024,
-                    'basepath': 'foobar',
-                    'vcpus': 4,
-                    'rescue': False,
-                    'disk_prefix': '/dev/sda',
-                    'driver_type': 'raw',
-                    'root_device_type': 'disk',
-                    'vif_type': vif_type,
-                    'nics': nics,
-                    'ebs_root': True,
-                    'ephemeral_device': False,
-                    'volumes': [],
-                    'use_virtio_for_bridges': False,
-                    'ephemerals': []}
+    def _get_instance_xml(self, driver):
+        conf = config.LibvirtConfigGuest()
+        conf.virt_type = "qemu"
+        conf.name = "fake-name"
+        conf.uuid = "fake-uuid"
+        conf.memory = 100 * 1024
+        conf.vcpus = 4
 
-    def _get_instance_xml(self, driver, vif_type):
-        nic_dict = driver.plug(self.instance, self.net, self.mapping)
-        xml_info = self._create_xml_info(vif_type, [nic_dict])
-        xml = str(self.Template(self.xml_template, searchList=[xml_info]))
-        return xml
+        nic = driver.plug(self.instance, self.net, self.mapping)
+        conf.add_device(nic)
+        return conf.to_xml()
 
     def test_bridge_driver(self):
-        d = LibvirtBridgeDriver()
-        xml = self._get_instance_xml(d, 'bridge')
+        d = vif.LibvirtBridgeDriver()
+        xml = self._get_instance_xml(d)
 
-        doc = ElementTree.fromstring(xml)
+        doc = etree.fromstring(xml)
         ret = doc.findall('./devices/interface')
         self.assertEqual(len(ret), 1)
         node = ret[0]
@@ -115,10 +96,10 @@ class LibvirtVifTestCase(test.TestCase):
         d.unplug(None, self.net, self.mapping)
 
     def test_ovs_ethernet_driver(self):
-        d = LibvirtOpenVswitchDriver()
-        xml = self._get_instance_xml(d, 'ethernet')
+        d = vif.LibvirtOpenVswitchDriver()
+        xml = self._get_instance_xml(d)
 
-        doc = ElementTree.fromstring(xml)
+        doc = etree.fromstring(xml)
         ret = doc.findall('./devices/interface')
         self.assertEqual(len(ret), 1)
         node = ret[0]
@@ -133,10 +114,10 @@ class LibvirtVifTestCase(test.TestCase):
         d.unplug(None, self.net, self.mapping)
 
     def test_ovs_virtualport_driver(self):
-        d = LibvirtOpenVswitchVirtualPortDriver()
-        xml = self._get_instance_xml(d, 'ovs_virtualport')
+        d = vif.LibvirtOpenVswitchVirtualPortDriver()
+        xml = self._get_instance_xml(d)
 
-        doc = ElementTree.fromstring(xml)
+        doc = etree.fromstring(xml)
         ret = doc.findall('./devices/interface')
         self.assertEqual(len(ret), 1)
         node = ret[0]
@@ -156,4 +137,22 @@ class LibvirtVifTestCase(test.TestCase):
                 iface_id_found = True
 
         self.assertTrue(iface_id_found)
+        d.unplug(None, self.net, self.mapping)
+
+    def test_quantum_bridge_ethernet_driver(self):
+        d = vif.QuantumLinuxBridgeVIFDriver()
+        xml = self._get_instance_xml(d)
+
+        doc = etree.fromstring(xml)
+        ret = doc.findall('./devices/interface')
+        self.assertEqual(len(ret), 1)
+        node = ret[0]
+        self.assertEqual(node.get("type"), "ethernet")
+        dev_name = node.find("target").get("dev")
+        self.assertTrue(dev_name.startswith("tap"))
+        mac = node.find("mac").get("address")
+        self.assertEqual(mac, self.mapping['mac'])
+        script = node.find("script").get("path")
+        self.assertEquals(script, "")
+
         d.unplug(None, self.net, self.mapping)

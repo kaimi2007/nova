@@ -37,6 +37,7 @@ from nova import exception
 from nova import flags
 from nova import log as logging
 from nova.openstack.common import cfg
+from nova.openstack.common import importutils
 from nova import utils
 from nova import wsgi
 
@@ -156,7 +157,7 @@ class Lockout(wsgi.Middleware):
         if FLAGS.memcached_servers:
             import memcache
         else:
-            from nova.testing.fake import memcache
+            from nova.common import memorycache as memcache
         self.mc = memcache.Client(FLAGS.memcached_servers,
                                   debug=0)
         super(Lockout, self).__init__(application)
@@ -327,7 +328,6 @@ class EC2KeystoneAuth(wsgi.Middleware):
                                       project_id,
                                       roles=roles,
                                       auth_token=token_id,
-                                      strategy='keystone',
                                       remote_address=remote_address)
 
         req.environ['nova.context'] = ctxt
@@ -411,7 +411,7 @@ class Requestify(wsgi.Middleware):
 
     def __init__(self, app, controller):
         super(Requestify, self).__init__(app)
-        self.controller = utils.import_class(controller)()
+        self.controller = importutils.import_object(controller)
 
     @webob.dec.wsgify(RequestClass=wsgi.Request)
     def __call__(self, req):
@@ -630,12 +630,14 @@ class Executor(wsgi.Application):
             LOG.debug(_('InvalidRequest raised: %s'), unicode(ex),
                      context=context)
             return ec2_error(req, request_id, type(ex).__name__, unicode(ex))
+        except exception.QuotaError as ex:
+            LOG.debug(_('QuotaError raised: %s'), unicode(ex),
+                      context=context)
+            return ec2_error(req, request_id, type(ex).__name__, unicode(ex))
         except exception.InvalidInstanceIDMalformed as ex:
-            LOG.debug(_('ValidatorError raised: %s'), unicode(ex),
-                     context=context)
-            #EC2 Compatibility
-            return self._error(req, context, "InvalidInstanceID.Malformed",
-                unicode(ex))
+            LOG.debug(_('Invalid id: bogus (expecting "i-..."): %s'),
+                        unicode(ex), context=context)
+            return ec2_error(req, request_id, type(ex).__name__, unicode(ex))
         except Exception as ex:
             env = req.environ.copy()
             for k in env.keys():

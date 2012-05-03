@@ -36,7 +36,7 @@ from nova.virt import driver
 LOG = logging.getLogger(__name__)
 
 
-def get_connection(_=None):
+def get_connection(_read_only):
     # The read_only parameter is ignored.
     return FakeConnection.instance()
 
@@ -171,7 +171,7 @@ class FakeConnection(driver.ComputeDriver):
             del self.instances[key]
         else:
             LOG.warning("Key '%s' not in instances '%s'" %
-                        (key, self.instances))
+                        (key, self.instances), instance=instance)
 
     def attach_volume(self, connection_info, instance_name, mountpoint):
         """Attach the disk to the instance at mountpoint using info"""
@@ -335,4 +335,4 @@ class FakeConnection(driver.ComputeDriver):
         pass
 
     def get_volume_connector(self, instance):
-        return {'ip': '127.0.0.1', 'initiator': 'fake'}
+        return {'ip': '127.0.0.1', 'initiator': 'fake', 'host': 'fakehost'}

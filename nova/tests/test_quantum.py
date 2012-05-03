@@ -20,7 +20,7 @@ import mox
 from nova import context
 from nova import db
 from nova.db.sqlalchemy import models
-from nova.db.sqlalchemy.session import get_session
+from nova.db.sqlalchemy import session as sql_session
 from nova import exception
 from nova import flags
 from nova import log as logging
@@ -198,7 +198,7 @@ class QuantumNovaTestCase(test.TestCase):
         # habit of of creating fixed IPs and not cleaning up, which
         # can confuse these tests, so we remove all existing fixed
         # ips before starting.
-        session = get_session()
+        session = sql_session.get_session()
         result = session.query(models.FixedIp).all()
         with session.begin():
             for fip_ref in result:
@@ -358,8 +358,9 @@ class QuantumManagerTestCase(QuantumNovaTestCase):
 
             # make sure we aren't allowed to delete network with
             # active port
-            self.assertRaises(Exception, self.net_man.delete_network,
-                                        ctx, None, n['uuid'])
+            self.assertRaises(exception.NetworkBusy,
+                              self.net_man.delete_network,
+                              ctx, None, n['uuid'])
 
     def _check_vifs(self, expect_num_vifs):
         ctx = context.RequestContext('user1', "").elevated()
@@ -611,3 +612,36 @@ class QuantumNovaPortSecurityTestCase(QuantumNovaTestCase):
                         project_id=project_id,
                         requested_networks=requested_networks)
         self.assertEqual(nw_info[0]['address'], fake_mac)
+
+
+class QuantumMelangeTestCase(test.TestCase):
+    def setUp(self):
+        super(QuantumMelangeTestCase, self).setUp()
+
+        fc = fake_client.FakeClient(LOG)
+        qc = quantum_connection.QuantumClientConnection(client=fc)
+
+        self.net_man = quantum_manager.QuantumManager(
+            ipam_lib="nova.network.quantum.nova_ipam_lib",
+            q_conn=qc)
+
+    def test_get_instance_uuids_by_ip_filter(self):
+        fake_context = context.RequestContext('user', 'project')
+        address = '1.2.3.4'
+        filters = {'ip': address}
+
+        self.net_man.ipam = self.mox.CreateMockAnything()
+        self.net_man.ipam.get_instance_ids_by_ip_address(fake_context,
+                address).AndReturn(['instance_id'])
+
+        instance = self.mox.CreateMockAnything()
+        instance.uuid = 'instance_uuid'
+
+        self.mox.StubOutWithMock(db, 'instance_get')
+        db.instance_get(fake_context, 'instance_id').AndReturn(instance)
+
+        self.mox.ReplayAll()
+
+        uuids = self.net_man.get_instance_uuids_by_ip_filter(fake_context,
+                                                             filters)
+        self.assertEquals(uuids, [{'instance_uuid':'instance_uuid'}])

@@ -231,6 +231,7 @@ class _VirtDriverTestCase(test.TestCase):
         result = self.connection.get_volume_connector({'id': 'fake'})
         self.assertTrue('ip' in result)
         self.assertTrue('initiator' in result)
+        self.assertTrue('host' in result)
 
     @catch_notimplementederror
     def test_attach_detach_volume(self):
@@ -451,6 +452,11 @@ class LibvirtConnTestCase(_VirtDriverTestCase):
         nova.virt.libvirt.connection.libvirt_utils = fake_libvirt_utils
         nova.virt.libvirt.firewall.libvirt = fakelibvirt
 
+        # So that the _supports_direct_io does the test based
+        # on the current working directory, instead of the
+        # default instances_path which doesn't exist
+        FLAGS.instances_path = ''
+
         # Point _VirtDriverTestCase at the right module
         self.driver_module = nova.virt.libvirt.connection
         super(LibvirtConnTestCase, self).setUp()
@@ -475,6 +481,10 @@ class LibvirtConnTestCase(_VirtDriverTestCase):
             nova.virt.libvirt.connection.libvirt_utils = self.saved_libvirt
             nova.virt.libvirt.firewall.libvirt = self.saved_libvirt
         super(LibvirtConnTestCase, self).tearDown()
+
+    def test_force_hard_reboot(self):
+        self.flags(libvirt_wait_soft_reboot_seconds=0)
+        self.test_reboot()
 
     @test.skip_test("Test nothing, but this method "
                     "needed to override superclass.")

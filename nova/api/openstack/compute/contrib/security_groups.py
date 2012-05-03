@@ -31,6 +31,8 @@ from nova import db
 from nova import exception
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import importutils
+from nova import quota
 from nova import utils
 
 
@@ -179,7 +181,7 @@ class SecurityGroupControllerBase(object):
 
     def __init__(self):
         self.compute_api = compute.API()
-        self.sgh = utils.import_object(FLAGS.security_group_handler)
+        self.sgh = importutils.import_object(FLAGS.security_group_handler)
 
     def _format_security_group_rule(self, context, rule):
         sg_rule = {}
@@ -289,6 +291,10 @@ class SecurityGroupController(SecurityGroupControllerBase):
         group_name = group_name.strip()
         group_description = group_description.strip()
 
+        if quota.allowed_security_groups(context, 1) < 1:
+            msg = _("Quota exceeded, too many security groups.")
+            raise exc.HTTPBadRequest(explanation=msg)
+
         LOG.audit(_("Create Security Group %s"), group_name, context=context)
         self.compute_api.ensure_default_security_group(context)
         if db.security_group_exists(context, context.project_id, group_name):
@@ -376,6 +382,13 @@ class SecurityGroupRulesController(SecurityGroupControllerBase):
             msg = _('This rule already exists in group %s') % parent_group_id
             raise exc.HTTPBadRequest(explanation=msg)
 
+        allowed = quota.allowed_security_group_rules(context,
+                                                   parent_group_id,
+                                                   1)
+        if allowed < 1:
+            msg = _("Quota exceeded, too many security group rules.")
+            raise exc.HTTPBadRequest(explanation=msg)
+
         security_group_rule = db.security_group_rule_create(context, values)
         self.sgh.trigger_security_group_rule_create_refresh(
             context, [security_group_rule['id']])
@@ -414,10 +427,6 @@ class SecurityGroupRulesController(SecurityGroupControllerBase):
                 msg = _("Parent or group id is not integer")
                 raise exception.InvalidInput(reason=msg)
 
-            if parent_group_id == group_id:
-                msg = _("Parent group id and group id cannot be same")
-                raise exception.InvalidInput(reason=msg)
-
             values['group_id'] = group_id
             #check if groupId exists
             db.security_group_get(context, group_id)
@@ -436,7 +445,20 @@ class SecurityGroupRulesController(SecurityGroupControllerBase):
         else:
             values['cidr'] = '0.0.0.0/0'
 
-        if ip_protocol and from_port and to_port:
+        if group_id:
+            # Open everything if an explicit port range or type/code are not
+            # specified, but only if a source group was specified.
+            ip_proto_upper = ip_protocol.upper() if ip_protocol else ''
+            if (ip_proto_upper == 'ICMP' and
+                from_port is None and to_port is None):
+                from_port = -1
+                to_port = -1
+            elif (ip_proto_upper in ['TCP', 'UDP'] and from_port is None
+                  and to_port is None):
+                from_port = 1
+                to_port = 65535
+
+        if ip_protocol and from_port is not None and to_port is not None:
 
             ip_protocol = str(ip_protocol)
             try:
@@ -455,7 +477,8 @@ class SecurityGroupRulesController(SecurityGroupControllerBase):
 
             # Verify that from_port must always be less than
             # or equal to to_port
-            if from_port > to_port:
+            if (ip_protocol.upper() in ['TCP', 'UDP'] and
+                from_port > to_port):
                 raise exception.InvalidPortRange(from_port=from_port,
                       to_port=to_port, msg="Former value cannot"
                                             " be greater than the later")
@@ -469,7 +492,8 @@ class SecurityGroupRulesController(SecurityGroupControllerBase):
 
             # Verify ICMP type and code
             if (ip_protocol.upper() == "ICMP" and
-                (from_port < -1 or to_port > 255)):
+                (from_port < -1 or from_port > 255 or
+                to_port < -1 or to_port > 255)):
                 raise exception.InvalidPortRange(from_port=from_port,
                       to_port=to_port, msg="For ICMP, the"
                                            " type:code must be valid")
@@ -546,7 +570,7 @@ class SecurityGroupActionController(wsgi.Controller):
     def __init__(self, *args, **kwargs):
         super(SecurityGroupActionController, self).__init__(*args, **kwargs)
         self.compute_api = compute.API()
-        self.sgh = utils.import_object(FLAGS.security_group_handler)
+        self.sgh = importutils.import_object(FLAGS.security_group_handler)
 
     @wsgi.action('addSecurityGroup')
     def _addSecurityGroup(self, req, id, body):

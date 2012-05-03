@@ -21,8 +21,6 @@ import os
 import StringIO
 import sys
 
-import stubout
-
 import nova.auth.manager
 from nova import context
 from nova import db
@@ -44,13 +42,8 @@ sys.dont_write_bytecode = False
 class FixedIpCommandsTestCase(test.TestCase):
     def setUp(self):
         super(FixedIpCommandsTestCase, self).setUp()
-        self.stubs = stubout.StubOutForTesting()
         db_fakes.stub_out_db_network_api(self.stubs)
         self.commands = nova_manage.FixedIpCommands()
-
-    def tearDown(self):
-        super(FixedIpCommandsTestCase, self).tearDown()
-        self.stubs.UnsetAll()
 
     def test_reserve(self):
         self.commands.reserve('192.168.0.100')
@@ -78,7 +71,6 @@ class FixedIpCommandsTestCase(test.TestCase):
 class NetworkCommandsTestCase(test.TestCase):
     def setUp(self):
         super(NetworkCommandsTestCase, self).setUp()
-        self.stubs = stubout.StubOutForTesting()
         self.commands = nova_manage.NetworkCommands()
         self.net = {'id': 0,
                     'label': 'fake',
@@ -121,10 +113,6 @@ class NetworkCommandsTestCase(test.TestCase):
         self.fake_network_get_by_cidr = fake_network_get_by_cidr
         self.fake_network_get_by_uuid = fake_network_get_by_uuid
         self.fake_network_update = fake_network_update
-
-    def tearDown(self):
-        super(NetworkCommandsTestCase, self).tearDown()
-        self.stubs.UnsetAll()
 
     def test_create(self):
 
@@ -251,7 +239,14 @@ class NetworkCommandsTestCase(test.TestCase):
 
 class ExportAuthTestCase(test.TestCase):
 
-    def test_export(self):
+    def test_export_with_noauth(self):
+        self._do_test_export()
+
+    def test_export_with_deprecated_auth(self):
+        self.flags(auth_strategy='deprecated')
+        self._do_test_export(noauth=False)
+
+    def _do_test_export(self, noauth=True):
         self.flags(allowed_roles=['role1', 'role2'])
         am = nova.auth.manager.AuthManager(new=True)
         user1 = am.create_user('user1', 'a1', 's1')
@@ -267,11 +262,14 @@ class ExportAuthTestCase(test.TestCase):
         commands = nova_manage.ExportCommands()
         output = commands._get_auth_data()
 
+        def pw(idx):
+            return ('user' if noauth else 'a') + str(idx)
+
         expected = {
             "users": [
-                {"id": "user1", "name": "user1", 'password': 'a1'},
-                {"id": "user2", "name": "user2", 'password': 'a2'},
-                {"id": "user3", "name": "user3", 'password': 'a3'},
+                {"id": "user1", "name": "user1", 'password': pw(1)},
+                {"id": "user2", "name": "user2", 'password': pw(2)},
+                {"id": "user3", "name": "user3", 'password': pw(3)},
             ],
             "roles": ["role1", "role2"],
             "role_user_tenant_list": [
@@ -285,9 +283,9 @@ class ExportAuthTestCase(test.TestCase):
                 {"tenant_id": "proj2", "user_id": "user3"},
             ],
             "ec2_credentials": [
-                {"access_key": "a1", "secret_key": "s1", "user_id": "user1"},
-                {"access_key": "a2", "secret_key": "s2", "user_id": "user2"},
-                {"access_key": "a3", "secret_key": "s3", "user_id": "user3"},
+                {"access_key": pw(1), "secret_key": "s1", "user_id": "user1"},
+                {"access_key": pw(2), "secret_key": "s2", "user_id": "user2"},
+                {"access_key": pw(3), "secret_key": "s3", "user_id": "user3"},
             ],
             "tenants": [
                 {"description": "proj1", "id": "proj1", "name": "proj1"},

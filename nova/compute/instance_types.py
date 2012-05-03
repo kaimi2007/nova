@@ -66,8 +66,11 @@ def create(name, memory, vcpus, root_gb, ephemeral_gb, flavorid, swap=0,
             raise exception.InvalidInput(reason=msg)
 
     kwargs['name'] = name
-    kwargs['flavorid'] = flavorid
+    # NOTE(vish): Internally, flavorid is stored as a string but it comes
+    #             in through json as an integer, so we convert it here.
+    kwargs['flavorid'] = unicode(flavorid)
     kwargs['extra_specs'] = extra_specs
+
     try:
         return db.instance_type_create(context.get_admin_context(), kwargs)
     except exception.DBError, e:

@@ -59,18 +59,9 @@ LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
 
 baremetal_opts = [
-    cfg.StrOpt('baremetal_injected_network_template',
-                default=utils.abspath('virt/interfaces.template'),
-                help='Template file for injected network'),
     cfg.StrOpt('baremetal_type',
                 default='baremetal',
                 help='baremetal domain type'),
-    cfg.StrOpt('baremetal_uri',
-                default='',
-                help='Override the default baremetal URI'),
-    cfg.BoolOpt('baremetal_allow_project_net_traffic',
-                 default=True,
-                 help='Whether to allow in project network traffic')
     ]
 
 FLAGS.register_opts(baremetal_opts)
@@ -145,10 +136,10 @@ class ProxyConnection(driver.ComputeDriver):
                 self._conn.destroy_domain(instance['name'])
                 break
             except Exception as ex:
-                msg = (_("Error encountered when destroying instance "
-                        "'%(name)s': %(ex)s") %
-                        {"name": instance["name"], "ex": ex})
-                LOG.debug(msg)
+                LOG.debug(_("Error encountered when destroying instance "
+                            "'%(name)s': %(ex)s") %
+                          {"name": instance["name"], "ex": ex},
+                          instance=instance)
                 break
 
         if cleanup:
@@ -160,7 +151,7 @@ class ProxyConnection(driver.ComputeDriver):
         target = os.path.join(FLAGS.instances_path, instance['name'])
         instance_name = instance['name']
         LOG.info(_('instance %(instance_name)s: deleting instance files'
-                ' %(target)s') % locals())
+                ' %(target)s') % locals(), instance=instance)
         if FLAGS.baremetal_type == 'lxc':
             disk.destroy_container(self.container)
         if os.path.exists(target):
@@ -186,13 +177,14 @@ class ProxyConnection(driver.ComputeDriver):
             try:
                 state = self._conn.reboot_domain(instance['name'])
                 if state == power_state.RUNNING:
-                    LOG.debug(_('instance %s: rebooted'), instance['name'])
+                    LOG.debug(_('instance %s: rebooted'), instance['name'],
+                              instance=instance)
                     timer.stop()
             except Exception:
-                LOG.exception(_('_wait_for_reboot failed'))
+                LOG.exception(_('_wait_for_reboot failed'), instance=instance)
                 timer.stop()
         timer.f = _wait_for_reboot
-        return timer.start(interval=0.5, now=True)
+        return timer.start(interval=0.5)
 
     @exception.wrap_exception
     def rescue(self, context, instance, network_info):
@@ -219,13 +211,14 @@ class ProxyConnection(driver.ComputeDriver):
             try:
                 state = self._conn.reboot_domain(instance['name'])
                 if state == power_state.RUNNING:
-                    LOG.debug(_('instance %s: rescued'), instance['name'])
+                    LOG.debug(_('instance %s: rescued'), instance['name'],
+                              instance=instance)
                     timer.stop()
             except Exception:
-                LOG.exception(_('_wait_for_rescue failed'))
+                LOG.exception(_('_wait_for_rescue failed'), instance=instance)
                 timer.stop()
         timer.f = _wait_for_reboot
-        return timer.start(interval=0.5, now=True)
+        return timer.start(interval=0.5)
 
     @exception.wrap_exception
     def unrescue(self, instance, network_info):
@@ -252,33 +245,39 @@ class ProxyConnection(driver.ComputeDriver):
         self._create_image(context, instance, xml_dict,
             network_info=network_info,
             block_device_info=block_device_info)
-        LOG.debug(_("instance %s: is building"), instance['name'])
-        LOG.debug(_(xml_dict))
+        LOG.debug(_("instance %s: is building"), instance['name'],
+                  instance=instance)
+        LOG.debug(xml_dict, instance=instance)
 
         def _wait_for_boot():
             try:
-                LOG.debug(_("Key is injected but instance is not running yet"))
+                LOG.debug(_("Key is injected but instance is not running yet"),
+                          instance=instance)
                 db.instance_update(context, instance['id'],
                     {'vm_state': vm_states.BUILDING})
                 state = self._conn.create_domain(xml_dict, bpath)
                 if state == power_state.RUNNING:
-                    LOG.debug(_('instance %s: booted'), instance['name'])
+                    LOG.debug(_('instance %s: booted'), instance['name'],
+                              instance=instance)
                     db.instance_update(context, instance['id'],
                             {'vm_state': vm_states.ACTIVE})
-                    LOG.debug(_('~~~~~~ current state = %s ~~~~~~'), state)
+                    LOG.debug(_('~~~~~~ current state = %s ~~~~~~'), state,
+                              instance=instance)
                     LOG.debug(_("instance %s spawned successfully"),
-                            instance['name'])
+                            instance['name'], instance=instance)
                 else:
-                    LOG.debug(_('instance %s:not booted'), instance['name'])
+                    LOG.debug(_('instance %s:not booted'), instance['name'],
+                              instance=instance)
             except Exception as Exn:
-                LOG.debug(_("Bremetal assignment is overcommitted."))
+                LOG.debug(_("Bremetal assignment is overcommitted."),
+                          instance=instance)
                 db.instance_update(context, instance['id'],
                            {'vm_state': vm_states.OVERCOMMIT,
                             'power_state': power_state.SUSPENDED})
             timer.stop()
         timer.f = _wait_for_boot
 
-        return timer.start(interval=0.5, now=True)
+        return timer.start(interval=0.5)
 
     def get_console_output(self, instance):
         console_log = os.path.join(FLAGS.instances_path, instance['name'],
@@ -351,7 +350,8 @@ class ProxyConnection(driver.ComputeDriver):
         libvirt_utils.ensure_tree(basepath(suffix=''))
         utils.execute('chmod', '0777', basepath(suffix=''))
 
-        LOG.info(_('instance %s: Creating image'), inst['name'])
+        LOG.info(_('instance %s: Creating image'), inst['name'],
+                 instance=inst)
 
         if FLAGS.baremetal_type == 'lxc':
             container_dir = '%s/rootfs' % basepath(suffix='')
@@ -471,8 +471,8 @@ class ProxyConnection(driver.ComputeDriver):
             for injection in ('metadata', 'key', 'net'):
                 if locals()[injection]:
                     LOG.info(_('instance %(inst_name)s: injecting '
-                               '%(injection)s into image %(img_id)s'
-                               % locals()))
+                               '%(injection)s into image %(img_id)s'),
+                             locals(), instance=inst)
             try:
                 disk.inject_data(injection_path, key, net, metadata,
                                  partition=target_partition,
@@ -482,7 +482,8 @@ class ProxyConnection(driver.ComputeDriver):
             except Exception as e:
                 # This could be a windows image, or a vmdk format disk
                 LOG.warn(_('instance %(inst_name)s: ignoring error injecting'
-                        ' data into image %(img_id)s (%(e)s)') % locals())
+                        ' data into image %(img_id)s (%(e)s)') % locals(),
+                         instance=inst)
 
     def _prepare_xml_info(self, instance, network_info, rescue,
                           block_device_info=None):
@@ -526,9 +527,11 @@ class ProxyConnection(driver.ComputeDriver):
         return xml_info
 
     def to_xml_dict(self, instance, rescue=False, network_info=None):
-        LOG.debug(_('instance %s: starting toXML method'), instance['name'])
+        LOG.debug(_('instance %s: starting toXML method'), instance['name'],
+                  instance=instance)
         xml_info = self._prepare_xml_info(instance, rescue, network_info)
-        LOG.debug(_('instance %s: finished toXML method'), instance['name'])
+        LOG.debug(_('instance %s: finished toXML method'), instance['name'],
+                  instance=instance)
         return xml_info
 
     def get_info(self, instance):

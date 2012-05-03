@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright (c) 2011 Openstack, LLC.
+# Copyright (c) 2011 OpenStack, LLC.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -117,6 +117,10 @@ class KillFilter(CommandFilter):
                 return False
         try:
             command = os.readlink("/proc/%d/exe" % int(args[1]))
+            # NOTE(dprince): /proc/PID/exe may have ' (deleted)' on
+            # the end if an executable is updated or deleted
+            if command.endswith(" (deleted)"):
+                command = command[:command.rindex(" ")]
             if command not in self.args[1]:
                 # Affected executable not in accepted list
                 return False

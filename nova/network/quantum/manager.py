@@ -88,6 +88,7 @@ class QuantumManager(manager.FloatingIP, manager.FlatManager):
     def init_host(self):
         # Initialize general L3 networking
         self.l3driver.initialize()
+        super(QuantumManager, self).init_host()
         # Initialize floating ip support (only works for nova ipam currently)
         if FLAGS.quantum_ipam_lib == 'nova.network.quantum.nova_ipam_lib':
             LOG.debug("Initializing FloatingIP support")
@@ -106,6 +107,22 @@ class QuantumManager(manager.FloatingIP, manager.FlatManager):
         # .. and for each network
         for c in cidrs:
             self.l3driver.initialize_network(c)
+
+    # Similar to FlatDHCPMananger, except we check for quantum_use_dhcp flag
+    # before we try to update_dhcp
+    def _setup_network_on_host(self, context, network):
+        """Sets up network on this host."""
+        network['dhcp_server'] = self._get_dhcp_ip(context, network)
+        self.l3driver.initialize_gateway(network)
+
+        if FLAGS.quantum_use_dhcp and not FLAGS.fake_network:
+            dev = self.driver.get_dev(network)
+            self.driver.update_dhcp(context, dev, network)
+            if FLAGS.use_ipv6:
+                self.driver.update_ra(context, dev, network)
+                gateway = utils.get_my_linklocal(dev)
+                self.db.network_update(context, network['id'],
+                                       {'gateway_v6': gateway})
 
     def _update_network_host(self, context, net_uuid):
         """Set the host column in the networks table: note that this won't
@@ -203,8 +220,8 @@ class QuantumManager(manager.FloatingIP, manager.FlatManager):
             if not self.q_conn.network_exists(q_tenant_id, quantum_net_id):
                     raise Exception(_("Unable to find existing quantum "
                                       "network for tenant '%(q_tenant_id)s' "
-                                      "with net-id '%(quantum_net_id)s'" %
-                                      locals()))
+                                      "with net-id '%(quantum_net_id)s'") %
+                                    locals())
         else:
             nova_id = self._get_nova_id()
             quantum_net_id = self.q_conn.create_network(q_tenant_id, label,
@@ -251,14 +268,14 @@ class QuantumManager(manager.FloatingIP, manager.FlatManager):
             num_ports -= 1
 
         if num_ports > 0:
-            raise Exception(_("Network %s has active ports, cannot delete"
-                                                            % (net_uuid)))
+            raise exception.NetworkBusy(network=net_uuid)
 
         # only delete gw ports if we are going to finish deleting network
         if gw_port_uuid:
             self.q_conn.detach_and_delete_port(q_tenant_id,
                                                    net_uuid,
                                                    gw_port_uuid)
+            self.l3driver.remove_gateway(net_ref)
 
         # Now we can delete the network
         self.q_conn.delete_network(q_tenant_id, net_uuid)
@@ -400,6 +417,16 @@ class QuantumManager(manager.FloatingIP, manager.FlatManager):
         network_ref['net_tenant_id'] = net_tenant_id
         network_ref['quantum_net_id'] = quantum_net_id
         return network_ref
+
+    @manager.wrap_check_policy
+    def get_instance_uuids_by_ip_filter(self, context, filters):
+        # This is not returning the instance IDs like the method name
+        # would make you think; it is matching the return format of
+        # the method it's overriding.
+        instance_ids = self.ipam.get_instance_ids_by_ip_address(
+                                    context, filters.get('ip'))
+        instances = [db.instance_get(context, id) for id in instance_ids]
+        return [{'instance_uuid':instance.uuid} for instance in instances]
 
     @utils.synchronized('quantum-enable-dhcp')
     def enable_dhcp(self, context, quantum_net_id, network_ref, vif_rec,
@@ -598,6 +625,19 @@ class QuantumManager(manager.FloatingIP, manager.FlatManager):
             LOG.exception(msg)
         return ipam_tenant_id
 
+    # enable_dhcp() could also use this
+    #
+    # Use semaphore to :
+    # 1) avoid race between restart_dhcps
+    # 2) avoid race between update_dhcp_hostfile_with_texts
+    @utils.synchronized('quantum-restart-dhcp')
+    def _atomic_restart_dhcp(self, context, dev, hosts, network_ref):
+        self.driver.update_dhcp_hostfile_with_text(dev, hosts)
+        # Since we only update hosts file, explict kill_dhcp() isn't needed.
+        # restart_dhcp() will reload hostfile if dnsmasq is already running,
+        # or start new dnsmasq
+        self.driver.restart_dhcp(context, dev, network_ref)
+
     # TODO(bgh): At some point we should consider merging enable_dhcp() and
     # update_dhcp()
     # TODO(tr3buchet): agree, i'm curious why they differ even now..
@@ -623,10 +663,8 @@ class QuantumManager(manager.FloatingIP, manager.FlatManager):
             # And remove the dhcp mappings for the subnet
             hosts = self.get_dhcp_hosts_text(context,
                 subnet['network_id'], project_id)
-            self.driver.update_dhcp_hostfile_with_text(dev, hosts)
-            # Restart dnsmasq
-            self.driver.kill_dhcp(dev)
-            self.driver.restart_dhcp(context, dev, network_ref)
+
+            self._atomic_restart_dhcp(context, dev, hosts, network_ref)
 
     def validate_networks(self, context, networks):
         """Validates that this tenant has quantum networks with the associated
@@ -690,3 +728,7 @@ class QuantumManager(manager.FloatingIP, manager.FlatManager):
             leases_text += text
         LOG.debug("DHCP leases: %s" % leases_text)
         return leases_text
+
+    def setup_networks_on_host(self, *args, **kwargs):
+        # no host specific setup is needed in quantum manager
+        pass

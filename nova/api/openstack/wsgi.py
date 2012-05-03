@@ -62,7 +62,7 @@ _MEDIA_TYPE_MAP = {
 
 
 class Request(webob.Request):
-    """Add some Openstack API-specific logic to the base webob.Request."""
+    """Add some OpenStack API-specific logic to the base webob.Request."""
 
     def best_match_content_type(self):
         """Determine the requested response content-type."""
@@ -886,7 +886,7 @@ class Resource(wsgi.Application):
             msg = _("%(url)s returned with HTTP %(status)d") % msg_dict
         except AttributeError, e:
             msg_dict = dict(url=request.url, e=e)
-            msg = _("%(url)s returned a fault: %(e)s" % msg_dict)
+            msg = _("%(url)s returned a fault: %(e)s") % msg_dict
 
         LOG.info(msg)
 
@@ -1022,10 +1022,10 @@ class Fault(webob.exc.HTTPException):
     _fault_names = {
             400: "badRequest",
             401: "unauthorized",
-            403: "resizeNotAllowed",
+            403: "forbidden",
             404: "itemNotFound",
             405: "badMethod",
-            409: "inProgress",  # FIXME(comstud): This doesn't seem right
+            409: "conflictingRequest",
             413: "overLimit",
             415: "badMediaType",
             501: "notImplemented",

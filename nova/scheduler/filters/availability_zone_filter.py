@@ -1,4 +1,4 @@
-# Copyright (c) 2011-2012 Openstack, LLC.
+# Copyright (c) 2011-2012 OpenStack, LLC.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -18,7 +18,7 @@ from nova.scheduler import filters
 
 
 class AvailabilityZoneFilter(filters.BaseHostFilter):
-    """Filters Hosts by availabilty zone."""
+    """Filters Hosts by availability zone."""
 
     def host_passes(self, host_state, filter_properties):
         spec = filter_properties.get('request_spec', {})

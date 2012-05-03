@@ -18,28 +18,17 @@
 #    under the License.
 
 import copy
+import sys
+import traceback
 
 from nova import exception
-from nova import flags
 from nova import log as logging
 from nova.openstack.common import cfg
+from nova.openstack.common import importutils
+from nova import utils
 
 
 LOG = logging.getLogger(__name__)
-
-rpc_opts = [
-    cfg.IntOpt('rpc_thread_pool_size',
-               default=1024,
-               help='Size of RPC thread pool'),
-    cfg.IntOpt('rpc_conn_pool_size',
-               default=30,
-               help='Size of RPC connection pool'),
-    cfg.IntOpt('rpc_response_timeout',
-               default=3600,
-               help='Seconds to wait for a response from call or multicall'),
-    ]
-
-flags.FLAGS.register_opts(rpc_opts)
 
 
 class RemoteError(exception.NovaException):
@@ -87,7 +76,7 @@ class Connection(object):
         """
         raise NotImplementedError()
 
-    def create_consumer(self, topic, proxy, fanout=False):
+    def create_consumer(self, conf, topic, proxy, fanout=False):
         """Create a consumer on this connection.
 
         A consumer is associated with a message queue on the backend message
@@ -96,6 +85,7 @@ class Connection(object):
         off of the queue will determine which method gets called on the proxy
         object.
 
+        :param conf:  An openstack.common.cfg configuration object.
         :param topic: This is a name associated with what to consume from.
                       Multiple instances of a service may consume from the same
                       topic. For example, all instances of nova-compute consume
@@ -131,14 +121,100 @@ def _safe_log(log_func, msg, msg_data):
                 'set_admin_password': ('new_pass',),
                 'run_instance': ('admin_password',),
                }
-    method = msg_data['method']
-    if method in SANITIZE:
-        msg_data = copy.deepcopy(msg_data)
-        args_to_sanitize = SANITIZE[method]
-        for arg in args_to_sanitize:
-            try:
-                msg_data['args'][arg] = "<SANITIZED>"
-            except KeyError:
-                pass
+
+    has_method = 'method' in msg_data and msg_data['method'] in SANITIZE
+    has_context_token = '_context_auth_token' in msg_data
+    has_token = 'auth_token' in msg_data
+
+    if not any([has_method, has_context_token, has_token]):
+        return log_func(msg, msg_data)
+
+    msg_data = copy.deepcopy(msg_data)
+
+    if has_method:
+        method = msg_data['method']
+        if method in SANITIZE:
+            args_to_sanitize = SANITIZE[method]
+            for arg in args_to_sanitize:
+                try:
+                    msg_data['args'][arg] = "<SANITIZED>"
+                except KeyError:
+                    pass
+
+    if has_context_token:
+        msg_data['_context_auth_token'] = '<SANITIZED>'
+
+    if has_token:
+        msg_data['auth_token'] = '<SANITIZED>'
 
     return log_func(msg, msg_data)
+
+
+def serialize_remote_exception(failure_info):
+    """Prepares exception data to be sent over rpc.
+
+    Failure_info should be a sys.exc_info() tuple.
+
+    """
+    tb = traceback.format_exception(*failure_info)
+    failure = failure_info[1]
+    LOG.error(_("Returning exception %s to caller"), unicode(failure))
+    LOG.error(tb)
+
+    kwargs = {}
+    if hasattr(failure, 'kwargs'):
+        kwargs = failure.kwargs
+
+    data = {
+        'class': str(failure.__class__.__name__),
+        'module': str(failure.__class__.__module__),
+        'message': unicode(failure),
+        'tb': tb,
+        'args': failure.args,
+        'kwargs': kwargs
+    }
+
+    json_data = utils.dumps(data)
+
+    return json_data
+
+
+def deserialize_remote_exception(conf, data):
+    failure = utils.loads(str(data))
+
+    trace = failure.get('tb', [])
+    message = failure.get('message', "") + "\n" + "\n".join(trace)
+    name = failure.get('class')
+    module = failure.get('module')
+
+    # NOTE(ameade): We DO NOT want to allow just any module to be imported, in
+    # order to prevent arbitrary code execution.
+    if not module in conf.allowed_rpc_exception_modules:
+        return RemoteError(name, failure.get('message'), trace)
+
+    try:
+        mod = importutils.import_module(module)
+        klass = getattr(mod, name)
+        if not issubclass(klass, Exception):
+            raise TypeError("Can only deserialize Exceptions")
+
+        failure = klass(**failure.get('kwargs', {}))
+    except (AttributeError, TypeError, ImportError):
+        return RemoteError(name, failure.get('message'), trace)
+
+    ex_type = type(failure)
+    str_override = lambda self: message
+    new_ex_type = type(ex_type.__name__ + "_Remote", (ex_type,),
+                       {'__str__': str_override})
+    try:
+        # NOTE(ameade): Dynamically create a new exception type and swap it in
+        # as the new type for the exception. This only works on user defined
+        # Exceptions and not core python exceptions. This is important because
+        # we cannot necessarily change an exception message so we must override
+        # the __str__ method.
+        failure.__class__ = new_ex_type
+    except TypeError as e:
+        # NOTE(ameade): If a core exception then just add the traceback to the
+        # first exception argument.
+        failure.args = (message,) + failure.args[1:]
+    return failure

@@ -155,7 +155,7 @@ class _AuthManagerBaseTestCase(test.TestCase):
                         '/services/Cloud'))
 
     def test_can_get_credentials(self):
-        self.flags(use_deprecated_auth=True)
+        self.flags(auth_strategy='deprecated')
         st = {'access': 'access', 'secret': 'secret'}
         with user_and_project_generator(self.manager, user_state=st) as (u, p):
             credentials = self.manager.get_environment_rc(u, p)
@@ -420,5 +420,5 @@ class AuthManagerDbTestCase(_AuthManagerBaseTestCase):
 
 
 if __name__ == "__main__":
-    # TODO: Implement use_fake as an option
+    # TODO(anotherjesse): Implement use_fake as an option
     unittest.main()

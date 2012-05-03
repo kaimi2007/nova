@@ -1,4 +1,4 @@
-#   Copyright 2012 Openstack, LLC.
+#   Copyright 2012 OpenStack, LLC.
 #
 #   Licensed under the Apache License, Version 2.0 (the "License"); you may
 #   not use this file except in compliance with the License. You may obtain
@@ -69,7 +69,7 @@ class ExtendedServerAttributesController(wsgi.Controller):
         context = req.environ['nova.context']
         if authorize(context):
             # Attach our slave template to the response object
-            resp_obj.attach(xml=ExtendedServerAttributesTemplate())
+            resp_obj.attach(xml=ExtendedServerAttributeTemplate())
 
             try:
                 instance = self.compute_api.get(context, id)

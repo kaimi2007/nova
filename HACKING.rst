@@ -12,16 +12,33 @@ General
 - Put one newline between methods in classes and anywhere else
 - Do not write "except:", use "except Exception:" at the very least
 - Include your name with TODOs as in "#TODO(termie)"
-- Do not name anything the same name as a built-in or reserved word
+- Do not shadow a built-in or reserved word. Example::
+
+    def list():
+        return [1, 2, 3]
+
+    mylist = list() # BAD, shadows `list` built-in
+
+    class Foo(object):
+        def list(self):
+            return [1, 2, 3]
+
+    mylist = Foo().list() # OKAY, does not shadow built-in
 
 
 Imports
 -------
-- Do not import objects, only modules
-- Do not import more than one module per line
+- Do not import objects, only modules (*)
+- Do not import more than one module per line (*)
 - Do not make relative imports
 - Order your imports by the full module path
 - Organize your imports according to the following template
+
+(*) exceptions are:
+
+- imports from ``migrate`` package
+- imports from ``sqlalchemy`` package
+- imports from ``nova.db.sqlalchemy.session`` module
 
 Example::
 
@@ -53,8 +70,8 @@ Example::
   import nova.api.ec2
   from nova.api import openstack
   from nova.auth import users
-  import nova.flags
   from nova.endpoint import cloud
+  import nova.flags
   from nova import test
 
 
@@ -65,7 +82,7 @@ Example::
   """A one line docstring looks like this and ends in a period."""
 
 
-  """A multiline docstring has a one-line summary, less than 80 characters.
+  """A multi line docstring has a one-line summary, less than 80 characters.
 
   Then a new paragraph after a newline that explains in more detail any
   general information about the function, class or method. Example usages

@@ -23,18 +23,15 @@ http://wiki.openstack.org/nova-image-cache-management.
 
 """
 
-import datetime
 import hashlib
 import os
 import re
-import sys
 import time
 
 from nova import compute
 from nova import context as db_context
 from nova import db
 from nova import flags
-from nova import image
 from nova import log as logging
 from nova.openstack.common import cfg
 from nova import utils
@@ -58,19 +55,53 @@ imagecache_opts = [
     cfg.BoolOpt('checksum_base_images',
                 default=False,
                 help='Write a checksum for files in _base to disk'),
+    cfg.StrOpt('image_info_filename_pattern',
+               default='$instances_path/$base_dir_name/%(image)s.sha1',
+               help='Allows image information files to be stored in '
+                    'non-standard locations'),
     ]
 
 flags.DECLARE('instances_path', 'nova.compute.manager')
+flags.DECLARE('base_dir_name', 'nova.compute.manager')
 FLAGS = flags.FLAGS
 FLAGS.register_opts(imagecache_opts)
 
 
-def read_stored_checksum(base_file):
+def get_info_filename(base_path):
+    """Construct a filename for storing addtional information about a base
+    image.
+
+    Returns a filename.
+    """
+
+    base_file = os.path.basename(base_path)
+    return (FLAGS.image_info_filename_pattern
+            % {'image': base_file})
+
+
+def is_valid_info_file(path):
+    """Test if a given path matches the pattern for info files."""
+
+    digest_size = hashlib.sha1().digestsize * 2
+    regexp = (FLAGS.image_info_filename_pattern
+              % {'instances_path': FLAGS.instances_path,
+                 'image': ('([0-9a-f]{%(digest_size)d}|'
+                           '[0-9a-f]{%(digest_size)d}_sm|'
+                           '[0-9a-f]{%(digest_size)d}_[0-9]+)'
+                           % {'digest_size': digest_size})})
+    m = re.match(regexp, path)
+    if m:
+        return True
+    return False
+
+
+def read_stored_checksum(base_path):
     """Read the checksum which was created at image fetch time.
 
     Returns the checksum (as hex) or None.
     """
-    checksum_file = '%s.sha1' % base_file
+
+    checksum_file = get_info_filename(base_path)
     if not os.path.exists(checksum_file):
         return None
 
@@ -83,7 +114,7 @@ def read_stored_checksum(base_file):
 def write_stored_checksum(target):
     """Write a checksum to disk for a file in _base."""
 
-    checksum_filename = '%s.sha1' % target
+    checksum_filename = get_info_filename(target)
     if os.path.exists(target) and not os.path.exists(checksum_filename):
         # NOTE(mikal): Create the checksum file first to exclude possible
         # overlap in checksum operations. An empty checksum file is ignored if
@@ -137,7 +168,9 @@ class ImageCacheManager(object):
             if len(ent) == digest_size:
                 self._store_image(base_dir, ent, original=True)
 
-            elif len(ent) > digest_size + 2 and ent[digest_size] == '_':
+            elif (len(ent) > digest_size + 2 and
+                  ent[digest_size] == '_' and
+                  not is_valid_info_file(os.path.join(base_dir, ent))):
                 self._store_image(base_dir, ent, original=False)
 
     def _list_running_instances(self, context):
@@ -179,7 +212,8 @@ class ImageCacheManager(object):
                                'backing': backing_file})
 
                     backing_path = os.path.join(FLAGS.instances_path,
-                                                '_base', backing_file)
+                                                FLAGS.base_dir_name,
+                                                backing_file)
                     if not backing_path in inuse_images:
                         inuse_images.append(backing_path)
 
@@ -220,7 +254,7 @@ class ImageCacheManager(object):
             if m:
                 yield img, False, True
 
-    def _verify_checksum(self, img, base_file):
+    def _verify_checksum(self, img_id, base_file):
         """Compare the checksum stored on disk with the current file.
 
         Note that if the checksum fails to verify this is logged, but no actual
@@ -235,11 +269,9 @@ class ImageCacheManager(object):
             f.close()
 
             if current_checksum != stored_checksum:
-                LOG.error(_('%(container_format)s-%(id)s '
-                            '(%(base_file)s): '
-                            'image verification failed'),
-                          {'container_format': img['container_format'],
-                           'id': img['id'],
+                LOG.error(_('%(id)s (%(base_file)s): image verification '
+                            'failed'),
+                          {'id': img_id,
                            'base_file': base_file})
                 return False
 
@@ -247,10 +279,9 @@ class ImageCacheManager(object):
                 return True
 
         else:
-            LOG.debug(_('%(container_format)s-%(id)s (%(base_file)s): '
-                        'image verification skipped, no hash stored'),
-                      {'container_format': img['container_format'],
-                       'id': img['id'],
+            LOG.debug(_('%(id)s (%(base_file)s): image verification skipped, '
+                        'no hash stored'),
+                      {'id': img_id,
                        'base_file': base_file})
 
             # NOTE(mikal): If the checksum file is missing, then we should
@@ -285,7 +316,7 @@ class ImageCacheManager(object):
             LOG.info(_('Removing base file: %s'), base_file)
             try:
                 os.remove(base_file)
-                signature = base_file + '.sha1'
+                signature = get_info_filename(base_file)
                 if os.path.exists(signature):
                     os.remove(signature)
             except OSError, e:
@@ -294,15 +325,14 @@ class ImageCacheManager(object):
                           {'base_file': base_file,
                            'error': e})
 
-    def _handle_base_image(self, img, base_file):
+    def _handle_base_image(self, img_id, base_file):
         """Handle the checks for a single base image."""
 
         image_bad = False
         image_in_use = False
 
-        LOG.info(_('%(container_format)s-%(id)s (%(base_file)s): checking'),
-                 {'container_format': img['container_format'],
-                  'id': img['id'],
+        LOG.info(_('%(id)s (%(base_file)s): checking'),
+                 {'id': img_id,
                   'base_file': base_file})
 
         if base_file in self.unexplained_images:
@@ -310,18 +340,20 @@ class ImageCacheManager(object):
 
         if (base_file and os.path.exists(base_file)
             and os.path.isfile(base_file)):
-            # _verify_checksum returns True if the checksum is ok.
-            image_bad = not self._verify_checksum(img, base_file)
+            # _verify_checksum returns True if the checksum is ok, and None if
+            # there is no checksum file
+            checksum_result = self._verify_checksum(img_id, base_file)
+            if not checksum_result is None:
+                image_bad = not checksum_result
 
         instances = []
-        if str(img['id']) in self.used_images:
-            local, remote, instances = self.used_images[str(img['id'])]
+        if img_id in self.used_images:
+            local, remote, instances = self.used_images[img_id]
             if local > 0:
-                LOG.debug(_('%(container_format)s-%(id)s (%(base_file)s): '
+                LOG.debug(_('%(id)s (%(base_file)s): '
                             'in use: on this node %(local)d local, '
                             '%(remote)d on other nodes'),
-                          {'container_format': img['container_format'],
-                           'id': img['id'],
+                          {'id': img_id,
                            'base_file': base_file,
                            'local': local,
                            'remote': remote})
@@ -330,21 +362,17 @@ class ImageCacheManager(object):
                 self.active_base_files.append(base_file)
 
                 if not base_file:
-                    LOG.warning(_('%(container_format)s-%(id)s '
-                                  '(%(base_file)s): warning -- an absent '
-                                  'base file is in use! instances: '
+                    LOG.warning(_('%(id)s (%(base_file)s): warning -- an '
+                                  'absent base file is in use! instances: '
                                   '%(instance_list)s'),
-                                {'container_format':
-                                     img['container_format'],
-                                 'id': img['id'],
+                                {'id': img_id,
                                  'base_file': base_file,
                                  'instance_list': ' '.join(instances)})
 
             else:
-                LOG.debug(_('%(container_format)s-%(id)s (%(base_file)s): '
-                            'in use on (%(remote)d on other nodes)'),
-                          {'container_format': img['container_format'],
-                           'id': img['id'],
+                LOG.debug(_('%(id)s (%(base_file)s): in use on (%(remote)d on '
+                            'other nodes)'),
+                          {'id': img_id,
                            'base_file': base_file,
                            'remote': remote})
         if image_bad:
@@ -352,24 +380,21 @@ class ImageCacheManager(object):
 
         if base_file:
             if not image_in_use:
-                LOG.debug(_('%(container_format)s-%(id)s (%(base_file)s): '
-                            'image is not in use'),
-                          {'container_format': img['container_format'],
-                           'id': img['id'],
+                LOG.debug(_('%(id)s (%(base_file)s): image is not in use'),
+                          {'id': img_id,
                            'base_file': base_file})
                 self.removable_base_files.append(base_file)
 
             else:
-                LOG.debug(_('%(container_format)s-%(id)s (%(base_file)s): '
-                            'image is in use'),
-                          {'container_format': img['container_format'],
-                           'id': img['id'],
+                LOG.debug(_('%(id)s (%(base_file)s): image is in use'),
+                          {'id': img_id,
                            'base_file': base_file})
+                if os.path.exists(base_file):
+                    virtutils.chown(base_file, os.getuid())
+                    os.utime(base_file, None)
 
     def verify_base_images(self, context):
         """Verify that base images are in a reasonable state."""
-        # TODO(mikal): Write a unit test for this method
-        # TODO(mikal): Handle "generated" images
 
         # NOTE(mikal): The new scheme for base images is as follows -- an
         # image is streamed from the image service to _base (filename is the
@@ -382,7 +407,7 @@ class ImageCacheManager(object):
         # created, but may remain from previous versions.
         self._reset_state()
 
-        base_dir = os.path.join(FLAGS.instances_path, '_base')
+        base_dir = os.path.join(FLAGS.instances_path, FLAGS.base_dir_name)
         if not os.path.exists(base_dir):
             LOG.debug(_('Skipping verification, no base directory at %s'),
                       base_dir)
@@ -392,14 +417,12 @@ class ImageCacheManager(object):
         self._list_base_images(base_dir)
         self._list_running_instances(context)
 
-        # Determine what images are in glance. GlanceImageService.detail uses
-        # _fetch_images which handles pagination for us
-        image_service = image.get_default_image_service()
-        for img in image_service.detail(context):
-            if img['container_format'] != 'ami':
-                continue
-
-            fingerprint = hashlib.sha1(str(img['id'])).hexdigest()
+        # Determine what images are on disk because they're in use
+        for img in self.used_images:
+            fingerprint = hashlib.sha1(img).hexdigest()
+            LOG.debug(_('Image id %(id)s yields fingerprint %(fingerprint)s'),
+                      {'id': img,
+                       'fingerprint': fingerprint})
             for result in self._find_base_file(base_dir, fingerprint):
                 base_file, image_small, image_resized = result
                 self._handle_base_image(img, base_file)
@@ -407,12 +430,11 @@ class ImageCacheManager(object):
                 if not image_small and not image_resized:
                     self.originals.append(base_file)
 
-        # Elements remaining in unexplained_images are not directly from
-        # glance. That might mean they're from a image that was removed from
-        # glance, but it might also mean that they're a resized image.
+        # Elements remaining in unexplained_images might be in use
         inuse_backing_images = self._list_backing_images()
         for backing_path in inuse_backing_images:
-            self.active_base_files.append(backing_path)
+            if not backing_path in self.active_base_files:
+                self.active_base_files.append(backing_path)
 
         # Anything left is an unknown base image
         for img in self.unexplained_images:

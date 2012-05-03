@@ -1,4 +1,4 @@
-# Copyright (c) 2011 Openstack, LLC.
+# Copyright (c) 2011 OpenStack, LLC.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -159,6 +159,9 @@ class HostTestCase(test.TestCase):
         bad_body = {"status": "bad"}
         self.assertRaises(webob.exc.HTTPBadRequest, self.controller.update,
                 self.req, "host_c1", body=bad_body)
+        bad_body2 = {"status": "disablabc"}
+        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.update,
+                self.req, "host_c1", body=bad_body2)
 
     def test_bad_update_key(self):
         bad_body = {"crazy": "bad"}

@@ -28,10 +28,11 @@ import time
 import urllib
 
 from nova.api.ec2 import ec2utils
-from nova.compute import instance_types
 from nova.api.ec2 import inst_state
+from nova.api import validator
 from nova import block_device
 from nova import compute
+from nova.compute import instance_types
 from nova.compute import vm_states
 from nova import crypto
 from nova import db
@@ -40,14 +41,13 @@ from nova import flags
 from nova.image import s3
 from nova import log as logging
 from nova import network
-from nova import rpc
+from nova.openstack.common import importutils
+from nova import quota
 from nova import utils
 from nova import volume
-from nova.api import validator
 
 
 FLAGS = flags.FLAGS
-flags.DECLARE('dhcp_domain', 'nova.network.manager')
 
 LOG = logging.getLogger(__name__)
 
@@ -212,7 +212,7 @@ class CloudController(object):
         self.volume_api = volume.API()
         self.compute_api = compute.API(network_api=self.network_api,
                                        volume_api=self.volume_api)
-        self.sgh = utils.import_object(FLAGS.security_group_handler)
+        self.sgh = importutils.import_object(FLAGS.security_group_handler)
 
     def __str__(self):
         return 'CloudController'
@@ -369,6 +369,17 @@ class CloudController(object):
         return {'keySet': result}
 
     def create_key_pair(self, context, key_name, **kwargs):
+        if not re.match('^[a-zA-Z0-9_\- ]+$', str(key_name)):
+            err = _("Value (%s) for KeyName is invalid."
+                    " Content limited to Alphanumeric character, "
+                    "spaces, dashes, and underscore.") % key_name
+            raise exception.EC2APIError(err)
+
+        if len(str(key_name)) > 255:
+            err = _("Value (%s) for Keyname is invalid."
+                    " Length exceeds maximum of 255.") % key_name
+            raise exception.EC2APIError(err)
+
         LOG.audit(_("Create key pair %s"), key_name, context=context)
         data = _gen_key(context, context.user_id, key_name)
         return {'keyName': key_name,
@@ -452,7 +463,7 @@ class CloudController(object):
                 else:
                     for protocol, min_port, max_port in (('icmp', -1, -1),
                                                          ('tcp', 1, 65535),
-                                                         ('udp', 1, 65536)):
+                                                         ('udp', 1, 65535)):
                         r['ipProtocol'] = protocol
                         r['fromPort'] = min_port
                         r['toPort'] = max_port
@@ -538,13 +549,26 @@ class CloudController(object):
 
             if not utils.is_valid_cidr(cidr_ip):
                 # Raise exception for non-valid address
-                raise exception.InvalidCidr(cidr=cidr_ip)
+                raise exception.EC2APIError(_("Invalid CIDR"))
 
             values['cidr'] = cidr_ip
         else:
             values['cidr'] = '0.0.0.0/0'
 
-        if ip_protocol and from_port and to_port:
+        if source_security_group_name:
+            # Open everything if an explicit port range or type/code are not
+            # specified, but only if a source group was specified.
+            ip_proto_upper = ip_protocol.upper() if ip_protocol else ''
+            if (ip_proto_upper == 'ICMP' and
+                from_port is None and to_port is None):
+                from_port = -1
+                to_port = -1
+            elif (ip_proto_upper in ['TCP', 'UDP'] and from_port is None
+                  and to_port is None):
+                from_port = 1
+                to_port = 65535
+
+        if ip_protocol and from_port is not None and to_port is not None:
 
             ip_protocol = str(ip_protocol)
             try:
@@ -564,7 +588,8 @@ class CloudController(object):
 
             # Verify that from_port must always be less than
             # or equal to to_port
-            if from_port > to_port:
+            if (ip_protocol.upper() in ['TCP', 'UDP'] and
+                (from_port > to_port)):
                 raise exception.InvalidPortRange(from_port=from_port,
                       to_port=to_port, msg="Former value cannot"
                                             " be greater than the later")
@@ -578,7 +603,8 @@ class CloudController(object):
 
             # Verify ICMP type and code
             if (ip_protocol.upper() == "ICMP" and
-                (from_port < -1 or to_port > 255)):
+                (from_port < -1 or from_port > 255 or
+                to_port < -1 or to_port > 255)):
                 raise exception.InvalidPortRange(from_port=from_port,
                       to_port=to_port, msg="For ICMP, the"
                                            " type:code must be valid")
@@ -611,8 +637,8 @@ class CloudController(object):
     def revoke_security_group_ingress(self, context, group_name=None,
                                       group_id=None, **kwargs):
         if not group_name and not group_id:
-            err = "Not enough parameters, need group_name or group_id"
-            raise exception.EC2APIError(_(err))
+            err = _("Not enough parameters, need group_name or group_id")
+            raise exception.EC2APIError(err)
         self.compute_api.ensure_default_security_group(context)
         notfound = exception.SecurityGroupNotFound
         if group_name:
@@ -626,8 +652,8 @@ class CloudController(object):
             if not security_group:
                 raise notfound(security_group_id=group_id)
 
-        msg = "Revoke security group ingress %s"
-        LOG.audit(_(msg), security_group['name'], context=context)
+        msg = _("Revoke security group ingress %s")
+        LOG.audit(msg, security_group['name'], context=context)
         prevalues = []
         try:
             prevalues = kwargs['ip_permissions']
@@ -638,8 +664,8 @@ class CloudController(object):
         for values in prevalues:
             rulesvalues = self._rule_args_to_dict(context, values)
             if not rulesvalues:
-                err = "%s Not enough parameters to build a valid rule"
-                raise exception.EC2APIError(_(err % rulesvalues))
+                err = _("%s Not enough parameters to build a valid rule")
+                raise exception.EC2APIError(err % rulesvalues)
 
             for values_for_rule in rulesvalues:
                 values_for_rule['parent_group_id'] = security_group.id
@@ -665,8 +691,8 @@ class CloudController(object):
     def authorize_security_group_ingress(self, context, group_name=None,
                                          group_id=None, **kwargs):
         if not group_name and not group_id:
-            err = "Not enough parameters, need group_name or group_id"
-            raise exception.EC2APIError(_(err))
+            err = _("Not enough parameters, need group_name or group_id")
+            raise exception.EC2APIError(err)
         self.compute_api.ensure_default_security_group(context)
         notfound = exception.SecurityGroupNotFound
         if group_name:
@@ -680,8 +706,8 @@ class CloudController(object):
             if not security_group:
                 raise notfound(security_group_id=group_id)
 
-        msg = "Authorize security group ingress %s"
-        LOG.audit(_(msg), security_group['name'], context=context)
+        msg = _("Authorize security group ingress %s")
+        LOG.audit(msg, security_group['name'], context=context)
         prevalues = []
         try:
             prevalues = kwargs['ip_permissions']
@@ -691,15 +717,22 @@ class CloudController(object):
         for values in prevalues:
             rulesvalues = self._rule_args_to_dict(context, values)
             if not rulesvalues:
-                err = "%s Not enough parameters to build a valid rule"
-                raise exception.EC2APIError(_(err % rulesvalues))
+                err = _("%s Not enough parameters to build a valid rule")
+                raise exception.EC2APIError(err % rulesvalues)
             for values_for_rule in rulesvalues:
                 values_for_rule['parent_group_id'] = security_group.id
                 if self._security_group_rule_exists(security_group,
                                                     values_for_rule):
-                    err = '%s - This rule already exists in group'
-                    raise exception.EC2APIError(_(err) % values_for_rule)
+                    err = _('%s - This rule already exists in group')
+                    raise exception.EC2APIError(err % values_for_rule)
                 postvalues.append(values_for_rule)
+
+        allowed = quota.allowed_security_group_rules(context,
+                                                   security_group['id'],
+                                                   1)
+        if allowed < 1:
+            msg = _("Quota exceeded, too many security group rules.")
+            raise exception.EC2APIError(msg)
 
         rule_ids = []
         for values_for_rule in postvalues:
@@ -758,6 +791,10 @@ class CloudController(object):
             msg = _('group %s already exists')
             raise exception.EC2APIError(msg % group_name)
 
+        if quota.allowed_security_groups(context, 1) < 1:
+            msg = _("Quota exceeded, too many security groups.")
+            raise exception.EC2APIError(msg)
+
         group = {'user_id': context.user_id,
                  'project_id': context.project_id,
                  'name': group_name,
@@ -772,8 +809,8 @@ class CloudController(object):
     def delete_security_group(self, context, group_name=None, group_id=None,
                               **kwargs):
         if not group_name and not group_id:
-            err = "Not enough parameters, need group_name or group_id"
-            raise exception.EC2APIError(_(err))
+            err = _("Not enough parameters, need group_name or group_id")
+            raise exception.EC2APIError(err)
         notfound = exception.SecurityGroupNotFound
         if group_name:
             security_group = db.security_group_get_by_name(context,
@@ -888,8 +925,13 @@ class CloudController(object):
     def delete_volume(self, context, volume_id, **kwargs):
         validate_ec2_id(volume_id)
         volume_id = ec2utils.ec2_id_to_id(volume_id)
-        volume = self.volume_api.get(context, volume_id)
-        self.volume_api.delete(context, volume)
+
+        try:
+            volume = self.volume_api.get(context, volume_id)
+            self.volume_api.delete(context, volume)
+        except exception.InvalidVolume:
+            raise exception.EC2APIError(_('Delete Failed'))
+
         return True
 
     def attach_volume(self, context, volume_id, instance_id, device, **kwargs):
@@ -901,7 +943,13 @@ class CloudController(object):
         msg = _("Attach volume %(volume_id)s to instance %(instance_id)s"
                 " at %(device)s") % locals()
         LOG.audit(msg, context=context)
-        self.compute_api.attach_volume(context, instance, volume_id, device)
+
+        try:
+            self.compute_api.attach_volume(context, instance,
+                                           volume_id, device)
+        except exception.InvalidVolume:
+            raise exception.EC2APIError(_('Attach Failed.'))
+
         volume = self.volume_api.get(context, volume_id)
         return {'attachTime': volume['attach_time'],
                 'device': volume['mountpoint'],
@@ -915,7 +963,13 @@ class CloudController(object):
         volume_id = ec2utils.ec2_id_to_id(volume_id)
         LOG.audit(_("Detach volume %s"), volume_id, context=context)
         volume = self.volume_api.get(context, volume_id)
-        instance = self.compute_api.detach_volume(context, volume_id=volume_id)
+
+        try:
+            instance = self.compute_api.detach_volume(context,
+                                                      volume_id=volume_id)
+        except exception.InvalidVolume:
+            raise exception.EC2APIError(_('Detach Volume Failed.'))
+
         return {'attachTime': volume['attach_time'],
                 'device': volume['mountpoint'],
                 'instanceId': ec2utils.id_to_ec2_id(instance['id']),
@@ -927,15 +981,14 @@ class CloudController(object):
         kernel_uuid = instance_ref['kernel_id']
         if kernel_uuid is None or kernel_uuid == '':
             return
-        kernel_id = self._get_image_id(context, kernel_uuid)
-        result[key] = ec2utils.image_ec2_id(kernel_id, 'aki')
+        result[key] = ec2utils.glance_id_to_ec2_id(context, kernel_uuid, 'aki')
 
     def _format_ramdisk_id(self, context, instance_ref, result, key):
         ramdisk_uuid = instance_ref['ramdisk_id']
         if ramdisk_uuid is None or ramdisk_uuid == '':
             return
-        ramdisk_id = self._get_image_id(context, ramdisk_uuid)
-        result[key] = ec2utils.image_ec2_id(ramdisk_id, 'ari')
+        result[key] = ec2utils.glance_id_to_ec2_id(context, ramdisk_uuid,
+                                                   'ari')
 
     def describe_instance_attribute(self, context, instance_id, attribute,
                                     **kwargs):
@@ -946,7 +999,7 @@ class CloudController(object):
         def _format_attr_block_device_mapping(instance, result):
             tmp = {}
             self._format_instance_root_device_name(instance, tmp)
-            self._format_instance_bdm(context, instance_id,
+            self._format_instance_bdm(context, instance['uuid'],
                                       tmp['rootDeviceName'], result)
 
         def _format_attr_disable_api_termination(instance, result):
@@ -1046,13 +1099,13 @@ class CloudController(object):
             instances_set.append(i)
         return {'instancesSet': instances_set}
 
-    def _format_instance_bdm(self, context, instance_id, root_device_name,
+    def _format_instance_bdm(self, context, instance_uuid, root_device_name,
                              result):
         """Format InstanceBlockDeviceMappingResponseItemType"""
         root_device_type = 'instance-store'
         mapping = []
         for bdm in db.block_device_mapping_get_all_by_instance(context,
-                                                               instance_id):
+                                                               instance_uuid):
             volume_id = bdm['volume_id']
             if (volume_id is None or bdm['no_device']):
                 continue
@@ -1120,7 +1173,8 @@ class CloudController(object):
                 # always filter out deleted instances
                 search_opts['deleted'] = False
                 instances = self.compute_api.get_all(context,
-                                                     search_opts=search_opts)
+                                                     search_opts=search_opts,
+                                                     sort_dir='asc')
             except exception.NotFound:
                 instances = []
         for instance in instances:
@@ -1132,8 +1186,7 @@ class CloudController(object):
             ec2_id = ec2utils.id_to_ec2_id(instance_id)
             i['instanceId'] = ec2_id
             image_uuid = instance['image_ref']
-            image_id = self._get_image_id(context, image_uuid)
-            i['imageId'] = ec2utils.image_ec2_id(image_id)
+            i['imageId'] = ec2utils.glance_id_to_ec2_id(context, image_uuid)
             self._format_kernel_id(context, instance, i, 'kernelId')
             self._format_ramdisk_id(context, instance, i, 'ramdiskId')
             i['instanceState'] = _state_description(
@@ -1168,7 +1221,7 @@ class CloudController(object):
             i['launchTime'] = instance['created_at']
             i['amiLaunchIndex'] = instance['launch_index']
             self._format_instance_root_device_name(instance, i)
-            self._format_instance_bdm(context, instance_id,
+            self._format_instance_bdm(context, instance['uuid'],
                                       i['rootDeviceName'], i)
             host = instance['host']
             services = db.service_get_all_by_host(context.elevated(), host)
@@ -1185,42 +1238,37 @@ class CloudController(object):
 
         return list(reservations.values())
 
-    def describe_addresses(self, context, **kwargs):
-        return self.format_addresses(context)
-
-    def format_addresses(self, context):
-        addresses = []
-        floaters = self.network_api.get_floating_ips_by_project(context)
-        for floating_ip_ref in floaters:
-            if floating_ip_ref['project_id'] is None:
-                continue
-            address = floating_ip_ref['address']
-            ec2_id = None
-            if floating_ip_ref['fixed_ip_id']:
-                fixed_id = floating_ip_ref['fixed_ip_id']
-                fixed = self.network_api.get_fixed_ip(context, fixed_id)
-                if fixed['instance_id'] is not None:
-                    ec2_id = ec2utils.id_to_ec2_id(fixed['instance_id'])
-            address_rv = {'public_ip': address,
-                          'instance_id': ec2_id}
-            if context.is_admin:
-                details = "%s (%s)" % (address_rv['instance_id'],
-                                       floating_ip_ref['project_id'])
-                address_rv['instance_id'] = details
-            addresses.append(address_rv)
+    def describe_addresses(self, context, public_ip=None, **kwargs):
+        if public_ip:
+            floatings = []
+            for address in public_ip:
+                floating = self.network_api.get_floating_ip_by_address(context,
+                                                                       address)
+                floatings.append(floating)
+        else:
+            floatings = self.network_api.get_floating_ips_by_project(context)
+        addresses = [self._format_address(context, f) for f in floatings]
         return {'addressesSet': addresses}
+
+    def _format_address(self, context, floating_ip):
+        ec2_id = None
+        if floating_ip['fixed_ip_id']:
+            fixed_id = floating_ip['fixed_ip_id']
+            fixed = self.network_api.get_fixed_ip(context, fixed_id)
+            if fixed['instance_id'] is not None:
+                ec2_id = ec2utils.id_to_ec2_id(fixed['instance_id'])
+        address = {'public_ip': floating_ip['address'],
+                   'instance_id': ec2_id}
+        if context.is_admin:
+            details = "%s (%s)" % (address['instance_id'],
+                                   floating_ip['project_id'])
+            address['instance_id'] = details
+        return address
 
     def allocate_address(self, context, **kwargs):
         LOG.audit(_("Allocate address"), context=context)
-        try:
-            public_ip = self.network_api.allocate_floating_ip(context)
-            return {'publicIp': public_ip}
-        except rpc.RemoteError as ex:
-            # NOTE(tr3buchet) - why does this block exist?
-            if ex.exc_type == 'NoMoreFloatingIps':
-                raise exception.NoMoreFloatingIps()
-            else:
-                raise
+        public_ip = self.network_api.allocate_floating_ip(context)
+        return {'publicIp': public_ip}
 
     def release_address(self, context, public_ip, **kwargs):
         LOG.audit(_("Release address %s"), public_ip, context=context)
@@ -1256,16 +1304,17 @@ class CloudController(object):
                 metadata[feature[0].strip()] = feature[1].strip()
         if kwargs.get('kernel_id'):
             kernel = self._get_image(context, kwargs['kernel_id'])
-            kwargs['kernel_id'] = self._get_image_uuid(context, kernel['id'])
+            kwargs['kernel_id'] = ec2utils.id_to_glance_id(context,
+                                                           kernel['id'])
         if kwargs.get('ramdisk_id'):
             ramdisk = self._get_image(context, kwargs['ramdisk_id'])
-            kwargs['ramdisk_id'] = self._get_image_uuid(context,
-                                                        ramdisk['id'])
+            kwargs['ramdisk_id'] = ec2utils.id_to_glance_id(context,
+                                                            ramdisk['id'])
         for bdm in kwargs.get('block_device_mapping', []):
             _parse_block_device_mapping(bdm)
 
         image = self._get_image(context, kwargs['image_id'])
-        image_uuid = self._get_image_uuid(context, image['id'])
+        image_uuid = ec2utils.id_to_glance_id(context, image['id'])
 
         if image:
             image_state = self._get_image_state(image)
@@ -1353,15 +1402,6 @@ class CloudController(object):
             raise exception.ImageNotFound(image_id=ec2_id)
         return image
 
-    # NOTE(bcwaldon): We need access to the image uuid since we directly
-    # call the compute api from this class
-    def _get_image_uuid(self, context, internal_id):
-        return self.image_service.get_image_uuid(context, internal_id)
-
-    # NOTE(bcwaldon): We also need to be able to map image uuids to integers
-    def _get_image_id(self, context, image_uuid):
-        return self.image_service.get_image_id(context, image_uuid)
-
     def _format_image(self, image):
         """Convert from format defined by GlanceImageService to S3 format."""
         i = {}
@@ -1375,12 +1415,19 @@ class CloudController(object):
         ramdisk_id = image['properties'].get('ramdisk_id')
         if ramdisk_id:
             i['ramdiskId'] = ec2utils.image_ec2_id(ramdisk_id, 'ari')
-        i['imageOwnerId'] = image['properties'].get('owner_id')
-        if name:
-            i['imageLocation'] = "%s (%s)" % (image['properties'].
-                                              get('image_location'), name)
+        i['imageOwnerId'] = image.get('owner')
+
+        img_loc = image['properties'].get('image_location')
+        if img_loc:
+            i['imageLocation'] = img_loc
         else:
-            i['imageLocation'] = image['properties'].get('image_location')
+            i['imageLocation'] = "%s (%s)" % (img_loc, name)
+
+        i['name'] = name
+        if not name and img_loc:
+            # This should only occur for images registered with ec2 api
+            # prior to that api populating the glance name
+            i['name'] = img_loc
 
         i['imageState'] = self._get_image_state(image)
         i['description'] = image.get('description')
@@ -1436,9 +1483,17 @@ class CloudController(object):
         return image_id
 
     def register_image(self, context, image_location=None, **kwargs):
-        if image_location is None and 'name' in kwargs:
+        if image_location is None and kwargs.get('name'):
             image_location = kwargs['name']
+        if image_location is None:
+            raise exception.EC2APIError(_('imageLocation is required'))
+
         metadata = {'properties': {'image_location': image_location}}
+
+        if kwargs.get('name'):
+            metadata['name'] = kwargs['name']
+        else:
+            metadata['name'] = image_location
 
         if 'root_device_name' in kwargs:
             metadata['properties']['root_device_name'] = kwargs.get(
@@ -1512,7 +1567,11 @@ class CloudController(object):
         del(image['id'])
 
         image['is_public'] = (operation_type == 'add')
-        return self.image_service.update(context, internal_id, image)
+        try:
+            return self.image_service.update(context, internal_id, image)
+        except exception.ImageNotAuthorized:
+            msg = _('Not allowed to modify attributes for image %s')
+            raise exception.EC2APIError(msg % image_id)
 
     def update_image(self, context, image_id, **kwargs):
         internal_id = ec2utils.ec2_id_to_id(image_id)
@@ -1556,7 +1615,7 @@ class CloudController(object):
                 # NOTE(yamahata): timeout and error. 1 hour for now for safety.
                 #                 Is it too short/long?
                 #                 Or is there any better way?
-                timeout = 1 * 60 * 60 * 60
+                timeout = 1 * 60 * 60
                 if time.time() > start_time + timeout:
                     raise exception.EC2APIError(
                         _('Couldn\'t stop instance with in %d sec') % timeout)

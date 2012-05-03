@@ -27,7 +27,6 @@ SHOULD include dedicated exception logging.
 import functools
 import sys
 
-import novaclient.exceptions
 import webob.exc
 
 from nova import log as logging
@@ -168,6 +167,11 @@ class NovaException(Exception):
                 message = self.message % kwargs
 
             except Exception as e:
+                # kwargs doesn't match a variable in the message
+                # log the issue and the kwargs
+                LOG.exception(_('Exception in string format operation'))
+                for name, value in kwargs.iteritems():
+                    LOG.error("%s: %s" % (name, value))
                 # at least get the core message out if something happened
                 message = self.message
 
@@ -201,7 +205,7 @@ class MelangeConnectionFailed(NovaException):
 
 class NotAuthorized(NovaException):
     message = _("Not authorized.")
-    code = 401
+    code = 403
 
 
 class AdminRequired(NotAuthorized):
@@ -210,6 +214,10 @@ class AdminRequired(NotAuthorized):
 
 class PolicyNotAuthorized(NotAuthorized):
     message = _("Policy doesn't allow %(action)s to be performed.")
+
+
+class ImageNotAuthorized(NovaException):
+    message = _("Not authorized for image %(image_id)s.")
 
 
 class Invalid(NovaException):
@@ -255,6 +263,10 @@ class InvalidVolumeType(Invalid):
 
 class InvalidVolume(Invalid):
     message = _("Invalid volume") + ": %(reason)s"
+
+
+class InvalidMetadata(Invalid):
+    message = _("Invalid metadata") + ": %(reason)s"
 
 
 class InvalidPortRange(Invalid):
@@ -324,6 +336,10 @@ class InstanceResumeFailure(Invalid):
 
 class InstanceRebootFailure(Invalid):
     message = _("Failed to reboot instance") + ": %(reason)s"
+
+
+class InstanceTerminationFailure(Invalid):
+    message = _("Failed to terminate instance") + ": %(reason)s"
 
 
 class ServiceUnavailable(Invalid):
@@ -486,7 +502,7 @@ class InvalidImageRef(Invalid):
 
 class ListingImageRefsNotSupported(Invalid):
     message = _("Some images have been stored via hrefs."
-        + " This version of the api does not support displaying image hrefs.")
+          " This version of the api does not support displaying image hrefs.")
 
 
 class ImageNotFound(NotFound):
@@ -515,6 +531,10 @@ class UserRoleNotFound(NotFound):
 
 class StorageRepositoryNotFound(NotFound):
     message = _("Cannot find SR to read/write VDI.")
+
+
+class NetworkInUse(NovaException):
+    message = _("Network %(network_id)s is still in use.")
 
 
 class NetworkNotCreated(NovaException):
@@ -552,6 +572,10 @@ class NetworkNotFoundForProject(NotFound):
 
 class NetworkHostNotSet(NovaException):
     message = _("Host is not set to the network (%(network_id)s).")
+
+
+class NetworkBusy(NovaException):
+    message = _("Network %(network)s has active ports, cannot delete.")
 
 
 class DatastoreNotFound(NotFound):
@@ -678,6 +702,10 @@ class QuotaNotFound(NotFound):
 
 class ProjectQuotaNotFound(QuotaNotFound):
     message = _("Quota for project %(project_id)s could not be found.")
+
+
+class QuotaClassNotFound(QuotaNotFound):
+    message = _("Quota class %(class_name)s could not be found.")
 
 
 class SecurityGroupNotFound(NotFound):
@@ -898,18 +926,6 @@ class PasteAppNotFound(NotFound):
     message = _("Could not load paste app '%(name)s' from %(path)s")
 
 
-class VSANovaAccessParamNotFound(Invalid):
-    message = _("Nova access parameters were not specified.")
-
-
-class VirtualStorageArrayNotFound(NotFound):
-    message = _("Virtual Storage Array %(id)d could not be found.")
-
-
-class VirtualStorageArrayNotFoundByName(NotFound):
-    message = _("Virtual Storage Array %(name)s could not be found.")
-
-
 class CannotResizeToSameSize(NovaException):
     message = _("When resizing, instances must change size!")
 
@@ -948,6 +964,31 @@ class WillNotSchedule(NovaException):
 
 class QuotaError(NovaException):
     message = _("Quota exceeded") + ": code=%(code)s"
+
+
+class TooManyInstances(QuotaError):
+    message = _("Quota exceeded: already used %(used)d of %(allowed)d"
+                " instances")
+
+
+class VolumeSizeTooLarge(QuotaError):
+    message = _("Maximum volume size exceeded")
+
+
+class MetadataLimitExceeded(QuotaError):
+    message = _("Maximum number of metadata items exceeds %(allowed)d")
+
+
+class OnsetFileLimitExceeded(QuotaError):
+    message = _("Personality file limit exceeded")
+
+
+class OnsetFilePathLimitExceeded(QuotaError):
+    message = _("Personality file path too long")
+
+
+class OnsetFileContentLimitExceeded(QuotaError):
+    message = _("Personality file content too long")
 
 
 class AggregateError(NovaException):
@@ -1015,3 +1056,7 @@ class InstanceNotFound(NotFound):
 
 class InvalidInstanceIDMalformed(Invalid):
     message = _("Invalid id: %(val)s (expecting \"i-...\").")
+
+
+class CouldNotFetchImage(NovaException):
+    message = _("Could not fetch image %(image)s")

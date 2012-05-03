@@ -88,7 +88,7 @@ class FirewallDriver(object):
         """Create rules to block spoofing and allow dhcp.
 
         This gets called when spawning an instance, before
-        :method:`prepare_instance_filter`.
+        :py:meth:`prepare_instance_filter`.
 
         """
         raise NotImplementedError()
@@ -127,16 +127,16 @@ class IptablesFirewallDriver(FirewallDriver):
             self.remove_filters_for_instance(instance)
             self.iptables.apply()
         else:
-            LOG.info(_('Attempted to unfilter instance %s which is not '
-                     'filtered'), instance['id'])
+            LOG.info(_('Attempted to unfilter instance which is not '
+                     'filtered'), instance=instance)
 
     def prepare_instance_filter(self, instance, network_info):
         self.instances[instance['id']] = instance
         self.network_infos[instance['id']] = network_info
         self.add_filters_for_instance(instance)
-        LOG.debug(_('Filters added to instance %s'), instance['uuid'])
+        LOG.debug(_('Filters added to instance'), instance=instance)
         self.refresh_provider_fw_rules()
-        LOG.debug(_('Provider Firewall Rules refreshed'))
+        LOG.debug(_('Provider Firewall Rules refreshed'), instance=instance)
         self.iptables.apply()
 
     def _create_filter(self, ips, chain_name):
@@ -288,7 +288,8 @@ class IptablesFirewallDriver(FirewallDriver):
                                                           security_group['id'])
 
             for rule in rules:
-                LOG.debug(_('Adding security group rule: %r'), rule)
+                LOG.debug(_('Adding security group rule: %r'), rule,
+                          instance=instance)
 
                 if not rule.cidr:
                     version = 4
@@ -313,7 +314,7 @@ class IptablesFirewallDriver(FirewallDriver):
                 elif protocol == 'icmp':
                     args += self._build_icmp_rule(rule, version)
                 if rule.cidr:
-                    LOG.info('Using cidr %r', rule.cidr)
+                    LOG.debug('Using cidr %r', rule.cidr, instance=instance)
                     args += ['-s', rule.cidr]
                     fw_rules += [' '.join(args)]
                 else:
@@ -326,19 +327,20 @@ class IptablesFirewallDriver(FirewallDriver):
                         import nova.network
                         nw_api = nova.network.API()
                         for instance in rule['grantee_group']['instances']:
-                            LOG.info('instance: %r', instance)
-                            ips = []
                             nw_info = nw_api.get_instance_nw_info(ctxt,
                                                                   instance)
-                            for net in nw_info:
-                                ips.extend(net[1]['ips'])
 
-                            LOG.info('ips: %r', ips)
+                            ips = [ip['address']
+                                for ip in nw_info.fixed_ips()
+                                    if ip['version'] == version]
+
+                            LOG.debug('ips: %r', ips, instance=instance)
                             for ip in ips:
-                                subrule = args + ['-s %s' % ip['ip']]
+                                subrule = args + ['-s %s' % ip]
                                 fw_rules += [' '.join(subrule)]
 
-                LOG.info('Using fw_rules: %r', fw_rules)
+                LOG.debug('Using fw_rules: %r', fw_rules, instance=instance)
+
         ipv4_rules += ['-j $sg-fallback']
         ipv6_rules += ['-j $sg-fallback']
 
@@ -362,7 +364,7 @@ class IptablesFirewallDriver(FirewallDriver):
             self.add_filters_for_instance(instance)
 
     def refresh_provider_fw_rules(self):
-        """See class:FirewallDriver: docs."""
+        """See :class:`FirewallDriver` docs."""
         self._do_refresh_provider_fw_rules()
         self.iptables.apply()
 
@@ -452,3 +454,6 @@ class NoopFirewallDriver(object):
 
     def __getattr__(self, key):
         return self._noop
+
+    def instance_filter_exists(self, instance, network_info):
+        return True

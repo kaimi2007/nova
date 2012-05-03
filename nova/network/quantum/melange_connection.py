@@ -21,6 +21,7 @@ import socket
 import time
 import urllib
 
+from nova import exception
 from nova import flags
 from nova import log as logging
 from nova.openstack.common import cfg
@@ -92,7 +93,7 @@ class MelangeConnection(object):
                 response_str = response.read()
                 if response.status < 400:
                     return response_str
-                raise Exception(_("Server returned error: %s" % response_str))
+                raise Exception(_("Server returned error: %s") % response_str)
             except (socket.error, IOError), e:
                 LOG.exception(_('Connection error contacting melange'
                                 ' service, retrying'))
@@ -161,6 +162,14 @@ class MelangeConnection(object):
 
         response = self.get(url, headers=json_content_type)
         return json.loads(response)['ip_addresses']
+
+    def get_allocated_ips_by_address(self, address):
+        url = "ipam/allocated_ip_addresses"
+
+        response = self.get(url, params={'address': address},
+                            headers=json_content_type)
+
+        return json.loads(response).get('ip_addresses', [])
 
     def get_allocated_ips_for_network(self, network_id, project_id=None):
         tenant_scope = "/tenants/%s" % project_id if project_id else ""

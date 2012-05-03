@@ -45,19 +45,30 @@ quota_opts = [
     cfg.IntOpt('quota_metadata_items',
                default=128,
                help='number of metadata items allowed per instance'),
-    cfg.IntOpt('quota_max_injected_files',
+    cfg.IntOpt('quota_injected_files',
                default=5,
                help='number of injected files allowed'),
-    cfg.IntOpt('quota_max_injected_file_content_bytes',
+    cfg.IntOpt('quota_injected_file_content_bytes',
                default=10 * 1024,
                help='number of bytes allowed per injected file'),
-    cfg.IntOpt('quota_max_injected_file_path_bytes',
+    cfg.IntOpt('quota_injected_file_path_bytes',
                default=255,
                help='number of bytes allowed per injected file path'),
+    cfg.IntOpt('quota_security_groups',
+               default=10,
+               help='number of security groups per project'),
+    cfg.IntOpt('quota_security_group_rules',
+               default=20,
+               help='number of security rules per security group'),
     ]
 
 FLAGS = flags.FLAGS
 FLAGS.register_opts(quota_opts)
+
+
+quota_resources = ['metadata_items', 'injected_file_content_bytes',
+        'volumes', 'gigabytes', 'ram', 'floating_ips', 'instances',
+        'injected_files', 'cores', 'security_groups', 'security_group_rules']
 
 
 def _get_default_quotas():
@@ -69,28 +80,43 @@ def _get_default_quotas():
         'gigabytes': FLAGS.quota_gigabytes,
         'floating_ips': FLAGS.quota_floating_ips,
         'metadata_items': FLAGS.quota_metadata_items,
-        'injected_files': FLAGS.quota_max_injected_files,
+        'injected_files': FLAGS.quota_injected_files,
         'injected_file_content_bytes':
-            FLAGS.quota_max_injected_file_content_bytes,
+            FLAGS.quota_injected_file_content_bytes,
+        'security_groups': FLAGS.quota_security_groups,
+        'security_group_rules': FLAGS.quota_security_group_rules,
     }
     # -1 in the quota flags means unlimited
+    return defaults
+
+
+def get_class_quotas(context, quota_class, defaults=None):
+    """Update defaults with the quota class values."""
+
+    if not defaults:
+        defaults = _get_default_quotas()
+
+    quota = db.quota_class_get_all_by_name(context, quota_class)
     for key in defaults.keys():
-        if defaults[key] == -1:
-            defaults[key] = None
+        if key in quota:
+            defaults[key] = quota[key]
+
     return defaults
 
 
 def get_project_quotas(context, project_id):
-    rval = _get_default_quotas()
+    defaults = _get_default_quotas()
+    if context.quota_class:
+        get_class_quotas(context, context.quota_class, defaults)
     quota = db.quota_get_all_by_project(context, project_id)
-    for key in rval.keys():
+    for key in defaults.keys():
         if key in quota:
-            rval[key] = quota[key]
-    return rval
+            defaults[key] = quota[key]
+    return defaults
 
 
 def _get_request_allotment(requested, used, quota):
-    if quota is None:
+    if quota == -1:
         return requested
     return quota - used
 
@@ -152,6 +178,32 @@ def allowed_floating_ips(context, requested_floating_ips):
     return min(requested_floating_ips, allowed_floating_ips)
 
 
+def allowed_security_groups(context, requested_security_groups):
+    """Check quota and return min(requested, allowed) security groups."""
+    project_id = context.project_id
+    context = context.elevated()
+    used_sec_groups = db.security_group_count_by_project(context, project_id)
+    quota = get_project_quotas(context, project_id)
+    allowed_sec_groups = _get_request_allotment(requested_security_groups,
+                                                  used_sec_groups,
+                                                  quota['security_groups'])
+    return min(requested_security_groups, allowed_sec_groups)
+
+
+def allowed_security_group_rules(context, security_group_id,
+        requested_rules):
+    """Check quota and return min(requested, allowed) sec group rules."""
+    project_id = context.project_id
+    context = context.elevated()
+    used_rules = db.security_group_rule_count_by_group(context,
+                                                            security_group_id)
+    quota = get_project_quotas(context, project_id)
+    allowed_rules = _get_request_allotment(requested_rules,
+                                              used_rules,
+                                              quota['security_group_rules'])
+    return min(requested_rules, allowed_rules)
+
+
 def _calculate_simple_quota(context, resource, requested):
     """Check quota for resource; return min(requested, allowed)."""
     quota = get_project_quotas(context, context.project_id)
@@ -179,4 +231,4 @@ def allowed_injected_file_content_bytes(context, requested_bytes):
 
 def allowed_injected_file_path_bytes(context):
     """Return the number of bytes allowed in an injected file path."""
-    return FLAGS.quota_max_injected_file_path_bytes
+    return FLAGS.quota_injected_file_path_bytes

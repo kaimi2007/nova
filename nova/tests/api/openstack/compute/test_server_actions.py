@@ -16,7 +16,6 @@
 import base64
 
 import mox
-import stubout
 import webob
 
 from nova.api.openstack.compute import servers
@@ -24,6 +23,7 @@ from nova.compute import vm_states
 import nova.db
 from nova import exception
 from nova import flags
+from nova.openstack.common import importutils
 from nova import test
 from nova.tests.api.openstack import fakes
 from nova import utils
@@ -56,7 +56,6 @@ class ServerActionsControllerTest(test.TestCase):
     def setUp(self):
         super(ServerActionsControllerTest, self).setUp()
 
-        self.stubs = stubout.StubOutForTesting()
         fakes.stub_out_auth(self.stubs)
         self.stubs.Set(nova.db, 'instance_get_by_uuid',
                 fakes.fake_instance_get(vm_state=vm_states.ACTIVE,
@@ -69,7 +68,7 @@ class ServerActionsControllerTest(test.TestCase):
         fakes.stub_out_compute_api_snapshot(self.stubs)
         fakes.stub_out_image_service(self.stubs)
         service_class = 'nova.image.glance.GlanceImageService'
-        self.service = utils.import_object(service_class)
+        self.service = importutils.import_object(service_class)
         self.service.delete_all()
         self.sent_to_glance = {}
         fakes.stub_out_glance_add_image(self.stubs, self.sent_to_glance)
@@ -80,10 +79,6 @@ class ServerActionsControllerTest(test.TestCase):
         self._image_href = '155d900f-4e14-4e4c-a73d-069cbf4541e6'
 
         self.controller = servers.Controller()
-
-    def tearDown(self):
-        self.stubs.UnsetAll()
-        super(ServerActionsControllerTest, self).tearDown()
 
     def test_server_change_password(self):
         mock_method = MockSetAdminPassword()
@@ -209,6 +204,52 @@ class ServerActionsControllerTest(test.TestCase):
 
         self.assertEqual(robj['location'], self_href)
 
+    def test_rebuild_instance_with_image_uuid(self):
+        info = dict(image_href_in_call=None)
+
+        def rebuild(self2, context, instance, image_href, *args, **kwargs):
+            info['image_href_in_call'] = image_href
+
+        self.stubs.Set(nova.db, 'instance_get',
+                fakes.fake_instance_get(vm_state=vm_states.ACTIVE))
+        self.stubs.Set(nova.compute.API, 'rebuild', rebuild)
+
+        # proper local hrefs must start with 'http://localhost/v2/'
+        image_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
+        image_href = 'http://localhost/v2/fake/images/%s' % image_uuid
+        body = {
+            'rebuild': {
+                'imageRef': image_uuid,
+            },
+        }
+
+        req = fakes.HTTPRequest.blank('/v2/fake/servers/a/action')
+        self.controller._action_rebuild(req, FAKE_UUID, body)
+        self.assertEqual(info['image_href_in_call'], image_uuid)
+
+    def test_rebuild_instance_with_image_href_uses_uuid(self):
+        info = dict(image_href_in_call=None)
+
+        def rebuild(self2, context, instance, image_href, *args, **kwargs):
+            info['image_href_in_call'] = image_href
+
+        self.stubs.Set(nova.db, 'instance_get',
+                fakes.fake_instance_get(vm_state=vm_states.ACTIVE))
+        self.stubs.Set(nova.compute.API, 'rebuild', rebuild)
+
+        # proper local hrefs must start with 'http://localhost/v2/'
+        image_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
+        image_href = 'http://localhost/v2/fake/images/%s' % image_uuid
+        body = {
+            'rebuild': {
+                'imageRef': image_href,
+            },
+        }
+
+        req = fakes.HTTPRequest.blank('/v2/fake/servers/a/action')
+        self.controller._action_rebuild(req, FAKE_UUID, body)
+        self.assertEqual(info['image_href_in_call'], image_uuid)
+
     def test_rebuild_accepted_minimum_pass_disabled(self):
         # run with enable_instance_password disabled to verify adminPass
         # is missing from response. See lp bug 921814
@@ -237,7 +278,7 @@ class ServerActionsControllerTest(test.TestCase):
     def test_rebuild_raises_conflict_on_invalid_state(self):
         body = {
             "rebuild": {
-                "imageRef": "http://localhost/images/2",
+                "imageRef": self._image_href,
             },
         }
 
@@ -419,7 +460,6 @@ class ServerActionsControllerTest(test.TestCase):
         self.mox.ReplayAll()
 
         self.controller._action_rebuild(req, FAKE_UUID, body)
-        self.mox.VerifyAll()
 
     def test_resize_server(self):
 
@@ -665,10 +705,8 @@ class ServerActionsControllerTest(test.TestCase):
 class TestServerActionXMLDeserializer(test.TestCase):
 
     def setUp(self):
+        super(TestServerActionXMLDeserializer, self).setUp()
         self.deserializer = servers.ActionDeserializer()
-
-    def tearDown(self):
-        pass
 
     def test_create_image(self):
         serial_request = """
@@ -716,6 +754,16 @@ class TestServerActionXMLDeserializer(test.TestCase):
         serial_request = """<?xml version="1.0" encoding="UTF-8"?>
                 <changePassword
                     xmlns="http://docs.openstack.org/compute/api/v1.1"/> """
+        self.assertRaises(AttributeError,
+                          self.deserializer.deserialize,
+                          serial_request,
+                          'action')
+
+    def test_change_pass_empty_pass(self):
+        serial_request = """<?xml version="1.0" encoding="UTF-8"?>
+                <changePassword
+                    xmlns="http://docs.openstack.org/compute/api/v1.1"
+                    adminPass=""/> """
         self.assertRaises(AttributeError,
                           self.deserializer.deserialize,
                           serial_request,
@@ -836,6 +884,17 @@ class TestServerActionXMLDeserializer(test.TestCase):
                         <file path="/etc/banner.txt">Mg==</file>
                     </personality>
                 </rebuild>"""
+        self.assertRaises(AttributeError,
+                          self.deserializer.deserialize,
+                          serial_request,
+                          'action')
+
+    def test_rebuild_blank_name(self):
+        serial_request = """<?xml version="1.0" encoding="UTF-8"?>
+                <rebuild
+                    xmlns="http://docs.openstack.org/compute/api/v1.1"
+                    imageRef="http://localhost/images/1"
+                    name=""/>"""
         self.assertRaises(AttributeError,
                           self.deserializer.deserialize,
                           serial_request,

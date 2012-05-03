@@ -60,8 +60,8 @@ class DbApiTestCase(test.TestCase):
 
     def test_instance_get_all_by_filters(self):
         args = {'reservation_id': 'a', 'image_ref': 1, 'host': 'host1'}
-        inst1 = db.instance_create(self.context, args)
-        inst2 = db.instance_create(self.context, args)
+        db.instance_create(self.context, args)
+        db.instance_create(self.context, args)
         result = db.instance_get_all_by_filters(self.context, {})
         self.assertTrue(2, len(result))
 
@@ -89,7 +89,7 @@ class DbApiTestCase(test.TestCase):
 
         # Ensure one migration older than 10 seconds is returned.
         updated_at = datetime.datetime(2000, 01, 01, 12, 00, 00)
-        values = {"status": "FINISHED", "updated_at": updated_at}
+        values = {"status": "finished", "updated_at": updated_at}
         migration = db.migration_create(ctxt, values)
         results = db.migration_get_all_unconfirmed(ctxt, 10)
         self.assertEqual(1, len(results))
@@ -97,7 +97,7 @@ class DbApiTestCase(test.TestCase):
 
         # Ensure the new migration is not returned.
         updated_at = datetime.datetime.utcnow()
-        values = {"status": "FINISHED", "updated_at": updated_at}
+        values = {"status": "finished", "updated_at": updated_at}
         migration = db.migration_create(ctxt, values)
         results = db.migration_get_all_unconfirmed(ctxt, 10)
         self.assertEqual(0, len(results))
@@ -135,6 +135,25 @@ class DbApiTestCase(test.TestCase):
         self.assertEqual(36, len(network.uuid))
         db_network = db.network_get(ctxt, network.id)
         self.assertEqual(network.uuid, db_network.uuid)
+
+    def test_network_delete_safe(self):
+        ctxt = context.get_admin_context()
+        values = {'host': 'localhost', 'project_id': 'project1'}
+        network = db.network_create_safe(ctxt, values)
+        db_network = db.network_get(ctxt, network.id)
+        values = {'network_id': network['id'], 'address': 'fake1'}
+        address1 = db.fixed_ip_create(ctxt, values)
+        values = {'network_id': network['id'],
+                  'address': 'fake2',
+                  'allocated': True}
+        address2 = db.fixed_ip_create(ctxt, values)
+        self.assertRaises(exception.NetworkInUse,
+                          db.network_delete_safe, ctxt, network['id'])
+        db.fixed_ip_update(ctxt, address2, {'allocated': False})
+        network = db.network_delete_safe(ctxt, network['id'])
+        ctxt = ctxt.elevated(read_deleted='yes')
+        fixed_ip = db.fixed_ip_get_by_address(ctxt, address1)
+        self.assertTrue(fixed_ip['deleted'])
 
     def test_network_create_with_duplicate_vlan(self):
         ctxt = context.get_admin_context()
@@ -281,6 +300,82 @@ class DbApiTestCase(test.TestCase):
         db.dnsdomain_unregister(ctxt, domain1)
         db.dnsdomain_unregister(ctxt, domain2)
 
+    def test_network_get_associated_fixed_ips(self):
+        ctxt = context.get_admin_context()
+        values = {'host': 'foo', 'hostname': 'myname'}
+        instance = db.instance_create(ctxt, values)
+        values = {'address': 'bar', 'instance_id': instance['id']}
+        vif = db.virtual_interface_create(ctxt, values)
+        values = {'address': 'baz',
+                  'network_id': 1,
+                  'allocated': True,
+                  'instance_id': instance['id'],
+                  'virtual_interface_id': vif['id']}
+        fixed_address = db.fixed_ip_create(ctxt, values)
+        data = db.network_get_associated_fixed_ips(ctxt, 1)
+        self.assertEqual(len(data), 1)
+        record = data[0]
+        self.assertEqual(record['address'], fixed_address)
+        self.assertEqual(record['instance_id'], instance['id'])
+        self.assertEqual(record['network_id'], 1)
+        self.assertEqual(record['instance_created'], instance['created_at'])
+        self.assertEqual(record['instance_updated'], instance['updated_at'])
+        self.assertEqual(record['instance_hostname'], instance['hostname'])
+        self.assertEqual(record['vif_id'], vif['id'])
+        self.assertEqual(record['vif_address'], vif['address'])
+        data = db.network_get_associated_fixed_ips(ctxt, 1, 'nothing')
+        self.assertEqual(len(data), 0)
+
+    def _timeout_test(self, ctxt, timeout, multi_host):
+        values = {'host': 'foo'}
+        instance = db.instance_create(ctxt, values)
+        values = {'multi_host': multi_host, 'host': 'bar'}
+        net = db.network_create_safe(ctxt, values)
+        old = time = timeout - datetime.timedelta(seconds=5)
+        new = time = timeout + datetime.timedelta(seconds=5)
+        # should deallocate
+        values = {'allocated': False,
+                  'instance_id': instance['id'],
+                  'network_id': net['id'],
+                  'updated_at': old}
+        db.fixed_ip_create(ctxt, values)
+        # still allocated
+        values = {'allocated': True,
+                  'instance_id': instance['id'],
+                  'network_id': net['id'],
+                  'updated_at': old}
+        db.fixed_ip_create(ctxt, values)
+        # wrong network
+        values = {'allocated': False,
+                  'instance_id': instance['id'],
+                  'network_id': None,
+                  'updated_at': old}
+        db.fixed_ip_create(ctxt, values)
+        # too new
+        values = {'allocated': False,
+                  'instance_id': instance['id'],
+                  'network_id': None,
+                  'updated_at': new}
+        db.fixed_ip_create(ctxt, values)
+
+    def test_fixed_ip_disassociate_all_by_timeout_single_host(self):
+        now = utils.utcnow()
+        ctxt = context.get_admin_context()
+        self._timeout_test(ctxt, now, False)
+        result = db.fixed_ip_disassociate_all_by_timeout(ctxt, 'foo', now)
+        self.assertEqual(result, 0)
+        result = db.fixed_ip_disassociate_all_by_timeout(ctxt, 'bar', now)
+        self.assertEqual(result, 1)
+
+    def test_fixed_ip_disassociate_all_by_timeout_multi_host(self):
+        now = utils.utcnow()
+        ctxt = context.get_admin_context()
+        self._timeout_test(ctxt, now, True)
+        result = db.fixed_ip_disassociate_all_by_timeout(ctxt, 'foo', now)
+        self.assertEqual(result, 1)
+        result = db.fixed_ip_disassociate_all_by_timeout(ctxt, 'bar', now)
+        self.assertEqual(result, 0)
+
 
 def _get_fake_aggr_values():
     return {'name': 'fake_aggregate',
@@ -320,9 +415,6 @@ class AggregateDBApiTestCase(test.TestCase):
         self.project_id = 'fake'
         self.context = context.RequestContext(self.user_id, self.project_id)
 
-    def tearDown(self):
-        super(AggregateDBApiTestCase, self).tearDown()
-
     def test_aggregate_create(self):
         """Ensure aggregate can be created with no metadata."""
         result = _create_aggregate(metadata=None)
@@ -336,6 +428,7 @@ class AggregateDBApiTestCase(test.TestCase):
         r2 = _create_aggregate(values=values)
         self.assertEqual(r2.name, values['name'])
         self.assertEqual(r2.availability_zone, values['availability_zone'])
+        self.assertEqual(r2.operational_state, "created")
 
     def test_aggregate_create_raise_exist_exc(self):
         """Ensure aggregate names are distinct."""
@@ -410,8 +503,11 @@ class AggregateDBApiTestCase(test.TestCase):
         ctxt = context.get_admin_context()
         result = _create_aggregate(context=ctxt, metadata=None)
         db.aggregate_delete(ctxt, result['id'])
-        expected = db.aggregate_get_all(ctxt, read_deleted='no')
+        expected = db.aggregate_get_all(ctxt)
         self.assertEqual(0, len(expected))
+        aggregate = db.aggregate_get(ctxt.elevated(read_deleted='yes'),
+                                     result['id'])
+        self.assertEqual(aggregate["operational_state"], "dismissed")
 
     def test_aggregate_update(self):
         """Ensure an aggregate can be updated."""
@@ -478,7 +574,7 @@ class AggregateDBApiTestCase(test.TestCase):
                                                 values=values, metadata=None))
         for c in xrange(1, remove_counter):
             db.aggregate_delete(ctxt, aggregates[c - 1].id)
-        results = db.aggregate_get_all(ctxt, read_deleted='no')
+        results = db.aggregate_get_all(ctxt)
         self.assertEqual(len(results), add_counter - remove_counter)
 
     def test_aggregate_metadata_add(self):
@@ -536,8 +632,7 @@ class AggregateDBApiTestCase(test.TestCase):
         host = _get_fake_aggr_hosts()[0]
         db.aggregate_host_delete(ctxt, result.id, host)
         db.aggregate_host_add(ctxt, result.id, host)
-        expected = db.aggregate_host_get_all(ctxt, result.id,
-                                             read_deleted='no')
+        expected = db.aggregate_host_get_all(ctxt, result.id)
         self.assertEqual(len(expected), 1)
 
     def test_aggregate_host_add_duplicate_raise_conflict(self):
@@ -574,8 +669,7 @@ class AggregateDBApiTestCase(test.TestCase):
         result = _create_aggregate_with_hosts(context=ctxt, metadata=None)
         db.aggregate_host_delete(ctxt, result.id,
                                  _get_fake_aggr_hosts()[0])
-        expected = db.aggregate_host_get_all(ctxt, result.id,
-                                             read_deleted='no')
+        expected = db.aggregate_host_get_all(ctxt, result.id)
         self.assertEqual(0, len(expected))
 
     def test_aggregate_host_delete_raise_not_found(self):
@@ -624,7 +718,7 @@ class CapacityTestCase(test.TestCase):
         self.assertEquals(item.free_ram_mb, 1024 - 256)
 
     def test_compute_node_set(self):
-        item = self._create_helper('host1')
+        self._create_helper('host1')
 
         x = db.compute_node_utilization_set(self.ctxt, 'host1',
                             free_ram_mb=2048, free_disk_gb=4096)
@@ -646,7 +740,7 @@ class CapacityTestCase(test.TestCase):
         self.assertEquals(x.running_vms, 5)
 
     def test_compute_node_utilization_update(self):
-        item = self._create_helper('host1')
+        self._create_helper('host1')
 
         x = db.compute_node_utilization_update(self.ctxt, 'host1',
                                                free_ram_mb_delta=-24)
@@ -682,3 +776,43 @@ class CapacityTestCase(test.TestCase):
         self.assertEquals(x.free_disk_gb, 2000)
         self.assertEquals(x.current_workload, 2)
         self.assertEquals(x.running_vms, 5)
+
+
+class TestIpAllocation(test.TestCase):
+
+    def setUp(self):
+        super(TestIpAllocation, self).setUp()
+        self.ctxt = context.get_admin_context()
+        self.instance = db.instance_create(self.ctxt, {})
+        self.network = db.network_create_safe(self.ctxt, {})
+
+    def create_fixed_ip(self, **params):
+        default_params = {'address': '192.168.0.1'}
+        default_params.update(params)
+        return db.fixed_ip_create(self.ctxt, default_params)
+
+    def test_fixed_ip_associate_fails_if_ip_not_in_network(self):
+        self.assertRaises(exception.FixedIpNotFoundForNetwork,
+                          db.fixed_ip_associate,
+                          self.ctxt, None, None)
+
+    def test_fixed_ip_associate_fails_if_ip_in_use(self):
+        address = self.create_fixed_ip(instance_id=self.instance.id)
+        self.assertRaises(exception.FixedIpAlreadyInUse,
+                          db.fixed_ip_associate,
+                          self.ctxt, address, self.instance.id)
+
+    def test_fixed_ip_associate_succeeds(self):
+        address = self.create_fixed_ip(network_id=self.network.id)
+        db.fixed_ip_associate(self.ctxt, address, self.instance.id,
+                              network_id=self.network.id)
+        fixed_ip = db.fixed_ip_get_by_address(self.ctxt, address)
+        self.assertEqual(fixed_ip.instance_id, self.instance.id)
+
+    def test_fixed_ip_associate_succeeds_and_sets_network(self):
+        address = self.create_fixed_ip()
+        db.fixed_ip_associate(self.ctxt, address, self.instance.id,
+                              network_id=self.network.id)
+        fixed_ip = db.fixed_ip_get_by_address(self.ctxt, address)
+        self.assertEqual(fixed_ip.instance_id, self.instance.id)
+        self.assertEqual(fixed_ip.network_id, self.network.id)

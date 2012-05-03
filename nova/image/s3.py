@@ -24,13 +24,12 @@ import os
 import shutil
 import tarfile
 import tempfile
-from xml.etree import ElementTree
 
 import boto.s3.connection
 import eventlet
+from lxml import etree
 
 from nova import rpc
-import nova.db.api
 from nova import exception
 from nova import flags
 from nova import image
@@ -52,6 +51,13 @@ s3_opts = [
     cfg.StrOpt('s3_secret_key',
                default='notchecked',
                help='secret key to use for s3 server for images'),
+    cfg.BoolOpt('s3_use_ssl',
+               default=False,
+               help='whether to use ssl when talking to s3'),
+    cfg.BoolOpt('s3_affix_tenant',
+               default=False,
+               help='whether to affix the tenant id to the access key '
+                    'when downloading from s3'),
     ]
 
 FLAGS = flags.FLAGS
@@ -65,35 +71,18 @@ class S3ImageService(object):
         self.service = service or image.get_default_image_service()
         self.service.__init__(*args, **kwargs)
 
-    def get_image_uuid(self, context, image_id):
-        return nova.db.api.s3_image_get(context, image_id)['uuid']
-
-    def get_image_id(self, context, image_uuid):
-        return nova.db.api.s3_image_get_by_uuid(context, image_uuid)['id']
-
-    def _create_image_id(self, context, image_uuid):
-        return nova.db.api.s3_image_create(context, image_uuid)['id']
-
     def _translate_uuids_to_ids(self, context, images):
         return [self._translate_uuid_to_id(context, img) for img in images]
 
     def _translate_uuid_to_id(self, context, image):
-        def _find_or_create(image_uuid):
-            if image_uuid is None:
-                return
-            try:
-                return self.get_image_id(context, image_uuid)
-            except exception.NotFound:
-                return self._create_image_id(context, image_uuid)
-
         image_copy = image.copy()
 
         try:
-            image_id = image_copy['id']
+            image_uuid = image_copy['id']
         except KeyError:
             pass
         else:
-            image_copy['id'] = _find_or_create(image_id)
+            image_copy['id'] = ec2utils.glance_id_to_id(context, image_uuid)
 
         for prop in ['kernel_id', 'ramdisk_id']:
             try:
@@ -101,7 +90,29 @@ class S3ImageService(object):
             except (KeyError, ValueError):
                 pass
             else:
-                image_copy['properties'][prop] = _find_or_create(image_uuid)
+                image_id = ec2utils.glance_id_to_id(context, image_uuid)
+                image_copy['properties'][prop] = image_id
+
+        return image_copy
+
+    def _translate_id_to_uuid(self, context, image):
+        image_copy = image.copy()
+
+        try:
+            image_id = image_copy['id']
+        except KeyError:
+            pass
+        else:
+            image_copy['id'] = ec2utils.id_to_glance_id(context, image_id)
+
+        for prop in ['kernel_id', 'ramdisk_id']:
+            try:
+                image_id = image_copy['properties'][prop]
+            except (KeyError, ValueError):
+                pass
+            else:
+                image_uuid = ec2utils.id_to_glance_id(context, image_id)
+                image_copy['properties'][prop] = image_uuid
 
         return image_copy
 
@@ -115,11 +126,12 @@ class S3ImageService(object):
         return image
 
     def delete(self, context, image_id):
-        image_uuid = self.get_image_uuid(context, image_id)
+        image_uuid = ec2utils.id_to_glance_id(context, image_id)
         self.service.delete(context, image_uuid)
 
     def update(self, context, image_id, metadata, data=None):
-        image_uuid = self.get_image_uuid(context, image_id)
+        image_uuid = ec2utils.id_to_glance_id(context, image_id)
+        metadata = self._translate_id_to_uuid(context, metadata)
         image = self.service.update(context, image_uuid, metadata, data)
         return self._translate_uuid_to_id(context, image)
 
@@ -136,7 +148,7 @@ class S3ImageService(object):
         return self._translate_uuids_to_ids(context, images)
 
     def show(self, context, image_id):
-        image_uuid = self.get_image_uuid(context, image_id)
+        image_uuid = ec2utils.id_to_glance_id(context, image_id)
         image = self.service.show(context, image_uuid)
         return self._translate_uuid_to_id(context, image)
 
@@ -149,11 +161,13 @@ class S3ImageService(object):
         # NOTE(vish): access and secret keys for s3 server are not
         #             checked in nova-objectstore
         access = FLAGS.s3_access_key
+        if FLAGS.s3_affix_tenant:
+            access = '%s:%s' % (access, context.project_id)
         secret = FLAGS.s3_secret_key
         calling = boto.s3.connection.OrdinaryCallingFormat()
         return boto.s3.connection.S3Connection(aws_access_key_id=access,
                                                aws_secret_access_key=secret,
-                                               is_secure=False,
+                                               is_secure=FLAGS.s3_use_ssl,
                                                calling_format=calling,
                                                port=FLAGS.s3_port,
                                                host=FLAGS.s3_host)
@@ -166,7 +180,7 @@ class S3ImageService(object):
         return local_filename
 
     def _s3_parse_manifest(self, context, metadata, manifest):
-        manifest = ElementTree.fromstring(manifest)
+        manifest = etree.fromstring(manifest)
         image_format = 'ami'
         image_type = 'machine'
 
@@ -216,12 +230,10 @@ class S3ImageService(object):
             mappings = []
 
         properties = metadata['properties']
-        properties['project_id'] = context.project_id
         properties['architecture'] = arch
 
         def _translate_dependent_image_id(image_key, image_id):
-            image_id = ec2utils.ec2_id_to_id(image_id)
-            image_uuid = self.get_image_uuid(context, image_id)
+            image_uuid = ec2utils.ec2_id_to_glance_id(context, image_id)
             properties[image_key] = image_uuid
 
         if kernel_id:
@@ -248,7 +260,7 @@ class S3ImageService(object):
 
         # extract the new uuid and generate an int id to present back to user
         image_uuid = image['id']
-        image['id'] = self._create_image_id(context, image_uuid)
+        image['id'] = ec2utils.glance_id_to_id(context, image_uuid)
 
         # return image_uuid so the caller can still make use of image_service
         return manifest, image, image_uuid
@@ -271,6 +283,7 @@ class S3ImageService(object):
 
         def delayed_create():
             """This handles the fetching and decrypting of the part files."""
+            context.update_store()
             log_vars = {'image_location': image_location,
                         'image_path': image_path}
             metadata['properties']['image_state'] = 'downloading'

@@ -18,7 +18,7 @@
 
 import netaddr
 
-from nova import context
+import nova.context
 from nova import db
 from nova import exception
 from nova import flags
@@ -31,14 +31,14 @@ from nova import utils
 FLAGS = flags.FLAGS
 
 
-def notify_usage_exists(instance_ref, current_period=False):
+def notify_usage_exists(context, instance_ref, current_period=False):
     """ Generates 'exists' notification for an instance for usage auditing
         purposes.
 
         Generates usage for last completed period, unless 'current_period'
         is True."""
-    admin_context = context.get_admin_context(read_deleted='yes')
-    begin, end = utils.current_audit_period()
+    admin_context = nova.context.get_admin_context(read_deleted='yes')
+    begin, end = utils.last_completed_audit_period()
     bw = {}
     if current_period:
         audit_start = end
@@ -57,9 +57,12 @@ def notify_usage_exists(instance_ref, current_period=False):
                                                          instance_ref)
 
     macs = [vif['address'] for vif in nw_info]
-    for b in db.bw_usage_get_by_macs(admin_context,
-                                     macs,
-                                     audit_start):
+    uuids = [instance_ref.uuid]
+
+    bw_usages = db.bw_usage_get_by_uuids(admin_context, uuids, audit_start)
+    bw_usages = [b for b in bw_usages if b.mac in macs]
+
+    for b in bw_usages:
         label = 'net-name-not-found-%s' % b['mac']
         for vif in nw_info:
             if vif['address'] == b['mac']:
@@ -67,14 +70,13 @@ def notify_usage_exists(instance_ref, current_period=False):
                 break
 
         bw[label] = dict(bw_in=b.bw_in, bw_out=b.bw_out)
-    usage_info = utils.usage_from_instance(instance_ref,
-                          audit_period_beginning=str(audit_start),
-                          audit_period_ending=str(audit_end),
-                          bandwidth=bw)
-    notifier_api.notify('compute.%s' % FLAGS.host,
-                        'compute.instance.exists',
-                        notifier_api.INFO,
-                        usage_info)
+
+    extra_usage_info = dict(audit_period_beginning=str(audit_start),
+                            audit_period_ending=str(audit_end),
+                            bandwidth=bw)
+
+    notify_about_instance_usage(
+            context, instance_ref, 'exists', extra_usage_info=extra_usage_info)
 
 
 def legacy_network_info(network_model):
@@ -190,3 +192,53 @@ def legacy_network_info(network_model):
 
         network_info.append((network_dict, info_dict))
     return network_info
+
+
+def _usage_from_instance(context, instance_ref, network_info=None, **kw):
+    def null_safe_str(s):
+        return str(s) if s else ''
+
+    image_ref_url = "%s/images/%s" % (utils.generate_glance_url(),
+                                      instance_ref['image_ref'])
+
+    usage_info = dict(
+          tenant_id=instance_ref['project_id'],
+          user_id=instance_ref['user_id'],
+          instance_id=instance_ref['uuid'],
+          instance_type=instance_ref['instance_type']['name'],
+          instance_type_id=instance_ref['instance_type_id'],
+          memory_mb=instance_ref['memory_mb'],
+          disk_gb=instance_ref['root_gb'] + instance_ref['ephemeral_gb'],
+          display_name=instance_ref['display_name'],
+          created_at=str(instance_ref['created_at']),
+          # Nova's deleted vs terminated instance terminology is confusing,
+          # this should be when the instance was deleted (i.e. terminated_at),
+          # not when the db record was deleted. (mdragon)
+          deleted_at=null_safe_str(instance_ref['terminated_at']),
+          launched_at=null_safe_str(instance_ref['launched_at']),
+          image_ref_url=image_ref_url,
+          state=instance_ref['vm_state'],
+          state_description=null_safe_str(instance_ref['task_state']))
+
+    if network_info is not None:
+        usage_info['fixed_ips'] = network_info.fixed_ips()
+
+    usage_info.update(kw)
+    return usage_info
+
+
+def notify_about_instance_usage(context, instance, event_suffix,
+                                network_info=None, extra_usage_info=None,
+                                host=None):
+    if not host:
+        host = FLAGS.host
+
+    if not extra_usage_info:
+        extra_usage_info = {}
+
+    usage_info = _usage_from_instance(
+            context, instance, network_info=network_info, **extra_usage_info)
+
+    notifier_api.notify('compute.%s' % host,
+                        'compute.instance.%s' % event_suffix,
+                        notifier_api.INFO, usage_info)

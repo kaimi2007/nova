@@ -18,13 +18,14 @@
 
 """Unit tests for the API endpoint"""
 
-import boto
-from boto.ec2 import regioninfo
-from boto.exception import EC2ResponseError
 import datetime
 import httplib
 import random
 import StringIO
+
+import boto
+from boto.ec2 import regioninfo
+from boto import exception as boto_exc
 import webob
 
 from nova import block_device
@@ -241,14 +242,14 @@ class ApiEc2TestCase(test.TestCase):
                             "%Y-%m-%d %H:%M:%S.%f")
         self.assertEqual(
                         conv(time_to_convert),
-                        '2011-02-21T20:14:10Z')
+                        '2011-02-21T20:14:10.634Z')
         # mysqlite database representation
         time_to_convert = datetime.datetime.strptime(
                             "2011-02-21 19:56:18",
                             "%Y-%m-%d %H:%M:%S")
         self.assertEqual(
                         conv(time_to_convert),
-                        '2011-02-21T19:56:18Z')
+                        '2011-02-21T19:56:18.000Z')
 
     def test_xmlns_version_matches_request_version(self):
         self.expect_http(api_version='2010-10-30')
@@ -271,8 +272,8 @@ class ApiEc2TestCase(test.TestCase):
         """Attempt to terminate an invalid instance"""
         self.expect_http()
         self.mox.ReplayAll()
-        self.assertRaises(EC2ResponseError, self.ec2.terminate_instances,
-                            "i-00000005")
+        self.assertRaises(boto_exc.EC2ResponseError,
+                self.ec2.terminate_instances, "i-00000005")
 
     def test_get_all_key_pairs(self):
         """Test that, after creating a user and project and generating
@@ -300,7 +301,7 @@ class ApiEc2TestCase(test.TestCase):
 
         try:
             self.ec2.create_key_pair('test')
-        except EC2ResponseError, e:
+        except boto_exc.EC2ResponseError, e:
             if e.code == 'KeyPairExists':
                 pass
             else:
@@ -352,8 +353,10 @@ class ApiEc2TestCase(test.TestCase):
         # dashes, and underscores.
         security_group_name = "aa #^% -=99"
 
-        self.assertRaises(EC2ResponseError, self.ec2.create_security_group,
-                          security_group_name, 'test group')
+        self.assertRaises(boto_exc.EC2ResponseError,
+                self.ec2.create_security_group,
+                security_group_name,
+                'test group')
 
     def test_group_name_valid_length_security_group(self):
         """Test that we sanely handle invalid security group names.
@@ -365,8 +368,10 @@ class ApiEc2TestCase(test.TestCase):
         security_group_name = "".join(random.choice("poiuytrewqasdfghjklmnbvc")
                                       for x in range(random.randint(256, 266)))
 
-        self.assertRaises(EC2ResponseError, self.ec2.create_security_group,
-                          security_group_name, 'test group')
+        self.assertRaises(boto_exc.EC2ResponseError,
+                self.ec2.create_security_group,
+                security_group_name,
+                'test group')
 
     def test_authorize_revoke_security_group_cidr(self):
         """
@@ -389,48 +394,46 @@ class ApiEc2TestCase(test.TestCase):
         group.authorize('tcp', 80, 81, '0.0.0.0/0')
         group.authorize('icmp', -1, -1, '0.0.0.0/0')
         group.authorize('udp', 80, 81, '0.0.0.0/0')
+        group.authorize('tcp', 1, 65535, '0.0.0.0/0')
+        group.authorize('udp', 1, 65535, '0.0.0.0/0')
+        group.authorize('icmp', 1, 0, '0.0.0.0/0')
+        group.authorize('icmp', 0, 1, '0.0.0.0/0')
+        group.authorize('icmp', 0, 0, '0.0.0.0/0')
+
+        def _assert(message, *args):
+            try:
+                group.authorize(*args)
+            except boto_exc.EC2ResponseError as e:
+                self.assertEqual(e.status, 400, 'Expected status to be 400')
+                self.assertIn(message, e.error_message, e.error_message)
+            else:
+                raise self.failureException, 'EC2ResponseError not raised'
+
         # Invalid CIDR address
-        self.assertRaises(Exception,
-                          group.authorize, 'tcp', 80, 81, '0.0.0.0/0444')
+        _assert('Invalid CIDR', 'tcp', 80, 81, '0.0.0.0/0444')
         # Missing ports
-        self.assertRaises(Exception,
-                          group.authorize, 'tcp', '0.0.0.0/0')
+        _assert('Not enough parameters', 'tcp', '0.0.0.0/0')
         # from port cannot be greater than to port
-        self.assertRaises(Exception,
-                          group.authorize, 'tcp', 100, 1, '0.0.0.0/0')
+        _assert('Invalid port range', 'tcp', 100, 1, '0.0.0.0/0')
         # For tcp, negative values are not allowed
-        self.assertRaises(Exception,
-                          group.authorize, 'tcp', -1, 1, '0.0.0.0/0')
+        _assert('Invalid port range', 'tcp', -1, 1, '0.0.0.0/0')
         # For tcp, valid port range 1-65535
-        self.assertRaises(Exception,
-                          group.authorize, 'tcp', 1, 65599, '0.0.0.0/0')
-        # For icmp, only -1:-1 is allowed for type:code
-        self.assertRaises(Exception,
-                          group.authorize, 'icmp', -1, 0, '0.0.0.0/0')
-        # Non valid type:code
-        self.assertRaises(Exception,
-                          group.authorize, 'icmp', 0, 3, '0.0.0.0/0')
+        _assert('Invalid port range', 'tcp', 1, 65599, '0.0.0.0/0')
         # Invalid Cidr for ICMP type
-        self.assertRaises(Exception,
-                          group.authorize, 'icmp', -1, -1, '0.0.444.0/4')
+        _assert('Invalid CIDR', 'icmp', -1, -1, '0.0.444.0/4')
         # Invalid protocol
-        self.assertRaises(Exception,
-                          group.authorize, 'xyz', 1, 14, '0.0.0.0/0')
+        _assert('An unknown error has occurred', 'xyz', 1, 14, '0.0.0.0/0')
         # Invalid port
-        self.assertRaises(Exception,
-                          group.authorize, 'tcp', " ", "81", '0.0.0.0/0')
+        _assert('An unknown error has occurred', 'tcp', " ", "81", '0.0.0.0/0')
         # Invalid icmp port
-        self.assertRaises(Exception,
-                          group.authorize, 'icmp', " ", "81", '0.0.0.0/0')
+        _assert('An unknown error has occurred', 'icmp', " ", "81",
+                '0.0.0.0/0')
         # Invalid CIDR Address
-        self.assertRaises(Exception,
-                          group.authorize, 'icmp', -1, -1, '0.0.0.0')
+        _assert('Invalid CIDR', 'icmp', -1, -1, '0.0.0.0')
         # Invalid CIDR Address
-        self.assertRaises(Exception,
-                          group.authorize, 'icmp', -1, -1, '0.0.0.0/')
+        _assert('Invalid CIDR', 'icmp', -1, -1, '0.0.0.0/')
         # Invalid Cidr ports
-        self.assertRaises(Exception,
-                          group.authorize, 'icmp', 1, 256, '0.0.0.0/0')
+        _assert('Invalid port range', 'icmp', 1, 256, '0.0.0.0/0')
 
         self.expect_http()
         self.mox.ReplayAll()
@@ -439,7 +442,7 @@ class ApiEc2TestCase(test.TestCase):
 
         group = [grp for grp in rv if grp.name == security_group_name][0]
 
-        self.assertEquals(len(group.rules), 3)
+        self.assertEquals(len(group.rules), 8)
         self.assertEquals(int(group.rules[0].from_port), 80)
         self.assertEquals(int(group.rules[0].to_port), 81)
         self.assertEquals(len(group.rules[0].grants), 1)
@@ -452,6 +455,11 @@ class ApiEc2TestCase(test.TestCase):
         group.revoke('tcp', 80, 81, '0.0.0.0/0')
         group.revoke('icmp', -1, -1, '0.0.0.0/0')
         group.revoke('udp', 80, 81, '0.0.0.0/0')
+        group.revoke('tcp', 1, 65535, '0.0.0.0/0')
+        group.revoke('udp', 1, 65535, '0.0.0.0/0')
+        group.revoke('icmp', 1, 0, '0.0.0.0/0')
+        group.revoke('icmp', 0, 1, '0.0.0.0/0')
+        group.revoke('icmp', 0, 0, '0.0.0.0/0')
 
         self.expect_http()
         self.mox.ReplayAll()
@@ -466,8 +474,6 @@ class ApiEc2TestCase(test.TestCase):
 
         self.assertEqual(len(rv), 1)
         self.assertEqual(rv[0].name, 'default')
-
-        return
 
     def test_authorize_revoke_security_group_cidr_v6(self):
         """
@@ -521,8 +527,6 @@ class ApiEc2TestCase(test.TestCase):
         self.assertEqual(len(rv), 1)
         self.assertEqual(rv[0].name, 'default')
 
-        return
-
     def test_authorize_revoke_security_group_foreign_group(self):
         """
         Test that we can grant and revoke another security group access
@@ -566,15 +570,6 @@ class ApiEc2TestCase(test.TestCase):
                 self.assertEquals(len(group.rules[0].grants), 1)
                 self.assertEquals(str(group.rules[0].grants[0]), '%s-%s' %
                                   (other_security_group_name, 'fake'))
-
-        self.expect_http()
-        self.mox.ReplayAll()
-
-        # Can not delete the group while it is still used by
-        # another group.
-        self.assertRaises(EC2ResponseError,
-                          self.ec2.delete_security_group,
-                          other_security_group_name)
 
         self.expect_http()
         self.mox.ReplayAll()

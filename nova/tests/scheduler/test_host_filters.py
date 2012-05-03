@@ -64,7 +64,7 @@ class HostFiltersTestCase(test.TestCase):
         self.assertEqual(len(classes), 1 + len(self.class_map))
 
     def test_get_filter_classes_raises_on_invalid_classes(self):
-        self.assertRaises(exception.ClassNotFound,
+        self.assertRaises(ImportError,
                 filters.get_filter_classes,
                 ['nova.tests.scheduler.test_host_filters.NoExist'])
         self.assertRaises(exception.ClassNotFound,
@@ -177,6 +177,7 @@ class HostFiltersTestCase(test.TestCase):
     def test_ram_filter_fails_on_memory(self):
         self._stub_service_is_up(True)
         filt_cls = self.class_map['RamFilter']()
+        self.flags(ram_allocation_ratio=1.0)
         filter_properties = {'instance_type': {'memory_mb': 1024}}
         capabilities = {'enabled': True}
         service = {'disabled': False}

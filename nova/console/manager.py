@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright (c) 2010 Openstack, LLC.
+# Copyright (c) 2010 OpenStack, LLC.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -23,6 +23,7 @@ from nova import exception
 from nova import flags
 from nova import log as logging
 from nova.openstack.common import cfg
+from nova.openstack.common import importutils
 from nova import manager
 from nova import rpc
 from nova import utils
@@ -37,7 +38,7 @@ console_manager_opts = [
                 help='Stub calls to compute worker for tests'),
     cfg.StrOpt('console_public_hostname',
                default=socket.gethostname(),
-               help='Publicly visable name for this console host'),
+               help='Publicly visible name for this console host'),
     ]
 
 FLAGS = flags.FLAGS
@@ -55,7 +56,7 @@ class ConsoleProxyManager(manager.Manager):
     def __init__(self, console_driver=None, *args, **kwargs):
         if not console_driver:
             console_driver = FLAGS.console_driver
-        self.driver = utils.import_object(console_driver)
+        self.driver = importutils.import_object(console_driver)
         super(ConsoleProxyManager, self).__init__(*args, **kwargs)
         self.driver.host = self.host
 
@@ -74,7 +75,7 @@ class ConsoleProxyManager(manager.Manager):
                                                       pool['id'],
                                                       instance_id)
         except exception.NotFound:
-            LOG.debug(_('Adding console'))
+            LOG.debug(_('Adding console'), instance=instance)
             if not password:
                 password = utils.generate_password(8)
             if not port:

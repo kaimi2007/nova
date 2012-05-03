@@ -54,9 +54,9 @@ A fake XenAPI SDK.
 import json
 import random
 import uuid
-from xml.sax.saxutils import escape
+from xml.sax import saxutils
 
-from pprint import pformat
+import pprint
 
 from nova import exception
 from nova import log as logging
@@ -73,7 +73,7 @@ LOG = logging.getLogger(__name__)
 
 def log_db_contents(msg=None):
     text = msg or ""
-    content = pformat(_db_content)
+    content = pprint.pformat(_db_content)
     LOG.debug(_("%(text)s: _db_content => %(content)s") % locals())
 
 
@@ -85,7 +85,7 @@ def reset():
               'Running',
               is_a_template=False,
               is_control_domain=True,
-              host_ref=host)
+              resident_on=host)
 
 
 def reset_table(table):
@@ -112,16 +112,15 @@ def create_network(name_label, bridge):
                            'bridge': bridge})
 
 
-def create_vm(name_label, status,
-              is_a_template=False, is_control_domain=False, host_ref=None):
+def create_vm(name_label, status, **kwargs):
     domid = status == 'Running' and random.randrange(1, 1 << 16) or -1
-    return _create_object('VM',
-                          {'name_label': name_label,
-                           'domid': domid,
-                           'power-state': status,
-                           'is_a_template': is_a_template,
-                           'is_control_domain': is_control_domain,
-                           'resident_on': host_ref})
+    vm_rec = kwargs.copy()
+    vm_rec.update({'name_label': name_label,
+                   'domid': domid,
+                   'power_state': status})
+    vm_ref = _create_object('VM', vm_rec)
+    after_VM_create(vm_ref, vm_rec)
+    return vm_ref
 
 
 def destroy_vm(vm_ref):
@@ -142,21 +141,24 @@ def destroy_vdi(vdi_ref):
     del _db_content['VDI'][vdi_ref]
 
 
-def create_vdi(name_label, read_only, sr_ref, sharable):
-    return _create_object('VDI',
-                          {'name_label': name_label,
-                           'read_only': read_only,
-                           'SR': sr_ref,
-                           'type': '',
-                           'name_description': '',
-                           'sharable': sharable,
-                           'other_config': {},
-                           'location': '',
-                           'xenstore_data': '',
-                           'sm_config': {},
-                           'physical_utilisation': '123',
-                           'managed': True,
-                           'VBDs': {}})
+def create_vdi(name_label, sr_ref, **kwargs):
+    vdi_rec = {
+        'SR': sr_ref,
+        'read_only': False,
+        'type': '',
+        'name_label': name_label,
+        'name_description': '',
+        'sharable': False,
+        'other_config': {},
+        'location': '',
+        'xenstore_data': '',
+        'sm_config': {},
+        'physical_utilisation': '123',
+        'managed': True,
+        'VBDs': {},
+    }
+    vdi_rec.update(kwargs)
+    return _create_object('VDI', vdi_rec)
 
 
 def create_vbd(vm_ref, vdi_ref):
@@ -176,10 +178,7 @@ def after_VBD_create(vbd_ref, vbd_rec):
     vbd_rec['device'] = ''
     vm_ref = vbd_rec['VM']
     vm_rec = _db_content['VM'][vm_ref]
-    if vm_rec.get('VBDs', None):
-        vm_rec['VBDs'].append(vbd_ref)
-    else:
-        vm_rec['VBDs'] = [vbd_ref]
+    vm_rec['VBDs'].append(vbd_ref)
 
     vm_name_label = _db_content['VM'][vm_ref]['name_label']
     vbd_rec['vm_name_label'] = vm_name_label
@@ -187,8 +186,11 @@ def after_VBD_create(vbd_ref, vbd_rec):
 
 def after_VM_create(vm_ref, vm_rec):
     """Create read-only fields in the VM record."""
-    if 'is_control_domain' not in vm_rec:
-        vm_rec['is_control_domain'] = False
+    vm_rec.setdefault('is_control_domain', False)
+    vm_rec.setdefault('memory_static_max', str(8 * 1024 * 1024 * 1024))
+    vm_rec.setdefault('memory_dynamic_max', str(8 * 1024 * 1024 * 1024))
+    vm_rec.setdefault('VCPUs_max', str(4))
+    vm_rec.setdefault('VBDs', [])
 
 
 def create_pbd(config, host_ref, sr_ref, attached):
@@ -278,7 +280,7 @@ def _create_sr(table, obj):
         raise Failure(['SR_UNKNOWN_DRIVER', sr_type])
     host_ref = _db_content['host'].keys()[0]
     sr_ref = _create_object(table, obj[2])
-    vdi_ref = create_vdi('', False, sr_ref, False)
+    vdi_ref = create_vdi('', sr_ref)
     pbd_ref = create_pbd('', host_ref, sr_ref, True)
     _db_content['SR'][sr_ref]['VDIs'] = [vdi_ref]
     _db_content['SR'][sr_ref]['PBDs'] = [pbd_ref]
@@ -326,7 +328,7 @@ def check_for_session_leaks():
 def as_value(s):
     """Helper function for simulating XenAPI plugin responses.  It
     escapes and wraps the given argument."""
-    return '<value>%s</value>' % escape(s)
+    return '<value>%s</value>' % saxutils.escape(s)
 
 
 def as_json(*args, **kwargs):
@@ -401,8 +403,6 @@ class SessionBase(object):
 
     def SR_introduce(self, _1, sr_uuid, label, desc, type, content_type,
                      shared, sm_config):
-        host_ref = _db_content['host'].keys()[0]
-
         ref = None
         rec = None
         for ref, rec in _db_content['SR'].iteritems():
@@ -426,7 +426,7 @@ class SessionBase(object):
             if vdi_per_lun:
                 # we need to create a vdi because this introduce
                 # is likely meant for a single vdi
-                vdi_ref = create_vdi('', False, sr_ref, False)
+                vdi_ref = create_vdi('', sr_ref)
                 _db_content['SR'][sr_ref]['VDIs'] = [vdi_ref]
                 _db_content['VDI'][vdi_ref]['SR'] = sr_ref
             return sr_ref
@@ -438,7 +438,7 @@ class SessionBase(object):
         return
 
     def PIF_get_all_records_where(self, _1, _2):
-        # TODO (salvatore-orlando): filter table on _2
+        # TODO(salvatore-orlando): filter table on _2
         return _db_content['PIF']
 
     def VM_get_xenstore_data(self, _1, vm_ref):
@@ -473,7 +473,8 @@ class SessionBase(object):
         name_label = db_ref['name_label']
         read_only = db_ref['read_only']
         sharable = db_ref['sharable']
-        vdi_ref = create_vdi(name_label, read_only, sr_ref, sharable)
+        vdi_ref = create_vdi(name_label, sr_ref, sharable=sharable,
+                             read_only=read_only)
         return vdi_ref
 
     def VDI_clone(self, _1, vdi_to_clone_ref):
@@ -482,7 +483,8 @@ class SessionBase(object):
         read_only = db_ref['read_only']
         sr_ref = db_ref['SR']
         sharable = db_ref['sharable']
-        vdi_ref = create_vdi(name_label, read_only, sr_ref, sharable)
+        vdi_ref = create_vdi(name_label, sr_ref, sharable=sharable,
+                             read_only=read_only)
         return vdi_ref
 
     def host_compute_free_memory(self, _1, ref):
@@ -492,11 +494,19 @@ class SessionBase(object):
     def host_call_plugin(self, _1, _2, plugin, method, _5):
         if (plugin, method) == ('agent', 'version'):
             return as_json(returncode='0', message='1.0')
+        elif (plugin, method) == ('agent', 'key_init'):
+            return as_json(returncode='D0', message='1')
+        elif (plugin, method) == ('agent', 'password'):
+            return as_json(returncode='0', message='success')
+        elif (plugin, method) == ('agent', 'resetnetwork'):
+            return as_json(returncode='0', message='success')
         elif (plugin, method) == ('glance', 'copy_kernel_vdi'):
             return ''
         elif (plugin, method) == ('glance', 'upload_vhd'):
             return ''
         elif (plugin, method) == ('glance', 'create_kernel_ramdisk'):
+            return ''
+        elif (plugin, method) == ('glance', 'remove_kernel_ramdisk'):
             return ''
         elif (plugin, method) == ('migration', 'move_vhds_into_sr'):
             return ''
@@ -526,8 +536,13 @@ class SessionBase(object):
 
     VDI_resize = VDI_resize_online
 
-    def VM_clean_reboot(self, *args):
-        return 'burp'
+    def VM_clean_reboot(self, session, vm_ref):
+        pass
+
+    def VM_hard_shutdown(self, session, vm_ref):
+        db_ref = _db_content['VM'][vm_ref]
+        db_ref['power_state'] = 'Halted'
+    VM_clean_shutdown = VM_hard_shutdown
 
     def pool_eject(self, session, host_ref):
         pass
@@ -704,7 +719,7 @@ class SessionBase(object):
     def _destroy(self, name, params):
         self._check_session(params)
         self._check_arg_count(params, 2)
-        table, _ = name.split('.')
+        table = name.split('.')[0]
         ref = params[1]
         if ref not in _db_content[table]:
             raise Failure(['HANDLE_INVALID', table, ref])

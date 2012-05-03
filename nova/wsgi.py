@@ -61,7 +61,6 @@ class Server(object):
         self.host = host or "0.0.0.0"
         self.port = port or 0
         self._server = None
-        self._tcp_server = None
         self._socket = None
         self._protocol = protocol
         self._pool = eventlet.GreenPool(pool_size or self.default_pool_size)
@@ -85,8 +84,12 @@ class Server(object):
 
         :param backlog: Maximum number of queued connections.
         :returns: None
+        :raises: nova.exception.InvalidInput
 
         """
+        if backlog < 1:
+            raise exception.InvalidInput(
+                    reason='The backlog must be more than 1')
         self._socket = eventlet.listen((self.host, self.port), backlog=backlog)
         self._server = eventlet.spawn(self._start)
         (self.host, self.port) = self._socket.getsockname()
@@ -96,24 +99,13 @@ class Server(object):
         """Stop this server.
 
         This is not a very nice action, as currently the method by which a
-        server is stopped is by killing it's eventlet.
+        server is stopped is by killing its eventlet.
 
         :returns: None
 
         """
         LOG.info(_("Stopping WSGI server."))
         self._server.kill()
-        if self._tcp_server is not None:
-            LOG.info(_("Stopping raw TCP server."))
-            self._tcp_server.kill()
-
-    def start_tcp(self, listener, port, host='0.0.0.0', key=None, backlog=128):
-        """Run a raw TCP server with the given application."""
-        arg0 = sys.argv[0]
-        LOG.info(_('Starting TCP server %(arg0)s on %(host)s:%(port)s')
-                 % locals())
-        socket = eventlet.listen((host, port), backlog=backlog)
-        self._tcp_server = self._pool.spawn_n(self._run_tcp, listener, socket)
 
     def wait(self):
         """Block, until the server has stopped.
@@ -127,15 +119,6 @@ class Server(object):
             self._server.wait()
         except greenlet.GreenletExit:
             LOG.info(_("WSGI server has stopped."))
-
-    def _run_tcp(self, listener, socket):
-        """Start a raw TCP server in a new green thread."""
-        while True:
-            try:
-                new_sock, address = socket.accept()
-                self._pool.spawn_n(listener, new_sock)
-            except (SystemExit, KeyboardInterrupt):
-                pass
 
 
 class Request(webob.Request):

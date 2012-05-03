@@ -27,7 +27,7 @@ from lxml import etree
 
 from nova import log as logging
 from nova import test
-from nova.volume.netapp import NetAppISCSIDriver
+from nova.volume import netapp
 
 LOG = logging.getLogger("nova.volume.driver")
 
@@ -617,7 +617,6 @@ class FakeDfmServerHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             out.write('</operation>')
         out.write('</binding>')
         out.write(WSDL_TRAILER)
-        return
 
     def do_POST(s):
         """Respond to a POST request."""
@@ -825,7 +824,6 @@ class FakeDfmServerHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         s.wfile.write(RESPONSE_PREFIX)
         s.wfile.write(body)
         s.wfile.write(RESPONSE_SUFFIX)
-        return
 
 
 class FakeHttplibSocket(object):
@@ -898,7 +896,7 @@ class NetAppDriverTestCase(test.TestCase):
 
     def setUp(self):
         super(NetAppDriverTestCase, self).setUp()
-        driver = NetAppISCSIDriver()
+        driver = netapp.NetAppISCSIDriver()
         self.stubs.Set(httplib, 'HTTPConnection', FakeHTTPConnection)
         driver._create_client('http://localhost:8088/dfm.wsdl',
                               'root', 'password', 'localhost', 8088)

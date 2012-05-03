@@ -1,4 +1,4 @@
-# Copyright (c) 2011 Openstack, LLC.
+# Copyright (c) 2011 OpenStack, LLC.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -39,8 +39,10 @@ least_cost_opts = [
              default=1.0,
                help='How much weight to give the noop cost function'),
     cfg.FloatOpt('compute_fill_first_cost_fn_weight',
-             default=1.0,
-               help='How much weight to give the fill-first cost function'),
+             default=-1.0,
+               help='How much weight to give the fill-first cost function. '
+                    'A negative value will reverse behavior: '
+                    'e.g. spread-first'),
     ]
 
 FLAGS = flags.FLAGS
@@ -79,17 +81,20 @@ def compute_fill_first_cost_fn(host_state, weighing_properties):
 
 def weighted_sum(weighted_fns, host_states, weighing_properties):
     """Use the weighted-sum method to compute a score for an array of objects.
+
     Normalize the results of the objective-functions so that the weights are
     meaningful regardless of objective-function's range.
 
-    host_list - [(host, HostInfo()), ...]
-    weighted_fns - list of weights and functions like:
-        [(weight, objective-functions), ...]
-    weighing_properties is an arbitrary dict of values that can influence
-        weights.
+    :param host_list:    ``[(host, HostInfo()), ...]``
+    :param weighted_fns: list of weights and functions like::
 
-    Returns a single WeightedHost object which represents the best
-    candidate.
+        [(weight, objective-functions), ...]
+
+    :param weighing_properties: an arbitrary dict of values that can
+        influence weights.
+
+    :returns: a single WeightedHost object which represents the best
+              candidate.
     """
 
     # Make a grid of functions results.

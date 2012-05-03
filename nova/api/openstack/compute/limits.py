@@ -31,8 +31,8 @@ import webob.exc
 from nova.api.openstack.compute.views import limits as limits_views
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
+from nova.openstack.common import importutils
 from nova import quota
-from nova import utils
 from nova import wsgi as base_wsgi
 
 
@@ -43,7 +43,7 @@ PER_HOUR = 60 * 60
 PER_DAY = 60 * 60 * 24
 
 
-limits_nsmap = {None: xmlutil.XMLNS_V11, 'atom': xmlutil.XMLNS_ATOM}
+limits_nsmap = {None: xmlutil.XMLNS_COMMON_V10, 'atom': xmlutil.XMLNS_ATOM}
 
 
 class LimitsTemplate(xmlutil.TemplateBuilder):
@@ -137,9 +137,9 @@ class Limit(object):
         self.water_level = 0
         self.capacity = self.unit
         self.request_value = float(self.capacity) / float(self.value)
-        self.error_message = _("Only %(value)s %(verb)s request(s) can be "
-                               "made to %(uri)s every %(unit_string)s." %
-                               self.__dict__)
+        msg = _("Only %(value)s %(verb)s request(s) can be "
+                "made to %(uri)s every %(unit_string)s.")
+        self.error_message = msg % self.__dict__
 
     def __call__(self, verb, url):
         """
@@ -233,7 +233,7 @@ class RateLimitingMiddleware(base_wsgi.Middleware):
         if limiter is None:
             limiter = Limiter
         else:
-            limiter = utils.import_class(limiter)
+            limiter = importutils.import_class(limiter)
 
         # Parse the limits, if any are provided
         if limits is not None:
@@ -382,8 +382,8 @@ class WsgiLimiter(object):
     """
     Rate-limit checking from a WSGI application. Uses an in-memory `Limiter`.
 
-    To use:
-        POST /<username> with JSON data such as:
+    To use, POST ``/<username>`` with JSON data such as::
+
         {
             "verb" : GET,
             "path" : "/servers"

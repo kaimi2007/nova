@@ -44,6 +44,8 @@ from nova import flags
 from nova import log as logging
 from nova import manager
 from nova.openstack.common import cfg
+from nova.openstack.common import excutils
+from nova.openstack.common import importutils
 from nova import rpc
 from nova import utils
 from nova.volume import volume_types
@@ -76,7 +78,7 @@ class VolumeManager(manager.SchedulerDependentManager):
         """Load the driver from the one specified in args, or from flags."""
         if not volume_driver:
             volume_driver = FLAGS.volume_driver
-        self.driver = utils.import_object(volume_driver)
+        self.driver = importutils.import_object(volume_driver)
         super(VolumeManager, self).__init__(service_name='volume',
                                                     *args, **kwargs)
         # NOTE(vish): Implementation specific db handling is done
@@ -133,38 +135,17 @@ class VolumeManager(manager.SchedulerDependentManager):
             if model_update:
                 self.db.volume_update(context, volume_ref['id'], model_update)
         except Exception:
-            with utils.save_and_reraise_exception():
+            with excutils.save_and_reraise_exception():
                 self.db.volume_update(context,
                                       volume_ref['id'], {'status': 'error'})
-                self._notify_vsa(context, volume_ref, 'error')
 
         now = utils.utcnow()
         self.db.volume_update(context,
                               volume_ref['id'], {'status': 'available',
                                                  'launched_at': now})
         LOG.debug(_("volume %s: created successfully"), volume_ref['name'])
-        self._notify_vsa(context, volume_ref, 'available')
         self._reset_stats()
         return volume_id
-
-    def _notify_vsa(self, context, volume_ref, status):
-        if volume_ref['volume_type_id'] is None:
-            return
-
-        if volume_types.is_vsa_drive(volume_ref['volume_type_id']):
-            vsa_id = None
-            for i in volume_ref.get('volume_metadata'):
-                if i['key'] == 'to_vsa_id':
-                    vsa_id = int(i['value'])
-                    break
-
-            if vsa_id:
-                rpc.cast(context,
-                         FLAGS.vsa_topic,
-                         {"method": "vsa_volume_created",
-                          "args": {"vol_id": volume_ref['id'],
-                                   "vsa_id": vsa_id,
-                                   "status": status}})
 
     def delete_volume(self, context, volume_id):
         """Deletes and unexports volume."""
@@ -188,7 +169,7 @@ class VolumeManager(manager.SchedulerDependentManager):
                                   {'status': 'available'})
             return True
         except Exception:
-            with utils.save_and_reraise_exception():
+            with excutils.save_and_reraise_exception():
                 self.db.volume_update(context,
                                       volume_ref['id'],
                                       {'status': 'error_deleting'})
@@ -212,7 +193,7 @@ class VolumeManager(manager.SchedulerDependentManager):
                                         model_update)
 
         except Exception:
-            with utils.save_and_reraise_exception():
+            with excutils.save_and_reraise_exception():
                 self.db.snapshot_update(context,
                                         snapshot_ref['id'],
                                         {'status': 'error'})
@@ -238,7 +219,7 @@ class VolumeManager(manager.SchedulerDependentManager):
                                     {'status': 'available'})
             return True
         except Exception:
-            with utils.save_and_reraise_exception():
+            with excutils.save_and_reraise_exception():
                 self.db.snapshot_update(context,
                                         snapshot_ref['id'],
                                         {'status': 'error_deleting'})
@@ -266,7 +247,8 @@ class VolumeManager(manager.SchedulerDependentManager):
         This method calls the driver initialize_connection and returns
         it to the caller.  The connector parameter is a dictionary with
         information about the host that will connect to the volume in the
-        following format:
+        following format::
+
             {
                 'ip': ip,
                 'initiator': initiator,
@@ -279,7 +261,8 @@ class VolumeManager(manager.SchedulerDependentManager):
         connections.
 
         driver is responsible for doing any necessary security setup and
-        returning a connection_info dictionary in the following format:
+        returning a connection_info dictionary in the following format::
+
             {
                 'driver_volume_type': driver_volume_type,
                 'data': data,

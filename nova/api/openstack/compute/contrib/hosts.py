@@ -1,4 +1,4 @@
-# Copyright (c) 2011 Openstack, LLC.
+# Copyright (c) 2011 OpenStack, LLC.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -22,7 +22,7 @@ from xml.parsers import expat
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova.api.openstack import extensions
-from nova import compute
+from nova.compute import api as compute_api
 from nova import db
 from nova import exception
 from nova import flags
@@ -120,7 +120,7 @@ def check_host(fn):
 class HostController(object):
     """The Hosts API controller for the OpenStack API."""
     def __init__(self):
-        self.api = compute.HostAPI()
+        self.api = compute_api.HostAPI()
         super(HostController, self).__init__()
 
     @wsgi.serializers(xml=HostIndexTemplate)
@@ -138,7 +138,7 @@ class HostController(object):
             key = raw_key.lower().strip()
             val = raw_val.lower().strip()
             if key == "status":
-                if val[:6] in ("enable", "disabl"):
+                if val in ("enable", "disable"):
                     update_values['status'] = val.startswith("enable")
                 else:
                     explanation = _("Invalid status: '%s'") % raw_val
@@ -216,7 +216,9 @@ class HostController(object):
         :param context: security context
         :param host: hostname
         :returns: expected to use HostShowTemplate.
-            ex. {'host': {'resource':D},..}
+            ex.::
+
+                {'host': {'resource':D},..}
                 D: {'host': 'hostname','project': 'admin',
                     'cpu': 1, 'memory_mb': 2048, 'disk_gb': 30}
         """

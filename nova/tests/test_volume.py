@@ -29,10 +29,10 @@ from nova import exception
 from nova import db
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import importutils
 import nova.policy
 from nova import rpc
 from nova import test
-from nova import utils
 import nova.volume.api
 
 FLAGS = flags.FLAGS
@@ -44,9 +44,9 @@ class VolumeTestCase(test.TestCase):
 
     def setUp(self):
         super(VolumeTestCase, self).setUp()
-        self.compute = utils.import_object(FLAGS.compute_manager)
+        self.compute = importutils.import_object(FLAGS.compute_manager)
         self.flags(connection_type='fake')
-        self.volume = utils.import_object(FLAGS.volume_manager)
+        self.volume = importutils.import_object(FLAGS.volume_manager)
         self.context = context.get_admin_context()
         self.instance_id = db.instance_create(self.context, {})['id']
 
@@ -256,6 +256,49 @@ class VolumeTestCase(test.TestCase):
                           snapshot_id)
         self.volume.delete_volume(self.context, volume['id'])
 
+    def test_cant_delete_volume_with_snapshots(self):
+        """Test snapshot can be created and deleted."""
+        volume = self._create_volume()
+        self.volume.create_volume(self.context, volume['id'])
+        snapshot_id = self._create_snapshot(volume['id'])
+        self.volume.create_snapshot(self.context, volume['id'], snapshot_id)
+        self.assertEqual(snapshot_id,
+                         db.snapshot_get(context.get_admin_context(),
+                                         snapshot_id).id)
+
+        volume['status'] = 'available'
+        volume['host'] = 'fakehost'
+
+        volume_api = nova.volume.api.API()
+
+        self.assertRaises(exception.InvalidVolume,
+                          volume_api.delete,
+                          self.context,
+                          volume)
+        self.volume.delete_snapshot(self.context, snapshot_id)
+        self.volume.delete_volume(self.context, volume['id'])
+
+    def test_can_delete_errored_snapshot(self):
+        """Test snapshot can be created and deleted."""
+        volume = self._create_volume()
+        self.volume.create_volume(self.context, volume['id'])
+        snapshot_id = self._create_snapshot(volume['id'])
+        self.volume.create_snapshot(self.context, volume['id'], snapshot_id)
+        snapshot = db.snapshot_get(context.get_admin_context(),
+                                   snapshot_id)
+
+        volume_api = nova.volume.api.API()
+
+        snapshot['status'] = 'badstatus'
+        self.assertRaises(exception.InvalidVolume,
+                          volume_api.delete_snapshot,
+                          self.context,
+                          snapshot)
+
+        snapshot['status'] = 'error'
+        self.volume.delete_snapshot(self.context, snapshot_id)
+        self.volume.delete_volume(self.context, volume['id'])
+
     def test_create_snapshot_force(self):
         """Test snapshot in use can be created forcibly."""
 
@@ -311,7 +354,7 @@ class DriverTestCase(test.TestCase):
         super(DriverTestCase, self).setUp()
         self.flags(volume_driver=self.driver_name,
                    logging_default_format_string="%(message)s")
-        self.volume = utils.import_object(FLAGS.volume_manager)
+        self.volume = importutils.import_object(FLAGS.volume_manager)
         self.context = context.get_admin_context()
         self.output = ""
 
@@ -455,8 +498,6 @@ class VolumePolicyTestCase(test.TestCase):
         nova.policy.enforce(self.context, 'volume:attach', target)
         self.mox.ReplayAll()
         nova.volume.api.check_policy(self.context, 'attach')
-        self.mox.UnsetStubs()
-        self.mox.VerifyAll()
 
     def test_check_policy_with_target(self):
         self.mox.StubOutWithMock(nova.policy, 'enforce')
@@ -468,5 +509,3 @@ class VolumePolicyTestCase(test.TestCase):
         nova.policy.enforce(self.context, 'volume:attach', target)
         self.mox.ReplayAll()
         nova.volume.api.check_policy(self.context, 'attach', {'id': 2})
-        self.mox.UnsetStubs()
-        self.mox.VerifyAll()

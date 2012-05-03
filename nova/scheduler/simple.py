@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright (c) 2010 Openstack, LLC.
+# Copyright (c) 2010 OpenStack, LLC.
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -22,11 +22,11 @@ Simple Scheduler
 """
 
 from nova import db
-from nova import flags
 from nova import exception
+from nova import flags
 from nova.openstack.common import cfg
-from nova.scheduler import driver
 from nova.scheduler import chance
+from nova.scheduler import driver
 from nova import utils
 
 

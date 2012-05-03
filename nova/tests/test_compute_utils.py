@@ -15,9 +15,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-"""
-Tests For misc util methods used with compute.
-"""
+"""Tests For miscellaneous util methods used with compute."""
 
 from nova import db
 from nova import flags
@@ -29,6 +27,7 @@ import nova.image.fake
 from nova.compute import utils as compute_utils
 from nova.compute import instance_types
 from nova.notifier import test_notifier
+from nova.openstack.common import importutils
 from nova.tests import fake_network
 
 
@@ -53,7 +52,7 @@ class UsageInfoTestCase(test.TestCase):
                    stub_network=True,
                    notification_driver='nova.notifier.test_notifier',
                    network_manager='nova.network.manager.FlatManager')
-        self.compute = utils.import_object(FLAGS.compute_manager)
+        self.compute = importutils.import_object(FLAGS.compute_manager)
         self.user_id = 'fake'
         self.project_id = 'fake'
         self.context = context.RequestContext(self.user_id, self.project_id)
@@ -81,10 +80,10 @@ class UsageInfoTestCase(test.TestCase):
         return db.instance_create(self.context, inst)['id']
 
     def test_notify_usage_exists(self):
-        """Ensure 'exists' notification generates apropriate usage data."""
+        """Ensure 'exists' notification generates appropriate usage data."""
         instance_id = self._create_instance()
         instance = db.instance_get(self.context, instance_id)
-        compute_utils.notify_usage_exists(instance)
+        compute_utils.notify_usage_exists(self.context, instance)
         self.assertEquals(len(test_notifier.NOTIFICATIONS), 1)
         msg = test_notifier.NOTIFICATIONS[0]
         self.assertEquals(msg['priority'], 'INFO')

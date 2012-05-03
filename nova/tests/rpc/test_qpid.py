@@ -23,6 +23,7 @@ Unit Tests for remote procedure calls using qpid
 import mox
 
 from nova import context
+from nova import flags
 from nova import log as logging
 from nova.rpc import amqp as rpc_amqp
 from nova import test
@@ -35,6 +36,7 @@ except ImportError:
     impl_qpid = None
 
 
+FLAGS = flags.FLAGS
 LOG = logging.getLogger(__name__)
 
 
@@ -56,7 +58,7 @@ class RpcQpidTestCase(test.TestCase):
     """
 
     def setUp(self):
-        self.mocker = mox.Mox()
+        super(RpcQpidTestCase, self).setUp()
 
         self.mock_connection = None
         self.mock_session = None
@@ -64,6 +66,7 @@ class RpcQpidTestCase(test.TestCase):
         self.mock_receiver = None
 
         if qpid:
+            impl_qpid.register_opts(FLAGS)
             self.orig_connection = qpid.messaging.Connection
             self.orig_session = qpid.messaging.Session
             self.orig_sender = qpid.messaging.Sender
@@ -72,8 +75,6 @@ class RpcQpidTestCase(test.TestCase):
             qpid.messaging.Session = lambda *_x, **_y: self.mock_session
             qpid.messaging.Sender = lambda *_x, **_y: self.mock_sender
             qpid.messaging.Receiver = lambda *_x, **_y: self.mock_receiver
-
-        super(RpcQpidTestCase, self).setUp()
 
     def tearDown(self):
         if qpid:
@@ -86,31 +87,27 @@ class RpcQpidTestCase(test.TestCase):
             # in self._setup_to_server_tests()
             impl_qpid.Connection.pool.connection_cls = impl_qpid.Connection
 
-        self.mocker.ResetAll()
-
         super(RpcQpidTestCase, self).tearDown()
 
     @test.skip_if(qpid is None, "Test requires qpid")
     def test_create_connection(self):
-        self.mock_connection = self.mocker.CreateMock(self.orig_connection)
-        self.mock_session = self.mocker.CreateMock(self.orig_session)
+        self.mock_connection = self.mox.CreateMock(self.orig_connection)
+        self.mock_session = self.mox.CreateMock(self.orig_session)
 
         self.mock_connection.opened().AndReturn(False)
         self.mock_connection.open()
         self.mock_connection.session().AndReturn(self.mock_session)
         self.mock_connection.close()
 
-        self.mocker.ReplayAll()
+        self.mox.ReplayAll()
 
-        connection = impl_qpid.create_connection()
+        connection = impl_qpid.create_connection(FLAGS)
         connection.close()
 
-        self.mocker.VerifyAll()
-
     def _test_create_consumer(self, fanout):
-        self.mock_connection = self.mocker.CreateMock(self.orig_connection)
-        self.mock_session = self.mocker.CreateMock(self.orig_session)
-        self.mock_receiver = self.mocker.CreateMock(self.orig_receiver)
+        self.mock_connection = self.mox.CreateMock(self.orig_connection)
+        self.mock_session = self.mox.CreateMock(self.orig_session)
+        self.mock_receiver = self.mox.CreateMock(self.orig_receiver)
 
         self.mock_connection.opened().AndReturn(False)
         self.mock_connection.open()
@@ -134,15 +131,13 @@ class RpcQpidTestCase(test.TestCase):
         self.mock_receiver.capacity = 1
         self.mock_connection.close()
 
-        self.mocker.ReplayAll()
+        self.mox.ReplayAll()
 
-        connection = impl_qpid.create_connection()
+        connection = impl_qpid.create_connection(FLAGS)
         connection.create_consumer("impl_qpid_test",
                                    lambda *_x, **_y: None,
                                    fanout)
         connection.close()
-
-        self.mocker.VerifyAll()
 
     @test.skip_if(qpid is None, "Test requires qpid")
     def test_create_consumer(self):
@@ -153,10 +148,9 @@ class RpcQpidTestCase(test.TestCase):
         self._test_create_consumer(fanout=True)
 
     def _test_cast(self, fanout, server_params=None):
-
-        self.mock_connection = self.mocker.CreateMock(self.orig_connection)
-        self.mock_session = self.mocker.CreateMock(self.orig_session)
-        self.mock_sender = self.mocker.CreateMock(self.orig_sender)
+        self.mock_connection = self.mox.CreateMock(self.orig_connection)
+        self.mock_session = self.mox.CreateMock(self.orig_session)
+        self.mock_sender = self.mox.CreateMock(self.orig_sender)
 
         self.mock_connection.opened().AndReturn(False)
         self.mock_connection.open()
@@ -180,16 +174,16 @@ class RpcQpidTestCase(test.TestCase):
             self.mock_session.close()
             self.mock_connection.session().AndReturn(self.mock_session)
 
-        self.mocker.ReplayAll()
+        self.mox.ReplayAll()
 
         try:
             ctx = context.RequestContext("user", "project")
 
-            args = [ctx, "impl_qpid_test",
+            args = [FLAGS, ctx, "impl_qpid_test",
                     {"method": "test_method", "args": {}}]
 
             if server_params:
-                args.insert(1, server_params)
+                args.insert(2, server_params)
                 if fanout:
                     method = impl_qpid.fanout_cast_to_server
                 else:
@@ -201,8 +195,6 @@ class RpcQpidTestCase(test.TestCase):
                     method = impl_qpid.cast
 
             method(*args)
-
-            self.mocker.VerifyAll()
         finally:
             while impl_qpid.Connection.pool.free_items:
                 # Pull the mock connection object out of the connection pool so
@@ -229,7 +221,7 @@ class RpcQpidTestCase(test.TestCase):
                         server_params['hostname'] + ':' +
                                 str(server_params['port']))
 
-        MyConnection.pool = rpc_amqp.Pool(connection_cls=MyConnection)
+        MyConnection.pool = rpc_amqp.Pool(FLAGS, MyConnection)
         self.stubs.Set(impl_qpid, 'Connection', MyConnection)
 
     @test.skip_if(qpid is None, "Test requires qpid")
@@ -251,10 +243,10 @@ class RpcQpidTestCase(test.TestCase):
         self._test_cast(fanout=True, server_params=server_params)
 
     def _test_call(self, multi):
-        self.mock_connection = self.mocker.CreateMock(self.orig_connection)
-        self.mock_session = self.mocker.CreateMock(self.orig_session)
-        self.mock_sender = self.mocker.CreateMock(self.orig_sender)
-        self.mock_receiver = self.mocker.CreateMock(self.orig_receiver)
+        self.mock_connection = self.mox.CreateMock(self.orig_connection)
+        self.mock_session = self.mox.CreateMock(self.orig_session)
+        self.mock_sender = self.mox.CreateMock(self.orig_sender)
+        self.mock_receiver = self.mox.CreateMock(self.orig_receiver)
 
         self.mock_connection.opened().AndReturn(False)
         self.mock_connection.open()
@@ -296,7 +288,7 @@ class RpcQpidTestCase(test.TestCase):
         self.mock_session.close()
         self.mock_connection.session().AndReturn(self.mock_session)
 
-        self.mocker.ReplayAll()
+        self.mox.ReplayAll()
 
         try:
             ctx = context.RequestContext("user", "project")
@@ -306,15 +298,13 @@ class RpcQpidTestCase(test.TestCase):
             else:
                 method = impl_qpid.call
 
-            res = method(ctx, "impl_qpid_test",
+            res = method(FLAGS, ctx, "impl_qpid_test",
                            {"method": "test_method", "args": {}})
 
             if multi:
                 self.assertEquals(list(res), ["foo", "bar", "baz"])
             else:
                 self.assertEquals(res, "foo")
-
-            self.mocker.VerifyAll()
         finally:
             while impl_qpid.Connection.pool.free_items:
                 # Pull the mock connection object out of the connection pool so

@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2011 Openstack LLC.
+# Copyright 2011 OpenStack LLC.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -17,7 +17,8 @@
 
 
 import datetime
-import stubout
+
+import glance.common.exception as glance_exception
 
 from nova.tests.api.openstack import fakes
 from nova import context
@@ -89,16 +90,11 @@ class TestGlanceImageService(test.TestCase):
 
     def setUp(self):
         super(TestGlanceImageService, self).setUp()
-        self.stubs = stubout.StubOutForTesting()
         fakes.stub_out_compute_api_snapshot(self.stubs)
         client = glance_stubs.StubGlanceClient()
         self.service = glance.GlanceImageService(client=client)
         self.context = context.RequestContext('fake', 'fake', auth_token=True)
         self.service.delete_all()
-
-    def tearDown(self):
-        self.stubs.UnsetAll()
-        super(TestGlanceImageService, self).tearDown()
 
     @staticmethod
     def _make_fixture(**kwargs):
@@ -187,7 +183,7 @@ class TestGlanceImageService(test.TestCase):
         image_id = self.service.create(self.context, fixture)['id']
 
         self.assertNotEquals(None, image_id)
-        self.assertRaises(exception.NotFound,
+        self.assertRaises(exception.ImageNotFound,
                           self.service.show,
                           self.context,
                           'bad image id')
@@ -265,6 +261,17 @@ class TestGlanceImageService(test.TestCase):
                         'name': 'TestImage %d' % (i)}
             self.assertDictMatch(meta, expected)
             i = i + 1
+
+    def test_index_invalid_marker(self):
+        fixtures = []
+        ids = []
+        for i in range(10):
+            fixture = self._make_fixture(name='TestImage %d' % (i))
+            fixtures.append(fixture)
+            ids.append(self.service.create(self.context, fixture)['id'])
+
+        self.assertRaises(exception.Invalid, self.service.index,
+                          self.context, marker='invalidmarker')
 
     def test_index_private_image(self):
         fixture = self._make_fixture(name='test image')
@@ -360,6 +367,17 @@ class TestGlanceImageService(test.TestCase):
             self.assertDictMatch(meta, expected)
             i = i + 1
 
+    def test_detail_invalid_marker(self):
+        fixtures = []
+        ids = []
+        for i in range(10):
+            fixture = self._make_fixture(name='TestImage %d' % (i))
+            fixtures.append(fixture)
+            ids.append(self.service.create(self.context, fixture)['id'])
+
+        self.assertRaises(exception.Invalid, self.service.detail,
+                          self.context, marker='invalidmarker')
+
     def test_update(self):
         fixture = self._make_fixture(name='test image')
         image_id = self.service.create(self.context, fixture)['id']
@@ -392,7 +410,7 @@ class TestGlanceImageService(test.TestCase):
 
     def test_delete_not_by_owner(self):
         # this test is only relevant for deprecated auth mode
-        self.flags(use_deprecated_auth=True)
+        self.flags(auth_strategy='deprecated')
 
         fixture = self._make_fixture(name='test image')
         properties = {'project_id': 'proj1'}
@@ -450,6 +468,17 @@ class TestGlanceImageService(test.TestCase):
                           self.service.show,
                           self.context,
                           image_id)
+
+    def test_show_raises_on_missing_credential(self):
+        def raise_missing_credentials(*args, **kwargs):
+            raise glance_exception.MissingCredentialError()
+
+        self.stubs.Set(glance_stubs.StubGlanceClient, 'get_image_meta',
+                       raise_missing_credentials)
+        self.assertRaises(exception.ImageNotAuthorized,
+                          self.service.show,
+                          self.context,
+                          'test-image-id')
 
     def test_detail_passes_through_to_client(self):
         fixture = self._make_fixture(name='image10', is_public=True)
@@ -527,6 +556,19 @@ class TestGlanceImageService(test.TestCase):
         self.flags(glance_num_retries=1)
         service.get(self.context, image_id, writer)
 
+    def test_client_raises_forbidden(self):
+        class MyGlanceStubClient(glance_stubs.StubGlanceClient):
+            """A client that fails the first time, then succeeds."""
+            def get_image(self, image_id):
+                raise glance_exception.Forbidden()
+
+        client = MyGlanceStubClient()
+        service = glance.GlanceImageService(client=client)
+        image_id = 1  # doesn't matter
+        writer = NullWriter()
+        self.assertRaises(exception.ImageNotAuthorized, service.get,
+                          self.context, image_id, writer)
+
     def test_glance_client_image_id(self):
         fixture = self._make_fixture(name='test image')
         image_id = self.service.create(self.context, fixture)['id']
@@ -536,6 +578,7 @@ class TestGlanceImageService(test.TestCase):
     def test_glance_client_image_ref(self):
         fixture = self._make_fixture(name='test image')
         image_id = self.service.create(self.context, fixture)['id']
-        image_url = 'http://foo/%s' % image_id
+        image_url = 'http://something-less-likely/%s' % image_id
         client, same_id = glance.get_glance_client(self.context, image_url)
         self.assertEquals(same_id, image_id)
+        self.assertEquals(client.host, 'something-less-likely')

@@ -57,7 +57,6 @@
 import ast
 import errno
 import gettext
-import glob
 import json
 import math
 import netaddr
@@ -65,7 +64,6 @@ import optparse
 import os
 import StringIO
 import sys
-import time
 
 
 # If ../nova/__init__.py exists, add ../ to Python search path, so that
@@ -78,23 +76,22 @@ if os.path.exists(os.path.join(POSSIBLE_TOPDIR, 'nova', '__init__.py')):
 
 gettext.install('nova', unicode=1)
 
+from nova.api.ec2 import ec2utils
+from nova.auth import manager
+from nova.compat import flagfile
+from nova.compute import instance_types
 from nova import context
 from nova import crypto
 from nova import db
+from nova.db import migration
 from nova import exception
 from nova import flags
-from nova import image
 from nova import log as logging
+from nova.openstack.common import importutils
 from nova import quota
 from nova import rpc
 from nova import utils
 from nova import version
-from nova import vsa
-from nova.api.ec2 import ec2utils
-from nova.auth import manager
-from nova.compute import instance_types
-from nova.compute import vm_states
-from nova.db import migration
 from nova.volume import volume_types
 
 FLAGS = flags.FLAGS
@@ -587,9 +584,13 @@ class FixedIpCommands(object):
             network = db.network_get(context.get_admin_context(),
                                      fixed_ip['network_id'])
             if fixed_ip['instance_id']:
-                instance = instances_by_id[fixed_ip['instance_id']]
-                hostname = instance['hostname']
-                host = instance['host']
+                instance = instances_by_id.get(fixed_ip['instance_id'])
+                if instance:
+                    hostname = instance['hostname']
+                    host = instance['host']
+                else:
+                    print 'WARNING: fixed ip %s allocated to missing' \
+                    ' instance' % str(fixed_ip['address'])
             print "%-18s\t%-15s\t%-15s\t%s" % (
                     network['cidr'],
                     fixed_ip['address'],
@@ -626,19 +627,31 @@ class FixedIpCommands(object):
 class FloatingIpCommands(object):
     """Class for managing floating ip."""
 
+    @staticmethod
+    def address_to_hosts(addresses):
+        """
+        Iterate over hosts within a address range.
+
+        If an explicit range specifier is missing, the parameter is
+        interpreted as a specific individual address.
+        """
+        try:
+            return [netaddr.IPAddress(addresses)]
+        except ValueError:
+            return netaddr.IPNetwork(addresses).iter_hosts()
+
     @args('--ip_range', dest="ip_range", metavar='<range>', help='IP range')
     @args('--pool', dest="pool", metavar='<pool>', help='Optional pool')
     @args('--interface', dest="interface", metavar='<interface>',
           help='Optional interface')
     def create(self, ip_range, pool=None, interface=None):
         """Creates floating ips for zone by range"""
-        addresses = netaddr.IPNetwork(ip_range)
         admin_context = context.get_admin_context()
         if not pool:
             pool = FLAGS.default_floating_pool
         if not interface:
             interface = FLAGS.public_interface
-        for address in addresses.iter_hosts():
+        for address in self.address_to_hosts(ip_range):
             db.floating_ip_create(admin_context,
                                   {'address': str(address),
                                    'pool': pool,
@@ -647,7 +660,7 @@ class FloatingIpCommands(object):
     @args('--ip_range', dest="ip_range", metavar='<range>', help='IP range')
     def delete(self, ip_range):
         """Deletes floating ips by range"""
-        for address in netaddr.IPNetwork(ip_range).iter_hosts():
+        for address in self.address_to_hosts(ip_range):
             db.floating_ip_destroy(context.get_admin_context(),
                                    str(address))
 
@@ -668,8 +681,13 @@ class FloatingIpCommands(object):
             instance_id = None
             if floating_ip['fixed_ip_id']:
                 fixed_ip = db.fixed_ip_get(ctxt, floating_ip['fixed_ip_id'])
-                instance = db.instance_get(ctxt, fixed_ip['instance_id'])
-                instance_id = instance.get('uuid', "none")
+                try:
+                    instance = db.instance_get(ctxt, fixed_ip['instance_id'])
+                    instance_id = instance.get('uuid', "none")
+                except exception.InstanceNotFound:
+                    msg = _('Missing instance %s')
+                    instance_id = msg % fixed_ip['instance_id']
+
             print "%s\t%s\t%s\t%s\t%s" % (floating_ip['project_id'],
                                           floating_ip['address'],
                                           instance_id,
@@ -723,6 +741,10 @@ class NetworkCommands(object):
         # check for certain required inputs
         if not label:
             raise exception.NetworkNotCreated(req='--label')
+        # Size of "label" column in nova.networks is 255, hence the restriction
+        if len(label) > 255:
+            reason = _("Maximum allowed length for 'label' is 255.")
+            raise exception.InvalidInput(reason=reason)
         if not (fixed_range_v4 or fixed_range_v6):
             req = '--fixed_range_v4 or --fixed_range_v6'
             raise exception.NetworkNotCreated(req=req)
@@ -773,7 +795,7 @@ class NetworkCommands(object):
             fixed_cidr = netaddr.IPNetwork(fixed_cidr)
 
         # create the network
-        net_manager = utils.import_object(FLAGS.network_manager)
+        net_manager = importutils.import_object(FLAGS.network_manager)
         net_manager.create_networks(context.get_admin_context(),
                                     label=label,
                                     cidr=fixed_range_v4,
@@ -842,7 +864,7 @@ class NetworkCommands(object):
         if fixed_range is None and uuid is None:
             raise Exception("Please specify either fixed_range or uuid")
 
-        net_manager = utils.import_object(FLAGS.network_manager)
+        net_manager = importutils.import_object(FLAGS.network_manager)
         if "QuantumManager" in FLAGS.network_manager:
             if uuid is None:
                 raise Exception("UUID is required to delete Quantum Networks")
@@ -930,60 +952,6 @@ class VmCommands(object):
                 instance['user_id'],
                 instance['availability_zone'],
                 instance['launch_index'])
-
-    def _migration(self, ec2_id, dest, block_migration=False,
-                                       disk_over_commit=False):
-        """Migrates a running instance to a new machine.
-         :param ec2_id: instance id which comes from euca-describe-instance.
-         :param dest: destination host name.
-         :param block_migration: if True, do block_migration.
-
-        """
-
-        ctxt = context.get_admin_context()
-        instance_id = ec2utils.ec2_id_to_id(ec2_id)
-
-        flags.DECLARE('libvirt_type', 'nova.virt.libvirt.connection')
-        if (FLAGS.connection_type != 'libvirt' or
-           (FLAGS.connection_type == 'libvirt' and
-            FLAGS.libvirt_type not in ['kvm', 'qemu'])):
-            msg = _('Only KVM and QEmu are supported for now. Sorry!')
-            raise exception.Error(msg)
-
-        if FLAGS.volume_driver != 'nova.volume.driver.ISCSIDriver':
-            msg = _("Support only ISCSIDriver. Sorry!")
-            raise exception.Error(msg)
-
-        rpc.call(ctxt,
-                 FLAGS.scheduler_topic,
-                 {"method": "live_migration",
-                  "args": {"instance_id": instance_id,
-                           "dest": dest,
-                           "topic": FLAGS.compute_topic,
-                           "block_migration": block_migration,
-                           "disk_over_commit": disk_over_commit}})
-
-        print _('Migration of %s initiated.'
-               'Check its progress using euca-describe-instances.') % ec2_id
-
-    @args('--ec2_id', dest='ec2_id', metavar='<ec2 id>', help='EC2 ID')
-    @args('--dest', dest='dest', metavar='<Destanation>',
-            help='destanation node')
-    def live_migration(self, ec2_id, dest):
-        """Migrates a running instance to a new machine."""
-
-        self._migration(ec2_id, dest)
-
-    @args('--ec2_id', dest='ec2_id', metavar='<ec2 id>', help='EC2 ID')
-    @args('--dest', dest='dest', metavar='<Destanation>',
-                           help='destanation node')
-    @args('--disk_over_commit', dest='disk_over_commit',
-                           metavar='<overcommit flag>',
-                           help='Allow overcommit (default Flase)')
-    def block_migration(self, ec2_id, dest, disk_over_commit=False):
-        """Migrates a running instance to a new machine with storage data."""
-
-        self._migration(ec2_id, dest, True, disk_over_commit)
 
 
 class ServiceCommands(object):
@@ -1150,483 +1118,12 @@ class VersionCommands(object):
         pass
 
     def list(self):
-        print _("%s (%s)") %\
-                (version.version_string(), version.version_string_with_vcs())
+        print _("%(version)s (%(vcs)s)") % \
+                {'version': version.version_string(),
+                 'vcs': version.version_string_with_vcs()}
 
     def __call__(self):
         self.list()
-
-
-class VsaCommands(object):
-    """Methods for dealing with VSAs"""
-
-    def __init__(self, *args, **kwargs):
-        self.manager = manager.AuthManager()
-        self.vsa_api = vsa.API()
-        self.context = context.get_admin_context()
-
-        self._format_str_vsa = "%(id)-5s %(vsa_id)-15s %(name)-25s "\
-                    "%(type)-10s %(vcs)-6s %(drives)-9s %(stat)-10s "\
-                    "%(az)-10s %(time)-10s"
-        self._format_str_volume = "\t%(id)-4s %(name)-15s %(size)-5s "\
-                    "%(stat)-10s %(att)-20s %(time)s"
-        self._format_str_drive = "\t%(id)-4s %(name)-15s %(size)-5s "\
-                    "%(stat)-10s %(host)-20s %(type)-4s %(tname)-10s %(time)s"
-        self._format_str_instance = "\t%(id)-4s %(name)-10s %(dname)-20s "\
-                    "%(image)-12s %(type)-10s %(fl_ip)-15s %(fx_ip)-15s "\
-                    "%(stat)-10s %(host)-15s %(time)s"
-
-    def _print_vsa_header(self):
-        print self._format_str_vsa %\
-               dict(id=_('ID'),
-                    vsa_id=_('vsa_id'),
-                    name=_('displayName'),
-                    type=_('vc_type'),
-                    vcs=_('vc_cnt'),
-                    drives=_('drive_cnt'),
-                    stat=_('status'),
-                    az=_('AZ'),
-                    time=_('createTime'))
-
-    def _print_vsa(self, vsa):
-        print self._format_str_vsa %\
-                dict(id=vsa['id'],
-                     vsa_id=vsa['name'],
-                     name=vsa['display_name'],
-                     type=vsa['vsa_instance_type'].get('name', None),
-                     vcs=vsa['vc_count'],
-                     drives=vsa['vol_count'],
-                     stat=vsa['status'],
-                     az=vsa['availability_zone'],
-                     time=str(vsa['created_at']))
-
-    def _print_volume_header(self):
-        print _('      === Volumes ===')
-        print self._format_str_volume %\
-                dict(id=_('ID'),
-                     name=_('name'),
-                     size=_('size'),
-                     stat=_('status'),
-                     att=_('attachment'),
-                     time=_('createTime'))
-
-    def _print_volume(self, vol):
-        print self._format_str_volume %\
-                dict(id=vol['id'],
-                     name=vol['display_name'] or vol['name'],
-                     size=vol['size'],
-                     stat=vol['status'],
-                     att=vol['attach_status'],
-                     time=str(vol['created_at']))
-
-    def _print_drive_header(self):
-        print _('      === Drives ===')
-        print self._format_str_drive %\
-                dict(id=_('ID'),
-                    name=_('name'),
-                    size=_('size'),
-                    stat=_('status'),
-                    host=_('host'),
-                    type=_('type'),
-                    tname=_('typeName'),
-                    time=_('createTime'))
-
-    def _print_drive(self, drive):
-        if drive['volume_type_id'] is not None and drive.get('volume_type'):
-            drive_type_name = drive['volume_type'].get('name')
-        else:
-            drive_type_name = ''
-
-        print self._format_str_drive %\
-                dict(id=drive['id'],
-                    name=drive['display_name'],
-                    size=drive['size'],
-                    stat=drive['status'],
-                    host=drive['host'],
-                    type=drive['volume_type_id'],
-                    tname=drive_type_name,
-                    time=str(drive['created_at']))
-
-    def _print_instance_header(self):
-        print _('      === Instances ===')
-        print self._format_str_instance %\
-                dict(id=_('ID'),
-                    name=_('name'),
-                    dname=_('disp_name'),
-                    image=_('image'),
-                    type=_('type'),
-                    fl_ip=_('floating_IP'),
-                    fx_ip=_('fixed_IP'),
-                    stat=_('status'),
-                    host=_('host'),
-                    time=_('createTime'))
-
-    def _print_instance(self, vc):
-
-        fixed_addr = None
-        floating_addr = None
-        if vc['fixed_ips']:
-            fixed = vc['fixed_ips'][0]
-            fixed_addr = fixed['address']
-            if fixed['floating_ips']:
-                floating_addr = fixed['floating_ips'][0]['address']
-        floating_addr = floating_addr or fixed_addr
-
-        print self._format_str_instance %\
-                dict(id=vc['id'],
-                    name=ec2utils.id_to_ec2_id(vc['id']),
-                    dname=vc['display_name'],
-                    image=('ami-%08x' % int(vc['image_ref'])),
-                    type=vc['instance_type']['name'],
-                    fl_ip=floating_addr,
-                    fx_ip=fixed_addr,
-                    stat=vc['vm_state'],
-                    host=vc['host'],
-                    time=str(vc['created_at']))
-
-    def _list(self, context, vsas, print_drives=False,
-                    print_volumes=False, print_instances=False):
-        if vsas:
-            self._print_vsa_header()
-
-        for vsa in vsas:
-            self._print_vsa(vsa)
-            vsa_id = vsa.get('id')
-
-            if print_instances:
-                instances = self.vsa_api.get_all_vsa_instances(context, vsa_id)
-                if instances:
-                    print
-                    self._print_instance_header()
-                    for instance in instances:
-                        self._print_instance(instance)
-                    print
-
-            if print_drives:
-                drives = self.vsa_api.get_all_vsa_drives(context, vsa_id)
-                if drives:
-                    self._print_drive_header()
-                    for drive in drives:
-                        self._print_drive(drive)
-                    print
-
-            if print_volumes:
-                volumes = self.vsa_api.get_all_vsa_volumes(context, vsa_id)
-                if volumes:
-                    self._print_volume_header()
-                    for volume in volumes:
-                        self._print_volume(volume)
-                    print
-
-    @args('--storage', dest='storage',
-        metavar="[{'drive_name': 'type', 'num_drives': N, 'size': M},..]",
-        help='Initial storage allocation for VSA')
-    @args('--name', dest='name', metavar="<name>", help='VSA name')
-    @args('--description', dest='description', metavar="<description>",
-        help='VSA description')
-    @args('--vc', dest='vc_count', metavar="<number>", help='Number of VCs')
-    @args('--instance_type', dest='instance_type_name', metavar="<name>",
-        help='Instance type name')
-    @args('--image', dest='image_name', metavar="<name>", help='Image name')
-    @args('--shared', dest='shared', action="store_true", default=False,
-        help='Use shared drives')
-    @args('--az', dest='az', metavar="<zone:host>", help='Availability zone')
-    @args('--user', dest="user_id", metavar='<User name>',
-            help='User name')
-    @args('--project', dest="project_id", metavar='<Project name>',
-            help='Project name')
-    def create(self, storage='[]', name=None, description=None, vc_count=1,
-                     instance_type_name=None, image_name=None, shared=None,
-                     az=None, user_id=None, project_id=None):
-        """Create a VSA."""
-
-        if project_id is None:
-            try:
-                project_id = os.getenv("EC2_ACCESS_KEY").split(':')[1]
-            except Exception as exc:
-                print _("Failed to retrieve project id: %(exc)s") % exc
-                raise
-
-        if user_id is None:
-            try:
-                project = self.manager.get_project(project_id)
-                user_id = project.project_manager_id
-            except Exception as exc:
-                print _("Failed to retrieve user info: %(exc)s") % exc
-                raise
-
-        is_admin = self.manager.is_admin(user_id)
-        ctxt = context.RequestContext(user_id, project_id, is_admin=is_admin)
-        if not is_admin and \
-           not self.manager.is_project_member(user_id, project_id):
-            msg = _("%(user_id)s must be an admin or a "
-                    "member of %(project_id)s")
-            logging.warn(msg % locals())
-            raise ValueError(msg % locals())
-
-        # Sanity check for storage string
-        storage_list = []
-        if storage is not None:
-            try:
-                storage_list = ast.literal_eval(storage)
-            except Exception:
-                print _("Invalid string format %s") % storage
-                raise
-
-            for node in storage_list:
-                if ('drive_name' not in node) or ('num_drives' not in node):
-                    print (_("Invalid string format for element %s. " \
-                            "Expecting keys 'drive_name' & 'num_drives'"),
-                            str(node))
-                    raise KeyError
-
-        if instance_type_name == '':
-            instance_type_name = None
-        instance_type = instance_types.get_instance_type_by_name(
-                                instance_type_name)
-
-        if image_name == '':
-            image_name = None
-
-        if shared in [None, False, "--full_drives"]:
-            shared = False
-        elif shared in [True, "--shared"]:
-            shared = True
-        else:
-            raise ValueError(_('Shared parameter should be set either to "\
-                "--shared or --full_drives'))
-
-        values = {
-            'display_name': name,
-            'display_description': description,
-            'vc_count': int(vc_count),
-            'instance_type': instance_type,
-            'image_name': image_name,
-            'availability_zone': az,
-            'storage': storage_list,
-            'shared': shared,
-            }
-
-        result = self.vsa_api.create(ctxt, **values)
-        self._list(ctxt, [result])
-
-    @args('--id', dest='vsa_id', metavar="<vsa_id>", help='VSA ID')
-    @args('--name', dest='name', metavar="<name>", help='VSA name')
-    @args('--description', dest='description', metavar="<description>",
-        help='VSA description')
-    @args('--vc', dest='vc_count', metavar="<number>", help='Number of VCs')
-    def update(self, vsa_id, name=None, description=None, vc_count=None):
-        """Updates name/description of vsa and number of VCs."""
-
-        values = {}
-        if name is not None:
-            values['display_name'] = name
-        if description is not None:
-            values['display_description'] = description
-        if vc_count is not None:
-            values['vc_count'] = int(vc_count)
-
-        vsa_id = ec2utils.ec2_id_to_id(vsa_id)
-        result = self.vsa_api.update(self.context, vsa_id=vsa_id, **values)
-        self._list(self.context, [result])
-
-    @args('--id', dest='vsa_id', metavar="<vsa_id>", help='VSA ID')
-    def delete(self, vsa_id):
-        """Delete a VSA."""
-        vsa_id = ec2utils.ec2_id_to_id(vsa_id)
-        self.vsa_api.delete(self.context, vsa_id)
-
-    @args('--id', dest='vsa_id', metavar="<vsa_id>",
-        help='VSA ID (optional)')
-    @args('--all', dest='all', action="store_true", default=False,
-        help='Show all available details')
-    @args('--drives', dest='drives', action="store_true",
-        help='Include drive-level details')
-    @args('--volumes', dest='volumes', action="store_true",
-        help='Include volume-level details')
-    @args('--instances', dest='instances', action="store_true",
-        help='Include instance-level details')
-    def list(self, vsa_id=None, all=False,
-             drives=False, volumes=False, instances=False):
-        """Describe all available VSAs (or particular one)."""
-
-        vsas = []
-        if vsa_id is not None:
-            internal_id = ec2utils.ec2_id_to_id(vsa_id)
-            vsa = self.vsa_api.get(self.context, internal_id)
-            vsas.append(vsa)
-        else:
-            vsas = self.vsa_api.get_all(self.context)
-
-        if all:
-            drives = volumes = instances = True
-
-        self._list(self.context, vsas, drives, volumes, instances)
-
-    def update_capabilities(self):
-        """Forces updates capabilities on all nova-volume nodes."""
-
-        rpc.fanout_cast(context.get_admin_context(),
-                 FLAGS.volume_topic,
-                 {"method": "notification",
-                  "args": {"event": "startup"}})
-
-
-class VsaDriveTypeCommands(object):
-    """Methods for dealing with VSA drive types"""
-
-    def __init__(self, *args, **kwargs):
-        super(VsaDriveTypeCommands, self).__init__(*args, **kwargs)
-        self.context = context.get_admin_context()
-        self._drive_type_template = '%s_%sGB_%sRPM'
-
-    def _list(self, drives):
-        format_str = "%-5s %-30s %-10s %-10s %-10s %-20s %-10s %s"
-        if len(drives):
-            print format_str %\
-                   (_('ID'),
-                    _('name'),
-                    _('type'),
-                    _('size_gb'),
-                    _('rpm'),
-                    _('capabilities'),
-                    _('visible'),
-                    _('createTime'))
-
-        for name, vol_type in drives.iteritems():
-            drive = vol_type.get('extra_specs')
-            print format_str %\
-                (str(vol_type['id']),
-                drive['drive_name'],
-                drive['drive_type'],
-                drive['drive_size'],
-                drive['drive_rpm'],
-                drive.get('capabilities', ''),
-                str(drive.get('visible', '')),
-                str(vol_type['created_at']))
-
-    @args('--type', dest='type', metavar="<type>",
-        help='Drive type (SATA, SAS, SSD, etc.)')
-    @args('--size', dest='size_gb', metavar="<gb>", help='Drive size in GB')
-    @args('--rpm', dest='rpm', metavar="<rpm>", help='RPM')
-    @args('--capabilities', dest='capabilities', default=None,
-        metavar="<string>", help='Different capabilities')
-    @args('--hide', dest='hide', action="store_true", default=False,
-        help='Show or hide drive')
-    @args('--name', dest='name', metavar="<name>", help='Drive name')
-    def create(self, type, size_gb, rpm, capabilities=None,
-                     hide=False, name=None):
-        """Create drive type."""
-
-        hide = True if hide in [True, "True", "--hide", "hide"] else False
-
-        if name is None:
-            name = self._drive_type_template % (type, size_gb, rpm)
-
-        extra_specs = {'type': 'vsa_drive',
-                       'drive_name': name,
-                       'drive_type': type,
-                       'drive_size': size_gb,
-                       'drive_rpm': rpm,
-                       'visible': True,
-                       }
-        if hide:
-            extra_specs['visible'] = False
-
-        if capabilities is not None and capabilities != '':
-            extra_specs['capabilities'] = capabilities
-
-        try:
-            volume_types.create(self.context, name, extra_specs)
-            result = volume_types.get_volume_type_by_name(self.context, name)
-            self._list({name: result})
-        except exception.VolumeTypeExists:
-            print
-            print "Volume Type Exists"
-            print "Please ensure volume_type name is unique."
-            print "Currently defined volume types:"
-            print
-            self.list()
-
-    @args('--name', dest='name', metavar="<name>", help='Drive name')
-    def delete(self, name):
-        """Marks volume types as deleted"""
-        try:
-            volume_types.destroy(self.context, name)
-        except exception.InvalidVolumeType:
-            print "Valid volume type name is required"
-            sys.exit(1)
-        except exception.DBError, e:
-            print "DB Error: %s" % e
-            sys.exit(2)
-        except Exception:
-            sys.exit(3)
-        else:
-            print "%s deleted" % name
-
-    @args('--all', dest='all', action="store_true", default=False,
-        help='Show all drives (including invisible)')
-    @args('--name', dest='name', metavar="<name>",
-        help='Show only specified drive')
-    def list(self, all=False, name=None):
-        """Describe all available VSA drive types (or particular one)."""
-
-        all = False if all in ["--all", False, "False"] else True
-
-        search_opts = {'extra_specs': {'type': 'vsa_drive'}}
-        if name is not None:
-            search_opts['extra_specs']['name'] = name
-
-        if not all:
-            search_opts['extra_specs']['visible'] = '1'
-
-        drives = volume_types.get_all_types(self.context,
-                                            search_opts=search_opts)
-        self._list(drives)
-
-    @args('--name', dest='name', metavar="<name>", help='Drive name')
-    @args('--type', dest='type', metavar="<type>",
-        help='Drive type (SATA, SAS, SSD, etc.)')
-    @args('--size', dest='size_gb', metavar="<gb>", help='Drive size in GB')
-    @args('--rpm', dest='rpm', metavar="<rpm>", help='RPM')
-    @args('--capabilities', dest='capabilities', default=None,
-        metavar="<string>", help='Different capabilities')
-    @args('--visible', dest='visible',
-        metavar="<show|hide>", help='Show or hide drive')
-    def update(self, name, type=None, size_gb=None, rpm=None,
-                     capabilities=None, visible=None):
-        """Update drive type."""
-
-        volume_type = volume_types.get_volume_type_by_name(self.context, name)
-
-        extra_specs = {'type': 'vsa_drive'}
-
-        if type:
-            extra_specs['drive_type'] = type
-
-        if size_gb:
-            extra_specs['drive_size'] = size_gb
-
-        if rpm:
-            extra_specs['drive_rpm'] = rpm
-
-        if capabilities:
-            extra_specs['capabilities'] = capabilities
-
-        if visible is not None:
-            if visible in ["show", True, "True"]:
-                extra_specs['visible'] = True
-            elif visible in ["hide", False, "False"]:
-                extra_specs['visible'] = False
-            else:
-                raise ValueError(_('visible parameter should be set to '\
-                                   'show or hide'))
-
-        db.api.volume_type_extra_specs_update_or_create(self.context,
-                    volume_type['id'],
-                    extra_specs)
-        result = volume_types.get_volume_type_by_name(self.context, name)
-        self._list({name: result})
 
 
 class VolumeCommands(object):
@@ -1761,174 +1258,6 @@ class InstanceTypeCommands(object):
             self._print_instance_types(name, inst_types)
 
 
-class ImageCommands(object):
-    """Methods for dealing with a cloud in an odd state"""
-
-    def __init__(self, *args, **kwargs):
-        self.image_service = image.get_default_image_service()
-
-    def _register(self, container_format, disk_format,
-                  path, owner, name=None, is_public='T',
-                  architecture='x86_64', kernel_id=None, ramdisk_id=None):
-        meta = {'is_public': (is_public == 'T'),
-                'name': name,
-                'container_format': container_format,
-                'disk_format': disk_format,
-                'properties': {'image_state': 'available',
-                               'project_id': owner,
-                               'architecture': architecture,
-                               'image_location': 'local'}}
-        if kernel_id:
-            meta['properties']['kernel_id'] = kernel_id
-        if ramdisk_id:
-            meta['properties']['ramdisk_id'] = ramdisk_id
-        elevated = context.get_admin_context()
-        try:
-            with open(path) as ifile:
-                image = self.image_service.create(elevated, meta, ifile)
-            new = image['id']
-            print _("Image registered to %(new)s (%(path)s).") % locals()
-            return new
-        except Exception as exc:
-            print _("Failed to register %(path)s: %(exc)s") % locals()
-            sys.exit(1)
-
-    @args('--image', dest='image', metavar='<image>', help='Image')
-    @args('--kernel', dest='kernel', metavar='<kernel>', help='Kernel')
-    @args('--ram', dest='ramdisk', metavar='<ramdisk>', help='RAM disk')
-    @args('--owner', dest='owner', metavar='<owner>', help='Image owner')
-    @args('--name', dest='name', metavar='<name>', help='Image name')
-    @args('--public', dest='is_public', metavar="<'T'|'F'>",
-            help='Image public or not')
-    @args('--arch', dest='architecture', metavar='<arch>',
-            help='Architecture')
-    def all_register(self, image, kernel, ramdisk, owner, name=None,
-                 is_public='T', architecture='x86_64'):
-        """Uploads an image, kernel, and ramdisk into the image_service"""
-        kernel_id = self.kernel_register(kernel, owner, None,
-                                   is_public, architecture)
-        ramdisk_id = self.ramdisk_register(ramdisk, owner, None,
-                                    is_public, architecture)
-        self.image_register(image, owner, name, is_public,
-                            architecture, 'ami', 'ami',
-                            kernel_id, ramdisk_id)
-
-    @args('--path', dest='path', metavar='<path>', help='Image path')
-    @args('--owner', dest='owner', metavar='<owner>', help='Image owner')
-    @args('--name', dest='name', metavar='<name>', help='Image name')
-    @args('--public', dest='is_public', metavar="<'T'|'F'>",
-            help='Image public or not')
-    @args('--arch', dest='architecture', metavar='<arch>',
-            help='Architecture')
-    @args('--cont_format', dest='container_format',
-            metavar='<container format>',
-            help='Container format(default bare)')
-    @args('--disk_format', dest='disk_format', metavar='<disk format>',
-            help='Disk format(default: raw)')
-    @args('--kernel', dest='kernel_id', metavar='<kernel>', help='Kernel')
-    @args('--ram', dest='ramdisk_id', metavar='<ramdisk>', help='RAM disk')
-    def image_register(self, path, owner, name=None, is_public='T',
-                       architecture='x86_64', container_format='bare',
-                       disk_format='raw', kernel_id=None, ramdisk_id=None):
-        """Uploads an image into the image_service"""
-        return self._register(container_format, disk_format, path,
-                              owner, name, is_public, architecture,
-                              kernel_id, ramdisk_id)
-
-    @args('--path', dest='path', metavar='<path>', help='Image path')
-    @args('--owner', dest='owner', metavar='<owner>', help='Image owner')
-    @args('--name', dest='name', metavar='<name>', help='Image name')
-    @args('--public', dest='is_public', metavar="<'T'|'F'>",
-            help='Image public or not')
-    @args('--arch', dest='architecture', metavar='<arch>',
-            help='Architecture')
-    def kernel_register(self, path, owner, name=None, is_public='T',
-               architecture='x86_64'):
-        """Uploads a kernel into the image_service"""
-        return self._register('aki', 'aki', path, owner, name,
-                              is_public, architecture)
-
-    @args('--path', dest='path', metavar='<path>', help='Image path')
-    @args('--owner', dest='owner', metavar='<owner>', help='Image owner')
-    @args('--name', dest='name', metavar='<name>', help='Image name')
-    @args('--public', dest='is_public', metavar="<'T'|'F'>",
-            help='Image public or not')
-    @args('--arch', dest='architecture', metavar='<arch>',
-            help='Architecture')
-    def ramdisk_register(self, path, owner, name=None, is_public='T',
-                architecture='x86_64'):
-        """Uploads a ramdisk into the image_service"""
-        return self._register('ari', 'ari', path, owner, name,
-                              is_public, architecture)
-
-    def _lookup(self, old_image_id):
-        elevated = context.get_admin_context()
-        try:
-            internal_id = ec2utils.ec2_id_to_id(old_image_id)
-            image = self.image_service.show(elevated, internal_id)
-        except (exception.InvalidEc2Id, exception.ImageNotFound):
-            image = self.image_service.show_by_name(elevated, old_image_id)
-        return image['id']
-
-    def _old_to_new(self, old):
-        mapping = {'machine': 'ami',
-                   'kernel': 'aki',
-                   'ramdisk': 'ari'}
-        container_format = mapping[old['type']]
-        disk_format = container_format
-        if container_format == 'ami' and not old.get('kernelId'):
-            container_format = 'bare'
-            disk_format = 'raw'
-        new = {'disk_format': disk_format,
-               'container_format': container_format,
-               'is_public': old['isPublic'],
-               'name': old['imageId'],
-               'properties': {'image_state': old['imageState'],
-                              'project_id': old['imageOwnerId'],
-                              'architecture': old['architecture'],
-                              'image_location': old['imageLocation']}}
-        if old.get('kernelId'):
-            new['properties']['kernel_id'] = self._lookup(old['kernelId'])
-        if old.get('ramdiskId'):
-            new['properties']['ramdisk_id'] = self._lookup(old['ramdiskId'])
-        return new
-
-    def _convert_images(self, images):
-        elevated = context.get_admin_context()
-        for image_path, image_metadata in images.iteritems():
-            meta = self._old_to_new(image_metadata)
-            old = meta['name']
-            try:
-                with open(image_path) as ifile:
-                    image = self.image_service.create(elevated, meta, ifile)
-                new = image['id']
-                print _("Image %(old)s converted to %(new)s.") % locals()
-            except Exception as exc:
-                print _("Failed to convert %(old)s: %(exc)s") % locals()
-
-    @args('--dir', dest='directory', metavar='<path>',
-            help='Images directory')
-    def convert(self, directory):
-        """Uploads old objectstore images in directory to new service"""
-        machine_images = {}
-        other_images = {}
-        directory = os.path.abspath(directory)
-        for fn in glob.glob("%s/*/info.json" % directory):
-            try:
-                image_path = os.path.join(fn.rpartition('/')[0], 'image')
-                with open(fn) as metadata_file:
-                    image_metadata = json.load(metadata_file)
-                if image_metadata['type'] == 'machine':
-                    machine_images[image_path] = image_metadata
-                else:
-                    other_images[image_path] = image_metadata
-            except Exception:
-                print _("Failed to load %(fn)s.") % locals()
-        # NOTE(vish): do kernels and ramdisks first so images
-        self._convert_images(other_images)
-        self._convert_images(machine_images)
-
-
 class StorageManagerCommands(object):
     """Class for mangaging Storage Backends and Flavors"""
 
@@ -1955,7 +1284,7 @@ class StorageManagerCommands(object):
                     flav['description'])
 
     def flavor_create(self, label, desc):
-        # TODO flavor name must be unique
+        # TODO(renukaapte) flavor name must be unique
         try:
             db.sm_flavor_create(context.get_admin_context(),
                                 dict(label=label,
@@ -2001,61 +1330,57 @@ class StorageManagerCommands(object):
                                                      b['config_params'],)
 
     def backend_add(self, flavor_label, sr_type, *args):
-        # TODO Add backend_introduce.
+        # TODO(renukaapte) Add backend_introduce.
         ctxt = context.get_admin_context()
         params = dict(map(self._splitfun, args))
+        sr_uuid = utils.gen_uuid()
+
+        if flavor_label is None:
+            print "error: backend needs to be associated with flavor"
+            sys.exit(2)
+
+        try:
+            flavors = db.sm_flavor_get(ctxt, flavor_label)
+
+        except exception.NotFound as ex:
+            print "error: %s" % ex
+            sys.exit(2)
+
+        config_params = " ".join(['%s=%s' %
+                               (key, params[key]) for key in params])
 
         if 'sr_uuid' in params:
+            sr_uuid = params['sr_uuid']
             try:
-                backend = db.sm_backend_conf_get_by_sr(ctxt,
-                                                       params['sr_uuid'])
+                backend = db.sm_backend_conf_get_by_sr(ctxt, sr_uuid)
             except exception.DBError, e:
                 _db_error(e)
 
             if backend:
-                if len(backend) > 1:
-                    print 'error: Multiple backends found with given sr_uuid'
-                    sys.exit(2)
-
                 print 'Backend config found. Would you like to recreate this?'
                 print '(WARNING:Recreating will destroy all VDIs on backend!!)'
                 c = raw_input('Proceed? (y/n) ')
                 if c == 'y' or c == 'Y':
                     try:
                         db.sm_backend_conf_update(ctxt, backend['id'],
-                                                  dict(created=False))
+                                        dict(created=False,
+                                             flavor_id=flavors['id'],
+                                             sr_type=sr_type,
+                                             config_params=config_params))
                     except exception.DBError, e:
                         _db_error(e)
                 return
 
             else:
                 print 'Backend config not found. Would you like to create it?'
-                print '(WARNING: Creating will destroy all data on backend!!!)'
-                c = raw_input('Proceed? (y/n) ')
-                if c != 'y' and c != 'Y':
-                    return
 
         print '(WARNING: Creating will destroy all data on backend!!!)'
         c = raw_input('Proceed? (y/n) ')
         if c == 'y' or c == 'Y':
-            if flavor_label is None:
-                print "error: backend needs to be associated with flavor"
-                sys.exit(2)
-
-            try:
-                flavors = db.sm_flavor_get(ctxt, flavor_label)
-
-            except exception.NotFound as ex:
-                print "error: %s" % ex
-                sys.exit(2)
-
-            config_params = "".join(['%s=%s ' %
-                                   (key, params[key]) for key in params])
-
             try:
                 db.sm_backend_conf_create(ctxt,
-                                          dict(flavor_id=flavors[0]['id'],
-                                               sr_uuid=None,
+                                          dict(flavor_id=flavors['id'],
+                                               sr_uuid=sr_uuid,
                                                sr_type=sr_type,
                                                config_params=config_params))
             except exception.DBError, e:
@@ -2141,14 +1466,31 @@ class ConfigCommands(object):
             if value is not None:
                 print '%s = %s' % (key, value)
 
+    @args('--infile', dest='infile', metavar='<path>',
+          help='old-style flagfile to convert to config')
+    @args('--outfile', dest='outfile', metavar='<path>',
+          help='path for output file. Writes config'
+               'to stdout if not specified.')
+    def convert(self, infile, outfile=None):
+        """Converts a flagfile and prints results to stdout."""
+        arg = '--flagfile=%s' % infile
+        with flagfile.handle_flagfiles_managed([arg]) as newargs:
+            with open(newargs[0].split('=')[1]) as configfile:
+                config = configfile.read()
+            if outfile:
+                with open(outfile, 'w') as configfile:
+                    configfile.write(config)
+            else:
+                print config,
+
 
 class GetLogCommands(object):
     """Get logging information"""
 
     def errors(self):
         """Get all of the errors from the log files"""
+        error_found = 0
         if FLAGS.logdir:
-            error_found = 0
             logs = [x for x in os.listdir(FLAGS.logdir) if x.endswith('.log')]
             for file in logs:
                 log_file = os.path.join(FLAGS.logdir, file)
@@ -2169,7 +1511,15 @@ class GetLogCommands(object):
         """Get <num_entries> of the nova syslog events"""
         entries = int(num_entries)
         count = 0
-        lines = [line.strip() for line in open('/var/log/syslog', "r")]
+        log_file = ''
+        if os.path.exists('/var/log/syslog'):
+            log_file = '/var/log/syslog'
+        elif os.path.exists('/var/log/messages'):
+            log_file = '/var/log/messages'
+        else:
+            print "Unable to find system log file!"
+            sys.exit(1)
+        lines = [line.strip() for line in open(log_file, "r")]
         lines.reverse()
         print "Last %s nova syslog entries:-" % (entries)
         for line in lines:
@@ -2203,16 +1553,23 @@ class ExportCommands(object):
         am = manager.AuthManager()
 
         for user in am.get_users():
+            # NOTE(vish): Deprecated auth uses an access key, no auth uses a
+            #             the user_id in place of it.
+            if FLAGS.auth_strategy == 'deprecated':
+                access = user.access
+            else:
+                access = user.id
+
             user_dict = {
                 'id': user.id,
                 'name': user.name,
-                'password': user.access,
+                'password': access,
             }
             output['users'].append(user_dict)
 
             ec2_cred = {
                 'user_id': user.id,
-                'access_key': user.access,
+                'access_key': access,
                 'secret_key': user.secret,
             }
             output['ec2_credentials'].append(ec2_cred)
@@ -2255,14 +1612,13 @@ CATEGORIES = [
     ('agent', AgentBuildCommands),
     ('config', ConfigCommands),
     ('db', DbCommands),
-    ('drive', VsaDriveTypeCommands),
     ('export', ExportCommands),
     ('fixed', FixedIpCommands),
     ('flavor', InstanceTypeCommands),
     ('floating', FloatingIpCommands),
     ('host', HostCommands),
     ('instance_type', InstanceTypeCommands),
-    ('image', ImageCommands),
+    ('logs', GetLogCommands),
     ('network', NetworkCommands),
     ('project', ProjectCommands),
     ('role', RoleCommands),
@@ -2274,8 +1630,7 @@ CATEGORIES = [
     ('vm', VmCommands),
     ('volume', VolumeCommands),
     ('vpn', VpnCommands),
-    ('vsa', VsaCommands),
-    ('logs', GetLogCommands)]
+]
 
 
 def lazy_match(name, key_value_tuples):
@@ -2321,6 +1676,8 @@ def main():
         except Exception:
             print 'sudo failed, continuing as if nothing happened'
 
+    rpc.register_opts(FLAGS)
+
     try:
         argv = FLAGS(sys.argv)
         logging.setup()
@@ -2329,11 +1686,11 @@ def main():
             print _('Please re-run nova-manage as root.')
             sys.exit(2)
         raise
-
     script_name = argv.pop(0)
     if len(argv) < 1:
-        print _("\nOpenStack Nova version: %s (%s)\n") %\
-                (version.version_string(), version.version_string_with_vcs())
+        print _("\nOpenStack Nova version: %(version)s (%(vcs)s)\n") % \
+                {'version': version.version_string(),
+                 'vcs': version.version_string_with_vcs()}
         print script_name + " category action [<args>]"
         print _("Available categories:")
         for k, _v in CATEGORIES:
@@ -2373,6 +1730,12 @@ def main():
     for k, v in fn_kwargs.items():
         if v is None:
             del fn_kwargs[k]
+        elif isinstance(v, basestring):
+            fn_kwargs[k] = v.decode('utf-8')
+        else:
+            fn_kwargs[k] = v
+
+    fn_args = [arg.decode('utf-8') for arg in fn_args]
 
     # call the action with the remaining arguments
     try:

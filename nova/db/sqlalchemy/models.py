@@ -278,7 +278,7 @@ class Instance(BASE, NovaBase):
     # EC2 disable_api_termination
     disable_terminate = Column(Boolean(), default=False, nullable=False)
 
-    # Openstack compute cell name
+    # OpenStack compute cell name
     cell_name = Column(String(255))
 
 
@@ -297,35 +297,7 @@ class InstanceInfoCache(BASE, NovaBase):
     instance = relationship(Instance,
                             backref=backref('info_cache', uselist=False),
                             foreign_keys=instance_id,
-                            primaryjoin='and_('
-                              'InstanceInfoCache.instance_id == Instance.uuid,'
-                              'InstanceInfoCache.deleted == False)')
-
-
-class VirtualStorageArray(BASE, NovaBase):
-    """
-    Represents a virtual storage array supplying block storage to instances.
-    """
-    __tablename__ = 'virtual_storage_arrays'
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-
-    @property
-    def name(self):
-        return FLAGS.vsa_name_template % self.id
-
-    # User editable field for display in user-facing UIs
-    display_name = Column(String(255))
-    display_description = Column(String(255))
-
-    project_id = Column(String(255))
-    availability_zone = Column(String(255))
-
-    instance_type_id = Column(Integer, ForeignKey('instance_types.id'))
-    image_ref = Column(String(255))
-    vc_count = Column(Integer, default=0)   # number of requested VC instances
-    vol_count = Column(Integer, default=0)  # total number of BE volumes
-    status = Column(String(255))
+                            primaryjoin=instance_id == Instance.uuid)
 
 
 class InstanceActions(BASE, NovaBase):
@@ -358,13 +330,6 @@ class InstanceTypes(BASE, NovaBase):
                                'Instance.instance_type_id == '
                                'InstanceTypes.id, '
                                'InstanceTypes.deleted == False)')
-
-    vsas = relationship(VirtualStorageArray,
-                       backref=backref('vsa_instance_type', uselist=False),
-                       foreign_keys=id,
-                       primaryjoin='and_('
-                           'VirtualStorageArray.instance_type_id == '
-                           'InstanceTypes.id, InstanceTypes.deleted == False)')
 
 
 class Volume(BASE, NovaBase):
@@ -454,15 +419,34 @@ class VolumeTypeExtraSpecs(BASE, NovaBase):
 class Quota(BASE, NovaBase):
     """Represents a single quota override for a project.
 
-    If there is no row for a given project id and resource, then
-    the default for the deployment is used. If the row is present
-    but the hard limit is Null, then the resource is unlimited.
+    If there is no row for a given project id and resource, then the
+    default for the quota class is used.  If there is no row for a
+    given quota class and resource, then the default for the
+    deployment is used. If the row is present but the hard limit is
+    Null, then the resource is unlimited.
     """
 
     __tablename__ = 'quotas'
     id = Column(Integer, primary_key=True)
 
     project_id = Column(String(255), index=True)
+
+    resource = Column(String(255))
+    hard_limit = Column(Integer, nullable=True)
+
+
+class QuotaClass(BASE, NovaBase):
+    """Represents a single quota override for a quota class.
+
+    If there is no row for a given quota class and resource, then the
+    default for the deployment is used.  If the row is present but the
+    hard limit is Null, then the resource is unlimited.
+    """
+
+    __tablename__ = 'quota_classes'
+    id = Column(Integer, primary_key=True)
+
+    class_name = Column(String(255), index=True)
 
     resource = Column(String(255))
     hard_limit = Column(Integer, nullable=True)
@@ -498,12 +482,14 @@ class BlockDeviceMapping(BASE, NovaBase):
     __tablename__ = "block_device_mapping"
     id = Column(Integer, primary_key=True, autoincrement=True)
 
-    instance_id = Column(Integer, ForeignKey('instances.id'), nullable=False)
+    instance_uuid = Column(Integer, ForeignKey('instances.uuid'),
+                           nullable=False)
     instance = relationship(Instance,
                             backref=backref('balock_device_mapping'),
-                            foreign_keys=instance_id,
-                            primaryjoin='and_(BlockDeviceMapping.instance_id=='
-                                              'Instance.id,'
+                            foreign_keys=instance_uuid,
+                            primaryjoin='and_(BlockDeviceMapping.'
+                                              'instance_uuid=='
+                                              'Instance.uuid,'
                                               'BlockDeviceMapping.deleted=='
                                               'False)')
     device_name = Column(String(255), nullable=False)
@@ -638,8 +624,10 @@ class Migration(BASE, NovaBase):
     """Represents a running host-to-host migration."""
     __tablename__ = 'migrations'
     id = Column(Integer, primary_key=True, nullable=False)
+    # NOTE(tr3buchet): the ____compute variables are instance['host']
     source_compute = Column(String(255))
     dest_compute = Column(String(255))
+    # NOTE(tr3buchet): dest_host, btw, is an ip address
     dest_host = Column(String(255))
     old_instance_type_id = Column(Integer())
     new_instance_type_id = Column(Integer())
@@ -959,6 +947,7 @@ class BandwidthUsage(BASE, NovaBase):
     """Cache for instance bandwidth usage data pulled from the hypervisor"""
     __tablename__ = 'bw_usage_cache'
     id = Column(Integer, primary_key=True, nullable=False)
+    uuid = Column(String(36), nullable=False)
     mac = Column(String(255), nullable=False)
     start_period = Column(DateTime, nullable=False)
     last_refreshed = Column(DateTime)
@@ -1047,7 +1036,6 @@ def register_models():
               SMFlavors,
               SMVolume,
               User,
-              VirtualStorageArray,
               Volume,
               VolumeMetadata,
               VolumeTypeExtraSpecs,

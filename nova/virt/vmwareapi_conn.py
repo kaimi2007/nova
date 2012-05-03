@@ -47,7 +47,7 @@ from nova.virt import driver
 from nova.virt.vmwareapi import error_util
 from nova.virt.vmwareapi import vim
 from nova.virt.vmwareapi import vim_util
-from nova.virt.vmwareapi.vmops import VMWareVMOps
+from nova.virt.vmwareapi import vmops
 
 
 LOG = logging.getLogger(__name__)
@@ -95,7 +95,7 @@ class Failure(Exception):
         return str(self.details)
 
 
-def get_connection(_):
+def get_connection(_read_only):
     """Sets up the ESX host connection."""
     host_ip = FLAGS.vmwareapi_host_ip
     host_username = FLAGS.vmwareapi_host_username
@@ -118,7 +118,7 @@ class VMWareESXConnection(driver.ComputeDriver):
         super(VMWareESXConnection, self).__init__()
         session = VMWareAPISession(host_ip, host_username, host_password,
                                    api_retry_count, scheme=scheme)
-        self._vmops = VMWareVMOps(session)
+        self._vmops = vmops.VMWareVMOps(session)
 
     def init_host(self, host):
         """Do the initialization that needs to be done."""
@@ -177,10 +177,11 @@ class VMWareESXConnection(driver.ComputeDriver):
     def get_volume_connector(self, _instance):
         """Return volume connector information"""
         # TODO(vish): When volume attaching is supported, return the
-        #             proper initiator iqn.
+        #             proper initiator iqn and host.
         return {
             'ip': FLAGS.vmwareapi_host_ip,
-            'initiator': None
+            'initiator': None,
+            'host': None
         }
 
     def attach_volume(self, connection_info, instance_name, mountpoint):
@@ -374,7 +375,7 @@ class VMWareAPISession(object):
         done = event.Event()
         loop = utils.LoopingCall(self._poll_task, instance_uuid, task_ref,
                                       done)
-        loop.start(FLAGS.vmwareapi_task_poll_interval, now=True)
+        loop.start(FLAGS.vmwareapi_task_poll_interval)
         ret_val = done.wait()
         loop.stop()
         return ret_val

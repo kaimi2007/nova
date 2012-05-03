@@ -39,7 +39,7 @@ from nova import log as logging
 from nova.openstack.common import cfg
 from nova import utils
 from nova import service
-from nova.testing.fake import rabbit
+from nova import tests
 from nova.virt import fake
 
 
@@ -115,6 +115,10 @@ def skip_if_fake(func):
     return _skipper
 
 
+class TestingException(Exception):
+    pass
+
+
 class TestCase(unittest.TestCase):
     """Test case base class for all unit tests."""
 
@@ -125,8 +129,7 @@ class TestCase(unittest.TestCase):
         #             now that we have some required db setup for the system
         #             to work properly.
         self.start = utils.utcnow()
-        shutil.copyfile(os.path.join(FLAGS.state_path, FLAGS.sqlite_clean_db),
-                        os.path.join(FLAGS.state_path, FLAGS.sqlite_db))
+        tests.reset_db()
 
         # emulate some of the mox stuff, we can't use the metaclass
         # because it screws with our generators
@@ -145,10 +148,6 @@ class TestCase(unittest.TestCase):
             self.mox.VerifyAll()
             super(TestCase, self).tearDown()
         finally:
-            # Clean out fake_rabbit's queue if we used it
-            if FLAGS.fake_rabbit:
-                rabbit.reset_all()
-
             if FLAGS.connection_type == 'fake':
                 if hasattr(fake.FakeConnection, '_instance'):
                     del fake.FakeConnection._instance
@@ -172,6 +171,12 @@ class TestCase(unittest.TestCase):
                     x.kill()
                 except Exception:
                     pass
+
+            # Delete attributes that don't start with _ so they don't pin
+            # memory around unnecessarily for the duration of the test
+            # suite
+            for key in [k for k in self.__dict__.keys() if k[0] != '_']:
+                del self.__dict__[key]
 
     def flags(self, **kw):
         """Override flag variables for a test."""

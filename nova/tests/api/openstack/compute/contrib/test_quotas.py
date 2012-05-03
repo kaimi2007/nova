@@ -53,10 +53,12 @@ class QuotaSetsTest(test.TestCase):
             'metadata_items': 128,
             'gigabytes': 1000,
             'injected_files': 5,
-            'injected_file_content_bytes': 10240}
+            'injected_file_content_bytes': 10240,
+            'security_groups': 10,
+            'security_group_rules': 20,
+            }
 
-        quota_set = quotas.QuotaSetsController()._format_quota_set('1234',
-                                                            raw_quota_set)
+        quota_set = self.controller._format_quota_set('1234', raw_quota_set)
         qs = quota_set['quota_set']
 
         self.assertEqual(qs['id'], '1234')
@@ -69,6 +71,8 @@ class QuotaSetsTest(test.TestCase):
         self.assertEqual(qs['metadata_items'], 128)
         self.assertEqual(qs['injected_files'], 5)
         self.assertEqual(qs['injected_file_content_bytes'], 10240)
+        self.assertEqual(qs['security_groups'], 10)
+        self.assertEqual(qs['security_group_rules'], 20)
 
     def test_quotas_defaults(self):
         uri = '/v2/fake_tenant/os-quota-sets/fake_tenant/defaults'
@@ -86,7 +90,10 @@ class QuotaSetsTest(test.TestCase):
                     'floating_ips': 10,
                     'metadata_items': 128,
                     'injected_files': 5,
-                    'injected_file_content_bytes': 10240}}
+                    'injected_file_content_bytes': 10240,
+                    'security_groups': 10,
+                    'security_group_rules': 20,
+                    }}
 
         self.assertEqual(res_dict, expected)
 
@@ -107,7 +114,9 @@ class QuotaSetsTest(test.TestCase):
                               'ram': 51200, 'volumes': 10,
                               'gigabytes': 1000, 'floating_ips': 10,
                               'metadata_items': 128, 'injected_files': 5,
-                              'injected_file_content_bytes': 10240}}
+                              'injected_file_content_bytes': 10240,
+                              'security_groups': 10,
+                              'security_group_rules': 20}}
 
         req = fakes.HTTPRequest.blank('/v2/fake4/os-quota-sets/update_me',
                                       use_admin_context=True)
@@ -120,10 +129,24 @@ class QuotaSetsTest(test.TestCase):
                               'ram': 51200, 'volumes': 10,
                               'gigabytes': 1000, 'floating_ips': 10,
                               'metadata_items': 128, 'injected_files': 5,
-                              'injected_file_content_bytes': 10240}}
+                              'injected_file_content_bytes': 10240,
+                              'security_groups': 10,
+                              'security_group_rules': 20}}
 
         req = fakes.HTTPRequest.blank('/v2/fake4/os-quota-sets/update_me')
         self.assertRaises(webob.exc.HTTPForbidden, self.controller.update,
+                          req, 'update_me', body)
+
+    def test_quotas_update_invalid_limit(self):
+        body = {'quota_set': {'instances': -2, 'cores': -2,
+                              'ram': -2, 'volumes': -2,
+                              'gigabytes': -2, 'floating_ips': -2,
+                              'metadata_items': -2, 'injected_files': -2,
+                              'injected_file_content_bytes': -2}}
+
+        req = fakes.HTTPRequest.blank('/v2/fake4/os-quota-sets/update_me',
+                                      use_admin_context=True)
+        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.update,
                           req, 'update_me', body)
 
 
@@ -144,6 +167,8 @@ class QuotaXMLSerializerTest(test.TestCase):
                 floating_ips=60,
                 instances=70,
                 injected_files=80,
+                security_groups=10,
+                security_group_rules=20,
                 cores=90))
         text = self.serializer.serialize(exemplar)
 
@@ -167,6 +192,8 @@ class QuotaXMLSerializerTest(test.TestCase):
                 floating_ips='60',
                 instances='70',
                 injected_files='80',
+                security_groups='10',
+                security_group_rules='20',
                 cores='90'))
         intext = ("<?xml version='1.0' encoding='UTF-8'?>\n"
                   '<quota_set>'
@@ -179,6 +206,8 @@ class QuotaXMLSerializerTest(test.TestCase):
                   '<floating_ips>60</floating_ips>'
                   '<instances>70</instances>'
                   '<injected_files>80</injected_files>'
+                  '<security_groups>10</security_groups>'
+                  '<security_group_rules>20</security_group_rules>'
                   '<cores>90</cores>'
                   '</quota_set>')
 

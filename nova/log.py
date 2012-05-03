@@ -43,8 +43,8 @@ import traceback
 
 import nova
 from nova import flags
-from nova import local
 from nova.openstack.common import cfg
+from nova.openstack.common import local
 from nova import version
 
 
@@ -63,12 +63,8 @@ log_opts = [
                        '%(pathname)s:%(lineno)d',
                help='data to append to log format when level is DEBUG'),
     cfg.StrOpt('logging_exception_prefix',
-               default='(%(name)s): TRACE: ',
+               default='%(asctime)s TRACE %(name)s %(instance)s',
                help='prefix each line of exception output with this format'),
-    cfg.StrOpt('instance_format',
-               default='[instance: %(uuid)s] ',
-               help='If an instance is passed with the log message, format '
-                    'it like this'),
     cfg.ListOpt('default_log_levels',
                 default=[
                   'amqplib=WARN',
@@ -81,6 +77,18 @@ log_opts = [
     cfg.BoolOpt('publish_errors',
                 default=False,
                 help='publish error events'),
+
+    # NOTE(mikal): there are two options here because sometimes we are handed
+    # a full instance (and could include more information), and other times we
+    # are just handed a UUID for the instance.
+    cfg.StrOpt('instance_format',
+               default='[instance: %(uuid)s] ',
+               help='If an instance is passed with the log message, format '
+                    'it like this'),
+    cfg.StrOpt('instance_uuid_format',
+               default='[instance: %(uuid)s] ',
+               help='If an instance UUID is passed with the log message, '
+                    'format it like this'),
     ]
 
 FLAGS = flags.FLAGS
@@ -158,6 +166,11 @@ class NovaContextAdapter(logging.LoggerAdapter):
         instance_extra = ''
         if instance:
             instance_extra = FLAGS.instance_format % instance
+        else:
+            instance_uuid = kwargs.pop('instance_uuid', None)
+            if instance_uuid:
+                instance_extra = (FLAGS.instance_uuid_format
+                                  % {'uuid': instance_uuid})
         extra.update({'instance': instance_extra})
 
         extra.update({"nova_version": version.version_string_with_vcs()})
@@ -247,11 +260,16 @@ class LegacyNovaFormatter(logging.Formatter):
         """Format exception output with FLAGS.logging_exception_prefix."""
         if not record:
             return logging.Formatter.formatException(self, exc_info)
+
         stringbuffer = cStringIO.StringIO()
         traceback.print_exception(exc_info[0], exc_info[1], exc_info[2],
                                   None, stringbuffer)
         lines = stringbuffer.getvalue().split('\n')
         stringbuffer.close()
+
+        if FLAGS.logging_exception_prefix.find('%(asctime)') != -1:
+            record.asctime = self.formatTime(record, self.datefmt)
+
         formatted_lines = []
         for line in lines:
             pl = FLAGS.logging_exception_prefix % record.__dict__

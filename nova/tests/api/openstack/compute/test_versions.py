@@ -19,7 +19,6 @@ import json
 
 import feedparser
 from lxml import etree
-import stubout
 import webob
 
 from nova.api.openstack.compute import versions
@@ -33,7 +32,7 @@ from nova import utils
 
 NS = {
     'atom': 'http://www.w3.org/2005/Atom',
-    'ns': 'http://docs.openstack.org/compute/api/v1.1'
+    'ns': 'http://docs.openstack.org/common/api/v1.0'
 }
 
 
@@ -81,15 +80,8 @@ VERSIONS = {
 class VersionsTest(test.TestCase):
     def setUp(self):
         super(VersionsTest, self).setUp()
-        self.stubs = stubout.StubOutForTesting()
         fakes.stub_out_auth(self.stubs)
-        #Stub out VERSIONS
-        self.old_versions = versions.VERSIONS
-        versions.VERSIONS = VERSIONS
-
-    def tearDown(self):
-        versions.VERSIONS = self.old_versions
-        super(VersionsTest, self).tearDown()
+        self.stubs.Set(versions, 'VERSIONS', VERSIONS)
 
     def test_get_version_list(self):
         req = webob.Request.blank('/')

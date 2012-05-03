@@ -120,6 +120,9 @@ class FakeNetworkManager(network_manager.NetworkManager):
         def network_get(self, context, network_id):
             return {'cidr_v6': '2001:db8:69:%x::/64' % network_id}
 
+        def network_get_by_uuid(self, context, network_uuid):
+            raise exception.NetworkNotFoundForUUID()
+
         def network_get_all(self, context):
             raise exception.NoNetworksFound()
 
@@ -147,7 +150,7 @@ class FakeNetworkManager(network_manager.NetworkManager):
         self.db = self.FakeDB()
         self.deallocate_called = None
 
-    def deallocate_fixed_ip(self, context, address):
+    def deallocate_fixed_ip(self, context, address=None, host=None):
         self.deallocate_called = address
 
     def _create_fixed_ips(self, context, network_id, fixed_cidr=None):

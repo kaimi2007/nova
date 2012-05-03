@@ -19,6 +19,7 @@ from nova import flags
 from nova import utils
 from nova import log as logging
 from nova.openstack.common import cfg
+from nova.openstack.common import importutils
 
 
 LOG = logging.getLogger(__name__)
@@ -79,45 +80,45 @@ def publisher_id(service, host=None):
 
 
 def notify(publisher_id, event_type, priority, payload):
-    """
-    Sends a notification using the specified driver
+    """Sends a notification using the specified driver
 
-    Notify parameters:
-
-    publisher_id - the source worker_type.host of the message
-    event_type - the literal type of event (ex. Instance Creation)
-    priority - patterned after the enumeration of Python logging levels in
-               the set (DEBUG, WARN, INFO, ERROR, CRITICAL)
-    payload - A python dictionary of attributes
+    :param publisher_id: the source worker_type.host of the message
+    :param event_type:   the literal type of event (ex. Instance Creation)
+    :param priority:     patterned after the enumeration of Python logging
+                         levels in the set (DEBUG, WARN, INFO, ERROR, CRITICAL)
+    :param payload:       A python dictionary of attributes
 
     Outgoing message format includes the above parameters, and appends the
     following:
 
-    message_id - a UUID representing the id for this notification
-    timestamp - the GMT timestamp the notification was sent at
+    message_id
+      a UUID representing the id for this notification
+
+    timestamp
+      the GMT timestamp the notification was sent at
 
     The composite message will be constructed as a dictionary of the above
     attributes, which will then be sent via the transport mechanism defined
     by the driver.
 
-    Message example:
+    Message example::
 
-    {'message_id': str(uuid.uuid4()),
-     'publisher_id': 'compute.host1',
-     'timestamp': utils.utcnow(),
-     'priority': 'WARN',
-     'event_type': 'compute.create_instance',
-     'payload': {'instance_id': 12, ... }}
+        {'message_id': str(uuid.uuid4()),
+         'publisher_id': 'compute.host1',
+         'timestamp': utils.utcnow(),
+         'priority': 'WARN',
+         'event_type': 'compute.create_instance',
+         'payload': {'instance_id': 12, ... }}
 
     """
     if priority not in log_levels:
         raise BadPriorityException(
-                 _('%s not in valid priorities' % priority))
+                 _('%s not in valid priorities') % priority)
 
     # Ensure everything is JSON serializable.
     payload = utils.to_primitive(payload, convert_instances=True)
 
-    driver = utils.import_object(FLAGS.notification_driver)
+    driver = importutils.import_module(FLAGS.notification_driver)
     msg = dict(message_id=str(uuid.uuid4()),
                    publisher_id=publisher_id,
                    event_type=event_type,
@@ -128,5 +129,5 @@ def notify(publisher_id, event_type, priority, payload):
         driver.notify(msg)
     except Exception, e:
         LOG.exception(_("Problem '%(e)s' attempting to "
-                        "send to notification system. Payload=%(payload)s" %
-                        locals()))
+                        "send to notification system. Payload=%(payload)s") %
+                        locals())

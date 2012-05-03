@@ -20,6 +20,7 @@ import webob
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova.api.openstack import extensions
+from nova.db.sqlalchemy import api as sqlalchemy_api
 from nova import db
 from nova import exception
 from nova import quota
@@ -28,17 +29,12 @@ from nova import quota
 authorize = extensions.extension_authorizer('compute', 'quotas')
 
 
-quota_resources = ['metadata_items', 'injected_file_content_bytes',
-        'volumes', 'gigabytes', 'ram', 'floating_ips', 'instances',
-        'injected_files', 'cores']
-
-
 class QuotaTemplate(xmlutil.TemplateBuilder):
     def construct(self):
         root = xmlutil.TemplateElement('quota_set', selector='quota_set')
         root.set('id')
 
-        for resource in quota_resources:
+        for resource in quota.quota_resources:
             elem = xmlutil.SubTemplateElement(root, resource)
             elem.text = resource
 
@@ -52,17 +48,23 @@ class QuotaSetsController(object):
 
         result = dict(id=str(project_id))
 
-        for resource in quota_resources:
+        for resource in quota.quota_resources:
             result[resource] = quota_set[resource]
 
         return dict(quota_set=result)
+
+    def _validate_quota_limit(self, limit):
+        # NOTE: -1 is a flag value for unlimited
+        if limit < -1:
+            msg = _("Quota limit must be -1 or greater.")
+            raise webob.exc.HTTPBadRequest(explanation=msg)
 
     @wsgi.serializers(xml=QuotaTemplate)
     def show(self, req, id):
         context = req.environ['nova.context']
         authorize(context)
         try:
-            db.sqlalchemy.api.authorize_project_context(context, id)
+            sqlalchemy_api.authorize_project_context(context, id)
             return self._format_quota_set(id,
                                         quota.get_project_quotas(context, id))
         except exception.NotAuthorized:
@@ -74,8 +76,9 @@ class QuotaSetsController(object):
         authorize(context)
         project_id = id
         for key in body['quota_set'].keys():
-            if key in quota_resources:
+            if key in quota.quota_resources:
                 value = int(body['quota_set'][key])
+                self._validate_quota_limit(value)
                 try:
                     db.quota_update(context, project_id, key, value)
                 except exception.ProjectQuotaNotFound:
@@ -84,6 +87,7 @@ class QuotaSetsController(object):
                     raise webob.exc.HTTPForbidden()
         return {'quota_set': quota.get_project_quotas(context, project_id)}
 
+    @wsgi.serializers(xml=QuotaTemplate)
     def defaults(self, req, id):
         authorize(req.environ['nova.context'])
         return self._format_quota_set(id, quota._get_default_quotas())

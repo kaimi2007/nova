@@ -275,7 +275,7 @@ class VolumeAttachmentsTemplate(xmlutil.TemplateBuilder):
 
 
 class VolumeAttachmentController(object):
-    """The volume attachment API controller for the Openstack API.
+    """The volume attachment API controller for the OpenStack API.
 
     A child resource of the server.  Note that we use the volume id
     as the ID of the attachment (though this is not guaranteed externally)
@@ -308,7 +308,8 @@ class VolumeAttachmentController(object):
 
         instance = vol['instance']
         if instance is None or str(instance['uuid']) != server_id:
-            LOG.debug("instance_id != server_id")
+            LOG.debug("Instance not found (server_id=%(server_id)s)",
+                      {'server_id': server_id}, instance=instance)
             raise exc.HTTPNotFound()
 
         return {'volumeAttachment': _translate_attachment_detail_view(context,
@@ -372,7 +373,8 @@ class VolumeAttachmentController(object):
 
         instance = vol['instance']
         if instance is None or str(instance['uuid']) != server_id:
-            LOG.debug("instance_id != server_id")
+            LOG.debug("Instance not found (server_id=%(server_id)s)",
+                      {'server_id': server_id}, instance=instance)
             raise exc.HTTPNotFound()
 
         self.compute_api.detach_volume(context,
@@ -397,7 +399,7 @@ class VolumeAttachmentController(object):
 
 
 class BootFromVolumeController(servers.Controller):
-    """The boot from volume API controller for the Openstack API."""
+    """The boot from volume API controller for the OpenStack API."""
 
     def _get_block_device_mapping(self, data):
         return data.get('block_device_mapping')
@@ -481,7 +483,8 @@ class SnapshotController(object):
         LOG.audit(_("Delete snapshot with id: %s"), id, context=context)
 
         try:
-            self.volume_api.delete_snapshot(context, snapshot_id=id)
+            snapshot = self.volume_api.get_snapshot(context, id)
+            self.volume_api.delete_snapshot(context, snapshot)
         except exception.NotFound:
             return exc.HTTPNotFound()
         return webob.Response(status_int=202)

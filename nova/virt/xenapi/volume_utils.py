@@ -28,7 +28,7 @@ from nova import exception
 from nova import flags
 from nova import log as logging
 from nova import utils
-from nova.virt.xenapi import HelperBase
+from nova.virt import xenapi
 
 FLAGS = flags.FLAGS
 LOG = logging.getLogger(__name__)
@@ -41,7 +41,7 @@ class StorageError(Exception):
         super(StorageError, self).__init__(message)
 
 
-class VolumeHelper(HelperBase):
+class VolumeHelper(xenapi.HelperBase):
     """
     The class that wraps the helper methods together.
     """
@@ -71,7 +71,7 @@ class VolumeHelper(HelperBase):
             LOG.debug(_('Created %(label)s as %(sr_ref)s.') % locals())
             return sr_ref
 
-        except cls.XenAPI.Failure, exc:
+        except session.XenAPI.Failure, exc:
             LOG.exception(exc)
             raise StorageError(_('Unable to create Storage Repository'))
 
@@ -111,7 +111,7 @@ class VolumeHelper(HelperBase):
             session.call_xenapi("SR.scan", sr_ref)
             return sr_ref
 
-        except cls.XenAPI.Failure, exc:
+        except session.XenAPI.Failure, exc:
             LOG.exception(exc)
             raise StorageError(_('Unable to introduce Storage Repository'))
 
@@ -122,7 +122,7 @@ class VolumeHelper(HelperBase):
         """
         try:
             sr_ref = session.call_xenapi("SR.get_by_uuid", sr_uuid)
-        except cls.XenAPI.Failure, exc:
+        except session.XenAPI.Failure, exc:
             LOG.exception(exc)
             raise StorageError(_('Unable to get SR using uuid'))
 
@@ -132,7 +132,7 @@ class VolumeHelper(HelperBase):
             cls.unplug_pbds(session, sr_ref)
             sr_ref = session.call_xenapi("SR.forget", sr_ref)
 
-        except cls.XenAPI.Failure, exc:
+        except session.XenAPI.Failure, exc:
             LOG.exception(exc)
             raise StorageError(_('Unable to forget Storage Repository'))
 
@@ -169,7 +169,7 @@ class VolumeHelper(HelperBase):
             try:
                 LOG.debug(_('Introduced %(label)s as %(sr_ref)s.') % locals())
                 return sr_ref
-            except cls.XenAPI.Failure, exc:
+            except session.XenAPI.Failure, exc:
                 LOG.exception(exc)
                 raise StorageError(_('Unable to create Storage Repository'))
         else:
@@ -181,34 +181,10 @@ class VolumeHelper(HelperBase):
         try:
             vdi_ref = session.call_xenapi("VBD.get_VDI", vbd_ref)
             sr_ref = session.call_xenapi("VDI.get_SR", vdi_ref)
-        except cls.XenAPI.Failure, exc:
+        except session.XenAPI.Failure, exc:
             LOG.exception(exc)
             raise StorageError(_('Unable to find SR from VBD %s') % vbd_ref)
         return sr_ref
-
-    @classmethod
-    def create_vbd(cls, session, vm_ref, vdi_ref, userdevice, bootable):
-        """Create a VBD record.  Returns a Deferred that gives the new
-        VBD reference."""
-        vbd_rec = {}
-        vbd_rec['VM'] = vm_ref
-        vbd_rec['VDI'] = vdi_ref
-        vbd_rec['userdevice'] = str(userdevice)
-        vbd_rec['bootable'] = bootable
-        vbd_rec['mode'] = 'RW'
-        vbd_rec['type'] = 'disk'
-        vbd_rec['unpluggable'] = True
-        vbd_rec['empty'] = False
-        vbd_rec['other_config'] = {}
-        vbd_rec['qos_algorithm_type'] = ''
-        vbd_rec['qos_algorithm_params'] = {}
-        vbd_rec['qos_supported_algorithms'] = []
-        LOG.debug(_('Creating VBD for VM %(vm_ref)s,'
-                ' VDI %(vdi_ref)s ... ') % locals())
-        vbd_ref = session.call_xenapi('VBD.create', vbd_rec)
-        LOG.debug(_('Created VBD %(vbd_ref)s for VM %(vm_ref)s,'
-                ' VDI %(vdi_ref)s.') % locals())
-        return vbd_ref
 
     @classmethod
     def create_pbd(cls, session, sr_ref, params):
@@ -224,13 +200,13 @@ class VolumeHelper(HelperBase):
         pbds = []
         try:
             pbds = session.call_xenapi("SR.get_PBDs", sr_ref)
-        except cls.XenAPI.Failure, exc:
+        except session.XenAPI.Failure, exc:
             LOG.warn(_('Ignoring exception %(exc)s when getting PBDs'
                     ' for %(sr_ref)s') % locals())
         for pbd in pbds:
             try:
                 session.call_xenapi("PBD.unplug", pbd)
-            except cls.XenAPI.Failure, exc:
+            except session.XenAPI.Failure, exc:
                 LOG.warn(_('Ignoring exception %(exc)s when unplugging'
                         ' PBD %(pbd)s') % locals())
 
@@ -253,7 +229,7 @@ class VolumeHelper(HelperBase):
                         break
             else:
                 vdi_ref = (session.call_xenapi("SR.get_VDIs", sr_ref))[0]
-        except cls.XenAPI.Failure, exc:
+        except session.XenAPI.Failure, exc:
             LOG.exception(exc)
             raise StorageError(_('Unable to introduce VDI on SR %s') % sr_ref)
 
@@ -261,7 +237,7 @@ class VolumeHelper(HelperBase):
             vdi_rec = session.call_xenapi("VDI.get_record", vdi_ref)
             LOG.debug(vdi_rec)
             LOG.debug(type(vdi_rec))
-        except cls.XenAPI.Failure, exc:
+        except session.XenAPI.Failure, exc:
             LOG.exception(exc)
             raise StorageError(_('Unable to get record'
                                  ' of VDI %s on') % vdi_ref)
@@ -283,7 +259,7 @@ class VolumeHelper(HelperBase):
                                         vdi_rec['location'],
                                         vdi_rec['xenstore_data'],
                                         vdi_rec['sm_config'])
-        except cls.XenAPI.Failure, exc:
+        except session.XenAPI.Failure, exc:
             LOG.exception(exc)
             raise StorageError(_('Unable to introduce VDI for SR %s')
                                 % sr_ref)

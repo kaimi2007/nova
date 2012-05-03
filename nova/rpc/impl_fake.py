@@ -27,12 +27,9 @@ import traceback
 import eventlet
 
 from nova import context
-from nova import flags
 from nova.rpc import common as rpc_common
 
 CONSUMERS = {}
-
-FLAGS = flags.FLAGS
 
 
 class RpcContext(context.RequestContext):
@@ -77,12 +74,8 @@ class Consumer(object):
                     else:
                         res.append(rval)
                 done.send(res)
-            except Exception:
-                exc_info = sys.exc_info()
-                done.send_exception(
-                        rpc_common.RemoteError(exc_info[0].__name__,
-                            str(exc_info[1]),
-                            ''.join(traceback.format_exception(*exc_info))))
+            except Exception as e:
+                done.send_exception(e)
 
         thread = eventlet.greenthread.spawn(_inner)
 
@@ -120,7 +113,7 @@ class Connection(object):
         pass
 
 
-def create_connection(new=True):
+def create_connection(conf, new=True):
     """Create a connection"""
     return Connection()
 
@@ -130,7 +123,7 @@ def check_serialize(msg):
     json.dumps(msg)
 
 
-def multicall(context, topic, msg, timeout=None):
+def multicall(conf, context, topic, msg, timeout=None):
     """Make a call that returns multiple times."""
 
     check_serialize(msg)
@@ -148,9 +141,9 @@ def multicall(context, topic, msg, timeout=None):
         return consumer.call(context, method, args, timeout)
 
 
-def call(context, topic, msg, timeout=None):
+def call(conf, context, topic, msg, timeout=None):
     """Sends a message on a topic and wait for a response."""
-    rv = multicall(context, topic, msg, timeout)
+    rv = multicall(conf, context, topic, msg, timeout)
     # NOTE(vish): return the last result from the multicall
     rv = list(rv)
     if not rv:
@@ -158,14 +151,14 @@ def call(context, topic, msg, timeout=None):
     return rv[-1]
 
 
-def cast(context, topic, msg):
+def cast(conf, context, topic, msg):
     try:
-        call(context, topic, msg)
-    except rpc_common.RemoteError:
+        call(conf, context, topic, msg)
+    except Exception:
         pass
 
 
-def notify(context, topic, msg):
+def notify(conf, context, topic, msg):
     check_serialize(msg)
 
 
@@ -173,7 +166,7 @@ def cleanup():
     pass
 
 
-def fanout_cast(context, topic, msg):
+def fanout_cast(conf, context, topic, msg):
     """Cast to all consumers of a topic"""
     check_serialize(msg)
     method = msg.get('method')
@@ -184,5 +177,9 @@ def fanout_cast(context, topic, msg):
     for consumer in CONSUMERS.get(topic, []):
         try:
             consumer.call(context, method, args, None)
-        except rpc_common.RemoteError:
+        except Exception:
             pass
+
+
+def register_opts(conf):
+    pass
