@@ -50,7 +50,8 @@ def reset_db():
         engine = get_engine()
         engine.dispose()
         conn = engine.connect()
-        conn.connection.executescript(_DB)
+        if _DB:
+            conn.connection.executescript(_DB)
     else:
         shutil.copyfile(os.path.join(FLAGS.state_path, FLAGS.sqlite_clean_db),
                         os.path.join(FLAGS.state_path, FLAGS.sqlite_db))
@@ -67,9 +68,10 @@ def setup():
     from nova.db import migration
     from nova.network import manager as network_manager
     from nova.tests import fake_flags
+    rpc.register_opts(FLAGS)
 
     if FLAGS.sql_connection == "sqlite://":
-        if migration.db_version() > 1:
+        if migration.db_version() > migration.INIT_VERSION:
             return
     else:
         testdb = os.path.join(FLAGS.state_path, FLAGS.sqlite_db)

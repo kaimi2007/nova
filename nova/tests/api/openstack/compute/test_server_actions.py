@@ -56,7 +56,6 @@ class ServerActionsControllerTest(test.TestCase):
     def setUp(self):
         super(ServerActionsControllerTest, self).setUp()
 
-        fakes.stub_out_auth(self.stubs)
         self.stubs.Set(nova.db, 'instance_get_by_uuid',
                 fakes.fake_instance_get(vm_state=vm_states.ACTIVE,
                         host='fake_host'))
@@ -122,11 +121,15 @@ class ServerActionsControllerTest(test.TestCase):
                           req, FAKE_UUID, body)
 
     def test_server_change_password_empty_string(self):
+        mock_method = MockSetAdminPassword()
+        self.stubs.Set(nova.compute.api.API, 'set_admin_password', mock_method)
         body = {'changePassword': {'adminPass': ''}}
+
         req = fakes.HTTPRequest.blank(self.url)
-        self.assertRaises(webob.exc.HTTPBadRequest,
-                          self.controller._action_change_password,
-                          req, FAKE_UUID, body)
+        self.controller._action_change_password(req, FAKE_UUID, body)
+
+        self.assertEqual(mock_method.instance_id, self.uuid)
+        self.assertEqual(mock_method.password, '')
 
     def test_server_change_password_none(self):
         body = {'changePassword': {'adminPass': None}}
@@ -764,10 +767,13 @@ class TestServerActionXMLDeserializer(test.TestCase):
                 <changePassword
                     xmlns="http://docs.openstack.org/compute/api/v1.1"
                     adminPass=""/> """
-        self.assertRaises(AttributeError,
-                          self.deserializer.deserialize,
-                          serial_request,
-                          'action')
+        request = self.deserializer.deserialize(serial_request, 'action')
+        expected = {
+            "changePassword": {
+                "adminPass": "",
+            },
+        }
+        self.assertEquals(request['body'], expected)
 
     def test_reboot(self):
         serial_request = """<?xml version="1.0" encoding="UTF-8"?>

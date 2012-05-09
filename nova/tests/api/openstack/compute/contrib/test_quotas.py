@@ -27,14 +27,11 @@ from nova.tests.api.openstack import fakes
 def quota_set(id):
     # Note(lorin): These were changed because we uses larger defaults
     return {'quota_set': {'id': id, 'metadata_items': 128, 'volumes': 10,
-            'gigabytes': 1000, 'ram': 50 * 1024, 'floating_ips': 10,
-            'instances': 1000000, 'injected_files': 5, 'cores': 4000000,
-            'injected_file_content_bytes': 10240}}
-
-
-def quota_set_list():
-    return {'quota_set_list': [quota_set('1234'), quota_set('5678'),
-                               quota_set('update_me')]}
+            'gigabytes': 1000, 'ram': 51200, 'floating_ips': 10,
+            'instances': 10, 'injected_files': 5, 'cores': 20,
+            'injected_file_content_bytes': 10240,
+            'security_groups': 10, 'security_group_rules': 20,
+            'key_pairs': 100}}
 
 
 class QuotaSetsTest(test.TestCase):
@@ -56,6 +53,7 @@ class QuotaSetsTest(test.TestCase):
             'injected_file_content_bytes': 10240,
             'security_groups': 10,
             'security_group_rules': 20,
+            'key_pairs': 100,
             }
 
         quota_set = self.controller._format_quota_set('1234', raw_quota_set)
@@ -73,6 +71,7 @@ class QuotaSetsTest(test.TestCase):
         self.assertEqual(qs['injected_file_content_bytes'], 10240)
         self.assertEqual(qs['security_groups'], 10)
         self.assertEqual(qs['security_group_rules'], 20)
+        self.assertEqual(qs['key_pairs'], 100)
 
     def test_quotas_defaults(self):
         uri = '/v2/fake_tenant/os-quota-sets/fake_tenant/defaults'
@@ -93,6 +92,7 @@ class QuotaSetsTest(test.TestCase):
                     'injected_file_content_bytes': 10240,
                     'security_groups': 10,
                     'security_group_rules': 20,
+                    'key_pairs': 100,
                     }}
 
         self.assertEqual(res_dict, expected)
@@ -116,7 +116,8 @@ class QuotaSetsTest(test.TestCase):
                               'metadata_items': 128, 'injected_files': 5,
                               'injected_file_content_bytes': 10240,
                               'security_groups': 10,
-                              'security_group_rules': 20}}
+                              'security_group_rules': 20,
+                              'key_pairs': 100}}
 
         req = fakes.HTTPRequest.blank('/v2/fake4/os-quota-sets/update_me',
                                       use_admin_context=True)
@@ -131,7 +132,8 @@ class QuotaSetsTest(test.TestCase):
                               'metadata_items': 128, 'injected_files': 5,
                               'injected_file_content_bytes': 10240,
                               'security_groups': 10,
-                              'security_group_rules': 20}}
+                              'security_group_rules': 20,
+                              'key_pairs': 100}}
 
         req = fakes.HTTPRequest.blank('/v2/fake4/os-quota-sets/update_me')
         self.assertRaises(webob.exc.HTTPForbidden, self.controller.update,
@@ -169,6 +171,7 @@ class QuotaXMLSerializerTest(test.TestCase):
                 injected_files=80,
                 security_groups=10,
                 security_group_rules=20,
+                key_pairs=100,
                 cores=90))
         text = self.serializer.serialize(exemplar)
 
@@ -194,6 +197,7 @@ class QuotaXMLSerializerTest(test.TestCase):
                 injected_files='80',
                 security_groups='10',
                 security_group_rules='20',
+                key_pairs='100',
                 cores='90'))
         intext = ("<?xml version='1.0' encoding='UTF-8'?>\n"
                   '<quota_set>'
@@ -208,6 +212,7 @@ class QuotaXMLSerializerTest(test.TestCase):
                   '<injected_files>80</injected_files>'
                   '<security_groups>10</security_groups>'
                   '<security_group_rules>20</security_group_rules>'
+                  '<key_pairs>100</key_pairs>'
                   '<cores>90</cores>'
                   '</quota_set>')
 

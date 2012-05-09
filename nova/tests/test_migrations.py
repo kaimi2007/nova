@@ -33,6 +33,7 @@ from migrate.versioning import repository
 import sqlalchemy
 
 import nova.db.sqlalchemy.migrate_repo
+import nova.db.migration as migration
 from nova.db.sqlalchemy.migration import versioning_api as migration_api
 from nova import log as logging
 from nova import test
@@ -67,10 +68,11 @@ def _is_mysql_avail(user="openstack_citest",
         return True
 
 
-def _missing_mysql():
-    if "NOVA_TEST_MYSQL_PRESENT" in os.environ:
-        return True
-    return not _is_mysql_avail()
+def _have_mysql():
+    present = os.environ.get('NOVA_TEST_MYSQL_PRESENT')
+    if present is None:
+        return _is_mysql_avail()
+    return present.lower() in ('', 'true')
 
 
 class TestMigrations(test.TestCase):
@@ -214,7 +216,7 @@ class TestMigrations(test.TestCase):
         if _is_mysql_avail(user="openstack_cifail"):
             self.fail("Shouldn't have connected")
 
-    @test.skip_if(_missing_mysql(), "mysql not available")
+    @test.skip_unless(_have_mysql(), "mysql not available")
     def test_mysql_innodb(self):
         """
         Test that table creation on mysql only builds InnoDB tables
@@ -242,7 +244,8 @@ class TestMigrations(test.TestCase):
         noninnodb = connection.execute("SELECT count(*) "
                                        "from information_schema.TABLES "
                                        "where TABLE_SCHEMA='openstack_citest' "
-                                       "and ENGINE!='InnoDB'")
+                                       "and ENGINE!='InnoDB' "
+                                       "and TABLE_NAME!='migrate_version'")
         count = noninnodb.scalar()
         self.assertEqual(count, 0, "%d non InnoDB tables created" % count)
 
@@ -253,14 +256,19 @@ class TestMigrations(test.TestCase):
         # upgrades successfully.
 
         # Place the database under version control
-        migration_api.version_control(engine, TestMigrations.REPOSITORY)
-        self.assertEqual(0,
+        migration_api.version_control(engine, TestMigrations.REPOSITORY,
+                                     migration.INIT_VERSION)
+        self.assertEqual(migration.INIT_VERSION,
                 migration_api.db_version(engine,
                                          TestMigrations.REPOSITORY))
 
+        migration_api.upgrade(engine, TestMigrations.REPOSITORY,
+                              migration.INIT_VERSION + 1)
+
         LOG.debug('latest version is %s' % TestMigrations.REPOSITORY.latest)
 
-        for version in xrange(1, TestMigrations.REPOSITORY.latest + 1):
+        for version in xrange(migration.INIT_VERSION + 2,
+                               TestMigrations.REPOSITORY.latest + 1):
             # upgrade -> downgrade -> upgrade
             self._migrate_up(engine, version)
             if snake_walk:
@@ -271,7 +279,8 @@ class TestMigrations(test.TestCase):
             # Now walk it back down to 0 from the latest, testing
             # the downgrade paths.
             for version in reversed(
-                xrange(0, TestMigrations.REPOSITORY.latest)):
+                xrange(migration.INIT_VERSION + 1,
+                       TestMigrations.REPOSITORY.latest)):
                 # downgrade -> upgrade -> downgrade
                 self._migrate_down(engine, version)
                 if snake_walk:

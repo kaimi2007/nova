@@ -60,10 +60,10 @@ db_opts = [
                default='instance-%08x',
                help='Template string to be used to generate instance names'),
     cfg.StrOpt('volume_name_template',
-               default='volume-%08x',
+               default='volume-%s',
                help='Template string to be used to generate instance names'),
     cfg.StrOpt('snapshot_name_template',
-               default='snapshot-%08x',
+               default='snapshot-%s',
                help='Template string to be used to generate snapshot names'),
     ]
 
@@ -74,12 +74,12 @@ IMPL = utils.LazyPluggable('db_backend',
                            sqlalchemy='nova.db.sqlalchemy.api')
 
 
-class NoMoreNetworks(exception.Error):
+class NoMoreNetworks(exception.NovaException):
     """No more available networks."""
     pass
 
 
-class NoMoreTargets(exception.Error):
+class NoMoreTargets(exception.NovaException):
     """No more available targets"""
     pass
 
@@ -643,16 +643,6 @@ def instance_remove_security_group(context, instance_id, security_group_id):
                                             security_group_id)
 
 
-def instance_action_create(context, values):
-    """Create an instance action from the values dictionary."""
-    return IMPL.instance_action_create(context, values)
-
-
-def instance_get_actions(context, instance_uuid):
-    """Get instance actions by instance uuid."""
-    return IMPL.instance_get_actions(context, instance_uuid)
-
-
 def instance_get_id_to_uuid_mapping(context, ids):
     """Return a dictionary containing 'ID: UUID' given the ids"""
     return IMPL.instance_get_id_to_uuid_mapping(context, ids)
@@ -721,6 +711,11 @@ def key_pair_get(context, user_id, name):
 def key_pair_get_all_by_user(context, user_id):
     """Get all key_pairs by user."""
     return IMPL.key_pair_get_all_by_user(context, user_id)
+
+
+def key_pair_count_by_user(context, user_id):
+    """Count number of key pairs for the given user ID."""
+    return IMPL.key_pair_count_by_user(context, user_id)
 
 
 ####################
@@ -1044,6 +1039,25 @@ def volume_update(context, volume_id, values):
     """
     return IMPL.volume_update(context, volume_id, values)
 
+
+def get_ec2_volume_id_by_uuid(context, volume_id):
+    return IMPL.get_ec2_volume_id_by_uuid(context, volume_id)
+
+
+def get_volume_uuid_by_ec2_id(context, ec2_id):
+    return IMPL.get_volume_uuid_by_ec2_id(context, ec2_id)
+
+
+def ec2_volume_create(context, volume_id, forced_id=None):
+    return IMPL.ec2_volume_create(context, volume_id, forced_id)
+
+
+def get_snapshot_uuid_by_ec2_id(context, ec2_id):
+    return IMPL.get_snapshot_uuid_by_ec2_id(context, ec2_id)
+
+
+def get_ec2_snapshot_id_by_uuid(context, snapshot_id):
+    return IMPL.get_ec2_snapshot_id_by_uuid(context, snapshot_id)
 
 ####################
 
@@ -1484,6 +1498,25 @@ def instance_metadata_delete(context, instance_id, key):
 def instance_metadata_update(context, instance_id, metadata, delete):
     """Update metadata if it exists, otherwise create it."""
     IMPL.instance_metadata_update(context, instance_id, metadata, delete)
+
+
+####################
+
+
+def instance_system_metadata_get(context, instance_uuid):
+    """Get all system metadata for an instance."""
+    return IMPL.instance_system_metadata_get(context, instance_uuid)
+
+
+def instance_system_metadata_delete(context, instance_uuid, key):
+    """Delete the given system metadata item."""
+    IMPL.instance_system_metadata_delete(context, instance_uuid, key)
+
+
+def instance_system_metadata_update(context, instance_uuid, metadata, delete):
+    """Update metadata if it exists, otherwise create it."""
+    IMPL.instance_system_metadata_update(
+            context, instance_uuid, metadata, delete)
 
 
 ####################

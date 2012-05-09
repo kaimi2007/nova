@@ -24,8 +24,6 @@ import functools
 import re
 import time
 
-import webob.exc
-
 from nova import block_device
 from nova.compute import aggregate_states
 from nova.compute import instance_types
@@ -130,10 +128,10 @@ class BaseAPI(base.Base):
             params = {}
         if not host:
             if not instance:
-                raise exception.Error(_("No compute host specified"))
+                raise exception.NovaException(_("No compute host specified"))
             host = instance['host']
             if not host:
-                raise exception.Error(_("Unable to find host for "
+                raise exception.NovaException(_("Unable to find host for "
                                         "Instance %s") % instance['uuid'])
         queue = self.db.queue_get_for(context, FLAGS.compute_topic, host)
         if instance:
@@ -1516,11 +1514,6 @@ class API(BaseAPI):
         """Retrieve diagnostics for the given instance."""
         return self._call_compute_message("get_diagnostics", context,
                 instance)
-
-    @wrap_check_policy
-    def get_actions(self, context, instance):
-        """Retrieve actions for the given instance."""
-        return self.db.instance_get_actions(context, instance['uuid'])
 
     @wrap_check_policy
     @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.SHUTOFF,

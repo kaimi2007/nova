@@ -167,7 +167,7 @@ def execute(*cmd, **kwargs):
                                the command is prefixed by the command specified
                                in the root_helper FLAG.
 
-    :raises exception.Error: on receiving unknown arguments
+    :raises exception.NovaException: on receiving unknown arguments
     :raises exception.ProcessExecutionError:
 
     :returns: a tuple, (stdout, stderr) from the spawned process, or None if
@@ -188,8 +188,8 @@ def execute(*cmd, **kwargs):
     shell = kwargs.pop('shell', False)
 
     if len(kwargs):
-        raise exception.Error(_('Got unknown keyword args '
-                                'to utils.execute: %r') % kwargs)
+        raise exception.NovaException(_('Got unknown keyword args '
+                                        'to utils.execute: %r') % kwargs)
 
     if run_as_root:
         cmd = shlex.split(FLAGS.root_helper) + list(cmd)
@@ -271,11 +271,12 @@ def ssh_execute(ssh, cmd, process_input=None,
                 addl_env=None, check_exit_code=True):
     LOG.debug(_('Running cmd (SSH): %s'), ' '.join(cmd))
     if addl_env:
-        raise exception.Error(_('Environment not supported over SSH'))
+        raise exception.NovaException(_('Environment not supported over SSH'))
 
     if process_input:
         # This is (probably) fixable if we need it...
-        raise exception.Error(_('process_input not supported over SSH'))
+        msg = _('process_input not supported over SSH')
+        raise exception.NovaException(msg)
 
     stdin_stream, stdout_stream, stderr_stream = ssh.exec_command(cmd)
     channel = stdout_stream.channel
@@ -336,7 +337,7 @@ def debug(arg):
 
 def generate_uid(topic, size=8):
     characters = '01234567890abcdefghijklmnopqrstuvwxyz'
-    choices = [random.choice(characters) for x in xrange(size)]
+    choices = [random.choice(characters) for _x in xrange(size)]
     return '%s-%s' % (topic, ''.join(choices))
 
 
@@ -484,11 +485,12 @@ def get_my_linklocal(interface):
         if address[0] is not None:
             return address[0]
         else:
-            raise exception.Error(_('Link Local address is not found.:%s')
-                                  % if_str)
+            msg = _('Link Local address is not found.:%s') % if_str
+            raise exception.NovaException(msg)
     except Exception as ex:
-        raise exception.Error(_("Couldn't get Link Local IP of %(interface)s"
-                                " :%(ex)s") % locals())
+        msg = _("Couldn't get Link Local IP of %(interface)s"
+                " :%(ex)s") % locals()
+        raise exception.NovaException(msg)
 
 
 def utcnow():
@@ -598,7 +600,8 @@ class LazyPluggable(object):
         if not self.__backend:
             backend_name = FLAGS[self.__pivot]
             if backend_name not in self.__backends:
-                raise exception.Error(_('Invalid backend: %s') % backend_name)
+                msg = _('Invalid backend: %s') % backend_name
+                raise exception.NovaException(msg)
 
             backend = self.__backends[backend_name]
             if isinstance(backend, tuple):
@@ -1005,12 +1008,12 @@ def get_from_path(items, path):
 
     """
     if path is None:
-        raise exception.Error('Invalid mini_xpath')
+        raise exception.NovaException('Invalid mini_xpath')
 
     (first_token, sep, remainder) = path.partition('/')
 
     if first_token == '':
-        raise exception.Error('Invalid mini_xpath')
+        raise exception.NovaException('Invalid mini_xpath')
 
     results = []
 
@@ -1089,8 +1092,6 @@ def check_isinstance(obj, cls):
     if isinstance(obj, cls):
         return obj
     raise Exception(_('Expected object of type: %s') % (str(cls)))
-    # TODO(justinsb): Can we make this better??
-    return cls()  # Ugly PyLint hack
 
 
 def parse_server_string(server_str):
@@ -1119,7 +1120,7 @@ def parse_server_string(server_str):
         return (address, port)
 
     except Exception:
-        LOG.debug(_('Invalid server_string: %s'), server_str)
+        LOG.error(_('Invalid server_string: %s'), server_str)
         return ('', '')
 
 
@@ -1605,7 +1606,7 @@ def tempdir(**kwargs):
         try:
             shutil.rmtree(tmpdir)
         except OSError, e:
-            LOG.debug(_('Could not remove tmpdir: %s'), str(e))
+            LOG.error(_('Could not remove tmpdir: %s'), str(e))
 
 
 def strcmp_const_time(s1, s2):

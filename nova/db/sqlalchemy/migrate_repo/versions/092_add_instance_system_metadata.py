@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2011 Justin Santa Barbara
+# Copyright 2012 Openstack, LLC.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -31,37 +31,32 @@ def upgrade(migrate_engine):
     # load tables for fk
     instances = Table('instances', meta, autoload=True)
 
-    quotas = Table('quotas', meta, autoload=True)
-
-    instance_metadata_table = Table('instance_metadata', meta,
+    instance_system_metadata = Table('instance_system_metadata', meta,
             Column('created_at', DateTime(timezone=False)),
             Column('updated_at', DateTime(timezone=False)),
             Column('deleted_at', DateTime(timezone=False)),
             Column('deleted', Boolean(create_constraint=True, name=None)),
             Column('id', Integer(), primary_key=True, nullable=False),
-            Column('instance_id',
-                   Integer(),
-                   ForeignKey('instances.id'),
+            Column('instance_uuid',
+                   String(36),
+                   ForeignKey('instances.uuid'),
                    nullable=False),
             Column('key',
-                   String(length=255, convert_unicode=False,
+                   String(length=255, convert_unicode=True,
+                          assert_unicode=None,
+                          unicode_error=None, _warn_on_bytestring=False),
+                   nullable=False),
+            Column('value',
+                   String(length=255, convert_unicode=True,
                           assert_unicode=None,
                           unicode_error=None, _warn_on_bytestring=False)),
-            Column('value',
-                   String(length=255, convert_unicode=False,
-                          assert_unicode=None,
-                          unicode_error=None, _warn_on_bytestring=False)))
+            mysql_engine='InnoDB')
 
-    for table in (instance_metadata_table, ):
-        try:
-            table.create()
-        except Exception:
-            LOG.info(repr(table))
-            LOG.exception('Exception while creating table')
-            raise
-
-    quota_metadata_items = Column('metadata_items', Integer())
-    quotas.create_column(quota_metadata_items)
+    try:
+        instance_system_metadata.create()
+    except Exception:
+        LOG.error(_("Table |%s| not created!"), repr(instance_system_metadata))
+        raise
 
 
 def downgrade(migrate_engine):
@@ -71,11 +66,6 @@ def downgrade(migrate_engine):
     # load tables for fk
     instances = Table('instances', meta, autoload=True)
 
-    quotas = Table('quotas', meta, autoload=True)
-
-    instance_metadata_table = Table('instance_metadata', meta, autoload=True)
-
-    for table in (instance_metadata_table, ):
-            table.drop()
-
-    quotas.drop_column('metadata_items')
+    instance_system_metadata = Table(
+            'instance_system_metadata', meta, autoload=True)
+    instance_system_metadata.drop()

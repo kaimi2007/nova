@@ -25,11 +25,13 @@ SHOULD include dedicated exception logging.
 """
 
 import functools
+import itertools
 import sys
 
 import webob.exc
 
 from nova import log as logging
+from nova.openstack.common import excutils
 
 LOG = logging.getLogger(__name__)
 
@@ -61,28 +63,6 @@ class ProcessExecutionError(IOError):
         IOError.__init__(self, message)
 
 
-class Error(Exception):
-    pass
-
-
-class EC2APIError(Error):
-    def __init__(self, message='Unknown', code=None):
-        self.msg = message
-        self.code = code
-        if code:
-            outstr = '%s: %s' % (code, message)
-        else:
-            outstr = '%s' % message
-        super(EC2APIError, self).__init__(outstr)
-
-
-class DBError(Error):
-    """Wraps an implementation specific exception."""
-    def __init__(self, inner_exception=None):
-        self.inner_exception = inner_exception
-        super(DBError, self).__init__(str(inner_exception))
-
-
 def wrap_db_error(f):
     def _wrap(*args, **kwargs):
         try:
@@ -112,32 +92,30 @@ def wrap_exception(notifier=None, publisher_id=None, event_type=None,
             try:
                 return f(*args, **kw)
             except Exception, e:
-                # Save exception since it can be clobbered during processing
-                # below before we can re-raise
-                exc_info = sys.exc_info()
+                with excutils.save_and_reraise_exception():
+                    if notifier:
+                        payload = dict(args=args, exception=e)
+                        payload.update(kw)
 
-                if notifier:
-                    payload = dict(args=args, exception=e)
-                    payload.update(kw)
+                        # Use a temp vars so we don't shadow
+                        # our outer definitions.
+                        temp_level = level
+                        if not temp_level:
+                            temp_level = notifier.ERROR
 
-                    # Use a temp vars so we don't shadow
-                    # our outer definitions.
-                    temp_level = level
-                    if not temp_level:
-                        temp_level = notifier.ERROR
+                        temp_type = event_type
+                        if not temp_type:
+                            # If f has multiple decorators, they must use
+                            # functools.wraps to ensure the name is
+                            # propagated.
+                            temp_type = f.__name__
 
-                    temp_type = event_type
-                    if not temp_type:
-                        # If f has multiple decorators, they must use
-                        # functools.wraps to ensure the name is
-                        # propagated.
-                        temp_type = f.__name__
+                        context = get_context_from_function_and_args(f,
+                                                                     args,
+                                                                     kw)
 
-                    notifier.notify(publisher_id, temp_type, temp_level,
-                                    payload)
-
-                # re-raise original exception since it may have been clobbered
-                raise exc_info[0], exc_info[1], exc_info[2]
+                        notifier.notify(context, publisher_id, temp_type,
+                                        temp_level, payload)
 
         return functools.wraps(f)(wrapped)
     return inner
@@ -176,6 +154,26 @@ class NovaException(Exception):
                 message = self.message
 
         super(NovaException, self).__init__(message)
+
+
+class EC2APIError(NovaException):
+    message = _("Unknown")
+
+    def __init__(self, message=None, code=None):
+        self.msg = message
+        self.code = code
+        if code:
+            outstr = '%s: %s' % (code, message)
+        else:
+            outstr = '%s' % message
+        super(EC2APIError, self).__init__(outstr)
+
+
+class DBError(NovaException):
+    """Wraps an implementation specific exception."""
+    def __init__(self, inner_exception=None):
+        self.inner_exception = inner_exception
+        super(DBError, self).__init__(str(inner_exception))
 
 
 class DecryptionFailure(NovaException):
@@ -344,10 +342,6 @@ class InstanceTerminationFailure(Invalid):
 
 class ServiceUnavailable(Invalid):
     message = _("Service is unavailable at this time.")
-
-
-class VolumeServiceUnavailable(ServiceUnavailable):
-    message = _("Volume service is unavailable at this time.")
 
 
 class ComputeServiceUnavailable(ServiceUnavailable):
@@ -806,6 +800,11 @@ class InstanceMetadataNotFound(NotFound):
                 "key %(metadata_key)s.")
 
 
+class InstanceSystemMetadataNotFound(NotFound):
+    message = _("Instance %(instance_uuid)s has no system metadata with "
+                "key %(metadata_key)s.")
+
+
 class InstanceTypeExtraSpecsNotFound(NotFound):
     message = _("Instance Type %(instance_type_id)s has no extra specs with "
                 "key %(extra_specs_key)s.")
@@ -1060,3 +1059,20 @@ class InvalidInstanceIDMalformed(Invalid):
 
 class CouldNotFetchImage(NovaException):
     message = _("Could not fetch image %(image)s")
+
+
+def get_context_from_function_and_args(function, args, kwargs):
+    """Find an arg of type RequestContext and return it.
+
+       This is useful in a couple of decorators where we don't
+       know much about the function we're wrapping.
+    """
+
+    # import here to avoid circularity:
+    from nova import context
+
+    for arg in itertools.chain(kwargs.values(), args):
+        if isinstance(arg, context.RequestContext):
+            return arg
+
+    return None

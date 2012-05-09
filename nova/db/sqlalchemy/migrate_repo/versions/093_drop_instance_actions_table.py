@@ -1,4 +1,4 @@
-# Copyright 2011 OpenStack LLC.
+# Copyright 2012 Openstack, LLC.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -13,48 +13,40 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, ForeignKey
-from sqlalchemy import MetaData, String, Table, Text
-from nova import log as logging
-
-LOG = logging.getLogger(__name__)
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey
+from sqlalchemy import Integer, MetaData, String, Table, Text
 
 
 def upgrade(migrate_engine):
-    # Upgrade operations go here. Don't create your own engine;
-    # bind migrate_engine to your metadata
     meta = MetaData()
     meta.bind = migrate_engine
-    #
-    # New Tables
-    #
-    instance_faults = Table('instance_faults', meta,
+    instance_actions = Table('instance_actions', meta, autoload=True)
+    instance_actions.drop()
+
+
+def downgrade(migrate_engine):
+    meta = MetaData()
+    meta.bind = migrate_engine
+
+    instances = Table('instances', meta, autoload=True,
+                      autoload_with=migrate_engine)
+
+    instance_actions = Table('instance_actions', meta,
             Column('created_at', DateTime(timezone=False)),
             Column('updated_at', DateTime(timezone=False)),
             Column('deleted_at', DateTime(timezone=False)),
-            Column('deleted', Boolean(create_constraint=True, name=None),
-                    default=False),
+            Column('deleted', Boolean(create_constraint=True, name=None)),
             Column('id', Integer(), primary_key=True, nullable=False),
-            Column('instance_uuid', String(36, ForeignKey('instances.uuid'))),
-            Column('code', Integer(), nullable=False),
-            Column('message',
+            Column('instance_id',
+                   Integer(),
+                   ForeignKey('instances.id')),
+            Column('action',
                    String(length=255, convert_unicode=False,
                           assert_unicode=None,
                           unicode_error=None, _warn_on_bytestring=False)),
-            Column('details',
+            Column('error',
                    Text(length=None, convert_unicode=False,
                         assert_unicode=None,
                         unicode_error=None, _warn_on_bytestring=False)),
             )
-    try:
-        instance_faults.create()
-    except Exception:
-        LOG.info(repr(instance_faults))
-
-
-def downgrade(migrate_engine):
-    # Operations to reverse the above upgrade go here.
-    meta = MetaData()
-    meta.bind = migrate_engine
-    instance_faults = Table('instance_faults', meta, autoload=True)
-    instance_faults.drop()
+    instance_actions.create()

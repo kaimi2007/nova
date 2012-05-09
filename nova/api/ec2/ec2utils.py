@@ -18,12 +18,13 @@
 
 import re
 
+from nova import context
 from nova import db
 from nova import exception
 from nova import flags
 from nova import log as logging
-from nova import network
 from nova.network import model as network_model
+from nova import utils
 
 
 FLAGS = flags.FLAGS
@@ -132,15 +133,68 @@ def id_to_ec2_id(instance_id, template='i-%08x'):
     return template % int(instance_id)
 
 
-def id_to_ec2_snap_id(instance_id):
-    """Convert an snapshot ID (int) to an ec2 snapshot ID
-    (snap-[base 16 number])"""
-    return id_to_ec2_id(instance_id, 'snap-%08x')
+def id_to_ec2_snap_id(snapshot_id):
+    """Get or create an ec2 volume ID (vol-[base 16 number]) from uuid."""
+    if utils.is_uuid_like(snapshot_id):
+        ctxt = context.get_admin_context()
+        int_id = get_int_id_from_snapshot_uuid(ctxt, snapshot_id)
+        return id_to_ec2_id(int_id)
+    else:
+        return id_to_ec2_id(snapshot_id, 'snap-%08x')
 
 
-def id_to_ec2_vol_id(instance_id):
-    """Convert an volume ID (int) to an ec2 volume ID (vol-[base 16 number])"""
-    return id_to_ec2_id(instance_id, 'vol-%08x')
+def id_to_ec2_vol_id(volume_id):
+    """Get or create an ec2 volume ID (vol-[base 16 number]) from uuid."""
+    if utils.is_uuid_like(volume_id):
+        ctxt = context.get_admin_context()
+        int_id = get_int_id_from_volume_uuid(ctxt, volume_id)
+        return id_to_ec2_id(int_id)
+    else:
+        return id_to_ec2_id(volume_id, 'vol-%08x')
+
+
+def ec2_vol_id_to_uuid(ec2_id):
+    """Get the cooresponding UUID for the given ec2-id."""
+    ctxt = context.get_admin_context()
+
+    # NOTE(jgriffith) first strip prefix to get just the numeric
+    int_id = ec2_id_to_id(ec2_id)
+    return get_volume_uuid_from_int_id(ctxt, int_id)
+
+
+def get_int_id_from_volume_uuid(context, volume_uuid):
+    if volume_uuid is None:
+        return
+    try:
+        return db.get_ec2_volume_id_by_uuid(context, volume_uuid)
+    except exception.NotFound:
+        raise exception.VolumeNotFound()
+
+
+def get_volume_uuid_from_int_id(context, int_id):
+    return db.get_volume_uuid_by_ec2_id(context, int_id)
+
+
+def ec2_snap_id_to_uuid(ec2_id):
+    """Get the cooresponding UUID for the given ec2-id."""
+    ctxt = context.get_admin_context()
+
+    # NOTE(jgriffith) first strip prefix to get just the numeric
+    int_id = ec2_id_to_id(ec2_id)
+    return get_snapshot_uuid_from_int_id(ctxt, int_id)
+
+
+def get_int_id_from_snapshot_uuid(context, snapshot_uuid):
+    if snapshot_uuid is None:
+        return
+    try:
+        return db.get_ec2_snapshot_id_by_uuid(context, snapshot_uuid)
+    except exception.NotFound:
+        raise exception.SnapshotNotFound()
+
+
+def get_snapshot_uuid_from_int_id(context, int_id):
+    return db.get_snapshot_uuid_by_ec2_id(context, int_id)
 
 
 _c2u = re.compile('(((?<=[a-z])[A-Z])|([A-Z](?![A-Z]|$)))')
@@ -166,6 +220,10 @@ def _try_convert(value):
     *             try conversion to int, float, complex, fallback value
 
     """
+    def _negative_zero(value):
+        epsilon = 1e-7
+        return 0 if abs(value) < epsilon else value
+
     if len(value) == 0:
         return ''
     if value == 'None':
@@ -175,31 +233,14 @@ def _try_convert(value):
         return True
     if lowered_value == 'false':
         return False
-    valueneg = value[1:] if value[0] == '-' else value
-    if valueneg == '0':
-        return 0
-    if valueneg == '':
-        return value
-    if valueneg[0] == '0':
-        if valueneg[1] in 'xX':
-            return int(value, 16)
-        elif valueneg[1] in 'bB':
-            return int(value, 2)
-        else:
-            try:
-                return int(value, 8)
-            except ValueError:
-                pass
+    for prefix, base in [('0x', 16), ('0b', 2), ('0', 8), ('', 10)]:
+        try:
+            if lowered_value.startswith((prefix, "-" + prefix)):
+                return int(lowered_value, base)
+        except ValueError:
+            pass
     try:
-        return int(value)
-    except ValueError:
-        pass
-    try:
-        return float(value)
-    except ValueError:
-        pass
-    try:
-        return complex(value)
+        return _negative_zero(float(value))
     except ValueError:
         return value
 
