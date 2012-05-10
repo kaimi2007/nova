@@ -35,7 +35,23 @@ def _populate_instance_types(instance_types_table):
         'm1.small': dict(mem=2048, vcpus=1, root_gb=10, eph_gb=20, flavid=2),
         'm1.medium': dict(mem=4096, vcpus=2, root_gb=10, eph_gb=40, flavid=3),
         'm1.large': dict(mem=8192, vcpus=4, root_gb=10, eph_gb=80, flavid=4),
-        'm1.xlarge': dict(mem=16384, vcpus=8, root_gb=10, eph_gb=160, flavid=5)
+        'm1.xlarge': dict(mem=16384, vcpus=8, root_gb=10, eph_gb=160, flavid=5),
+        'cg1.small': dict(mem=2048, vcpus=1, root_gb=10, eph_gb=20, flavid=101),
+        'cg1.medium': dict(mem=4096, vcpus=2, root_gb=10, eph_gb=40, flavid=102),
+        'cg1.large': dict(mem=8192, vcpus=4, root_gb=10, eph_gb=80, flavid=103),
+        'cg1.xlarge': dict(mem=16384, vcpus=8, root_gb=10, eph_gb=160, flavid=104),
+        'cg1.2xlarge': dict(mem=16384, vcpus=8, root_gb=10, eph_gb=320, flavid=105),
+        'cg1.4xlarge': dict(mem=22000, vcpus=8, root_gb=10, eph_gb=640, flavid=106),
+        'sh1.small': dict(mem=2048, vcpus=1, root_gb=10, eph_gb=20, flavid=201),
+        'sh1.medium': dict(mem=4096, vcpus=2, root_gb=10, eph_gb=40, flavid=202),
+        'sh1.large': dict(mem=8192, vcpus=4, root_gb=10, eph_gb=80, flavid=203),
+        'sh1.xlarge': dict(mem=16384, vcpus=8, root_gb=10, eph_gb=160, flavid=204),
+        'sh1.2xlarge': dict(mem=32768, vcpus=16, root_gb=10, eph_gb=320, flavid=205),
+        'sh1.4xlarge': dict(mem=65536, vcpus=32, root_gb=10, eph_gb=320, flavid=206),
+        'sh1.8xlarge': dict(mem=131072, vcpus=64, root_gb=10, eph_gb=500, flavid=207),
+        'sh1.16xlarge': dict(mem=262144, vcpus=128, root_gb=10, eph_gb=500, flavid=208),
+        'sh1.32xlarge': dict(mem=524288, vcpus=256, root_gb=10, eph_gb=1000, flavid=209),
+        'tp64.8x8': dict(mem=16384, vcpus=1, root_gb=10, eph_gb=1000, flavid=302)
         }
     else:
         default_inst_types = {
@@ -43,7 +59,23 @@ def _populate_instance_types(instance_types_table):
         'm1.small': dict(mem=2048, vcpus=1, root_gb=20, eph_gb=0, flavid=2),
         'm1.medium': dict(mem=4096, vcpus=2, root_gb=40, eph_gb=0, flavid=3),
         'm1.large': dict(mem=8192, vcpus=4, root_gb=80, eph_gb=0, flavid=4),
-        'm1.xlarge': dict(mem=16384, vcpus=8, root_gb=160, eph_gb=0, flavid=5)
+        'm1.xlarge': dict(mem=16384, vcpus=8, root_gb=160, eph_gb=0, flavid=5),
+        'cg1.small': dict(mem=2048, vcpus=1, root_gb=20, eph_gb=0, flavid=101),
+        'cg1.medium': dict(mem=4096, vcpus=2, root_gb=40, eph_gb=0, flavid=102),
+        'cg1.large': dict(mem=8192, vcpus=4, root_gb=80, eph_gb=0, flavid=103),
+        'cg1.xlarge': dict(mem=16384, vcpus=8, root_gb=160, eph_gb=0, flavid=104),
+        'cg1.2xlarge': dict(mem=16384, vcpus=8, root_gb=320, eph_gb=0, flavid=105),
+        'cg1.4xlarge': dict(mem=22000, vcpus=8, root_gb=640, eph_gb=0, flavid=106),
+        'sh1.small': dict(mem=2048, vcpus=1, root_gb=20, eph_gb=0, flavid=201),
+        'sh1.medium': dict(mem=4096, vcpus=2, root_gb=40, eph_gb=0, flavid=202),
+        'sh1.large': dict(mem=8192, vcpus=4, root_gb=80, eph_gb=0, flavid=203),
+        'sh1.xlarge': dict(mem=16384, vcpus=8, root_gb=160, eph_gb=0, flavid=204),
+        'sh1.2xlarge': dict(mem=32768, vcpus=16, root_gb=320, eph_gb=0, flavid=205),
+        'sh1.4xlarge': dict(mem=65536, vcpus=32, root_gb=320, eph_gb=0, flavid=206),
+        'sh1.8xlarge': dict(mem=131072, vcpus=64, root_gb=500, eph_gb=0, flavid=207),
+        'sh1.16xlarge': dict(mem=262144, vcpus=128, root_gb=500, eph_gb=0, flavid=208),
+        'sh1.32xlarge': dict(mem=524288, vcpus=256, root_gb=1000, eph_gb=0, flavid=209),
+        'tp64.8x8': dict(mem=16384, vcpus=1, root_gb=1000, eph_gb=0, flavid=302)
         }
 
     try:
