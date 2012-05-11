@@ -25,8 +25,8 @@ from nova.tests.api.openstack import fakes
 def quota_set(class_name):
     return {'quota_class_set': {'id': class_name, 'metadata_items': 128,
             'volumes': 10, 'gigabytes': 1000, 'ram': 51200,
-            'floating_ips': 10, 'instances': 10, 'injected_files': 5,
-            'cores': 20, 'injected_file_content_bytes': 10240,
+            'floating_ips': 10, 'instances': 1000000, 'injected_files': 5,
+            'cores': 4000000, 'injected_file_content_bytes': 10240,
             'security_groups': 10, 'security_group_rules': 20,
             'key_pairs': 100}}
 
