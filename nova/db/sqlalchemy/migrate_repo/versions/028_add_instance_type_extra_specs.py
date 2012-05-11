@@ -76,20 +76,35 @@ def upgrade(migrate_engine):
                    (name == 'm1.xlarge'):
                     extra_specs = dict(cpu_arch='x86_64',
                                        hypervisor_type='QEMU')
-                elif (name == 'cg1.small') or \
-                     (name == 'cg1.medium') or \
-                     (name == 'cg1.large') or  \
-                     (name == 'cg1.xlarge'):
+                elif (name == 'cg1.small'):
                     extra_specs = dict(
                                       cpu_arch='x86_64',
                                       xpu_arch='fermi',
                                       xpus=1,
                                       hypervisor_type='LXC')
-                elif (name == 'cg1.2xlarge'):
+                elif (name == 'cg1.medium'):
                     extra_specs = dict(
                                       cpu_arch='x86_64',
                                       xpu_arch='fermi',
                                       xpus=2,
+                                      hypervisor_type='LXC')
+                elif (name == 'cg1.large'):
+                    extra_specs = dict(
+                                      cpu_arch='x86_64',
+                                      xpu_arch='fermi',
+                                      xpus=3,
+                                      hypervisor_type='LXC')
+                elif (name == 'cg1.xlarge'):
+                    extra_specs = dict(
+                                      cpu_arch='x86_64',
+                                      xpu_arch='fermi',
+                                      xpus=4,
+                                      hypervisor_type='LXC')
+                elif (name == 'cg1.2xlarge'):
+                    extra_specs = dict(
+                                      cpu_arch='x86_64',
+                                      xpu_arch='fermi',
+                                      xpus=4,
                                       hypervisor_type='LXC')
                 elif (name == 'cg1.4xlarge'):
                     extra_specs = dict(
