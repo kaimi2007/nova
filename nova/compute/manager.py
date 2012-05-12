@@ -67,7 +67,6 @@ from nova.openstack.common import importutils
 from nova import rpc
 from nova import utils
 from nova.virt import driver
-from nova import vnc
 from nova import volume
 
 
@@ -282,7 +281,6 @@ class ComputeManager(manager.SchedulerDependentManager):
         context = nova.context.get_admin_context()
         instances = self.db.instance_get_all_by_host(context, self.host)
         for instance in instances:
-            instance_uuid = instance['uuid']
             db_state = instance['power_state']
             drv_state = self._get_power_state(context, instance)
 
@@ -623,7 +621,7 @@ class ComputeManager(manager.SchedulerDependentManager):
                                      launched_at=utils.utcnow())
 
     def _notify_about_instance_usage(self, context, instance, event_suffix,
-                                     network_info=None,
+                                     network_info=None, system_metadata=None,
                                      extra_usage_info=None):
         # NOTE(sirp): The only thing this wrapper function does extra is handle
         # the passing in of `self.host`. Ordinarily this will just be
@@ -631,6 +629,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         # `__init__`.
         compute_utils.notify_about_instance_usage(
                 context, instance, event_suffix, network_info=network_info,
+                system_metadata=system_metadata,
                 extra_usage_info=extra_usage_info, host=self.host)
 
     def _deallocate_network(self, context, instance):
@@ -735,17 +734,23 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     def _delete_instance(self, context, instance):
         """Delete an instance on this host."""
-        instance_id = instance['id']
+        instance_uuid = instance['uuid']
         self._notify_about_instance_usage(context, instance, "delete.start")
         self._shutdown_instance(context, instance, 'Terminating')
-        self._cleanup_volumes(context, instance['uuid'])
+        self._cleanup_volumes(context, instance_uuid)
         instance = self._instance_update(context,
-                              instance_id,
+                              instance_uuid,
                               vm_state=vm_states.DELETED,
                               task_state=None,
                               terminated_at=utils.utcnow())
-        self.db.instance_destroy(context, instance_id)
-        self._notify_about_instance_usage(context, instance, "delete.end")
+        # Pull the system_metadata before we delete the instance, so we
+        # can pass it to delete.end notification, as it will not be able
+        # to look it up anymore, if it needs it.
+        system_meta = self.db.instance_system_metadata_get(context,
+                instance_uuid)
+        self.db.instance_destroy(context, instance_uuid)
+        self._notify_about_instance_usage(context, instance, "delete.end",
+                system_metadata=system_meta)
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
@@ -1746,7 +1751,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         connection_info = self.volume_api.initialize_connection(context,
                                                                 volume,
                                                                 connector)
-        self.volume_api.attach(context, volume, instance_id, mountpoint)
+        self.volume_api.attach(context, volume, instance_uuid, mountpoint)
         return connection_info
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
@@ -1785,7 +1790,10 @@ class ComputeManager(manager.SchedulerDependentManager):
                                                      volume,
                                                      connector)
 
-        self.volume_api.attach(context, volume, instance_ref['id'], mountpoint)
+        self.volume_api.attach(context,
+                               volume,
+                               instance_ref['uuid'],
+                               mountpoint)
         values = {
             'instance_uuid': instance_ref['uuid'],
             'connection_info': utils.dumps(connection_info),

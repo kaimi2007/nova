@@ -1216,7 +1216,9 @@ class LibvirtConnTestCase(test.TestCase):
                                           instance_dict)
         vol_dict = {'status': 'migrating', 'size': 1}
         volume_ref = db.volume_create(self.context, vol_dict)
-        db.volume_attached(self.context, volume_ref['id'], instance_ref['id'],
+        db.volume_attached(self.context,
+                           volume_ref['id'],
+                           instance_ref['uuid'],
                            '/dev/fake')
 
         # Preparing mocks
@@ -2202,7 +2204,7 @@ class LibvirtUtilsTestCase(test.TestCase):
     def test_create_cow_image(self):
         self.mox.StubOutWithMock(utils, 'execute')
         utils.execute('qemu-img', 'create', '-f', 'qcow2',
-                      '-o', 'cluster_size=2M,backing_file=/some/path',
+                      '-o', 'backing_file=/some/path',
                       '/the/new/cow')
         # Start test
         self.mox.ReplayAll()
