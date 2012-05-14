@@ -607,7 +607,7 @@ class LibvirtConnection(driver.ComputeDriver):
         if FLAGS.libvirt_type == 'lxc':
             try:
                 disk.destroy_container(self.container)
-            except:
+            except Exception:
                 LOG.info(_('destroy_container fails but ignored'))
                 pass
         if FLAGS.connection_type == 'gpu':
@@ -616,7 +616,7 @@ class LibvirtConnection(driver.ComputeDriver):
         if os.path.exists(target):
             try:
                 shutil.rmtree(target)
-            except:
+            except Exception:
                 pass
 
     def get_volume_connector(self, instance):

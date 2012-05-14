@@ -99,7 +99,7 @@ class ArchitectureScheduler(driver.Scheduler):
 
         try:
             wanted_cpu_arch = instance_meta['cpu_arch']
-        except:
+        except Exception:
             wanted_cpu_arch = None
 
         LOG.debug(_("## wanted-cpu-arch=%s"), wanted_cpu_arch)
@@ -128,7 +128,7 @@ class ArchitectureScheduler(driver.Scheduler):
                     elif value.find(':') == -1 and value.find(',') == -1:
                         try:
                             resource_cap[cap] = int(value)
-                        except:
+                        except Exception:
                             resource_cap[cap] = value
 
                     # complex; multi-level key-value pairs.
@@ -150,7 +150,7 @@ class ArchitectureScheduler(driver.Scheduler):
                                 if len(new_key) != 0:
                                     try:
                                         resource_cap[new_key] = int(new_val)
-                                    except:
+                                    except Exception:
                                         resource_cap[new_key] = new_val
                                 nspl = pair.split(':')
                                 right = nspl[-2].rfind('"', 0, len(nspl[-2]))
@@ -168,7 +168,7 @@ class ArchitectureScheduler(driver.Scheduler):
                                     new_val += ", " + pair
                         try:
                             resource_cap[new_key] = int(new_val)
-                        except:
+                        except Exception:
                             resource_cap[new_key] = new_val
 
                 # if the same architecture is found
@@ -247,7 +247,7 @@ class ArchitectureScheduler(driver.Scheduler):
                                                 break
                                             else:
                                                 LOG.debug(_("## found"))
-                        except:
+                        except Exception:
                             pass
 
                     if (flag_different == 0):
