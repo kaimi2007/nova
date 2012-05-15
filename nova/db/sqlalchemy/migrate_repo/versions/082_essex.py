@@ -83,8 +83,10 @@ def _populate_instance_types(instance_types_table):
         'm1.large': dict(mem=8192, vcpus=4, root_gb=80, eph_gb=0, flavid=4),
         'm1.xlarge': dict(mem=16384, vcpus=8, root_gb=160, eph_gb=0, flavid=5),
         'cg1.small': dict(mem=2048, vcpus=1, root_gb=20, eph_gb=0, flavid=101),
-        'cg1.medium': dict(mem=4096, vcpus=2, root_gb=40, eph_gb=0, flavid=102),
-        'cg1.large': dict(mem=8192, vcpus=4, root_gb=80, eph_gb=0, flavid=103),
+        'cg1.medium':
+              dict(mem=4096, vcpus=2, root_gb=40, eph_gb=0, flavid=102),
+        'cg1.large':
+              dict(mem=8192, vcpus=4, root_gb=80, eph_gb=0, flavid=103),
         'cg1.xlarge':
               dict(mem=16384, vcpus=8, root_gb=160, eph_gb=0, flavid=104),
         'cg1.2xlarge':
