@@ -60,7 +60,27 @@ def upgrade(migrate_engine):
     'm1.small': dict(memory_mb=2048, vcpus=1, local_gb=20, flavorid=2),
     'm1.medium': dict(memory_mb=4096, vcpus=2, local_gb=40, flavorid=3),
     'm1.large': dict(memory_mb=8192, vcpus=4, local_gb=80, flavorid=4),
-    'm1.xlarge': dict(memory_mb=16384, vcpus=8, local_gb=160, flavorid=5)}
+    'm1.xlarge': dict(memory_mb=16384, vcpus=8, local_gb=160, flavorid=5),
+    'cg1.small': dict(memory_mb=2048, vcpus=1, local_gb=20, flavorid=101),
+    'cg1.medium': dict(memory_mb=4096, vcpus=2, local_gb=40, flavorid=102),
+    'cg1.large': dict(memory_mb=8192, vcpus=4, local_gb=80, flavorid=103),
+    'cg1.xlarge': dict(memory_mb=16384, vcpus=8, local_gb=160, flavorid=104),
+    'cg1.2xlarge': dict(memory_mb=16384, vcpus=8, local_gb=320, flavorid=105),
+    'cg1.4xlarge': dict(memory_mb=22000, vcpus=8, local_gb=640, flavorid=106),
+    'sh1.small': dict(memory_mb=2048, vcpus=1, local_gb=20, flavorid=201),
+    'sh1.medium': dict(memory_mb=4096, vcpus=2, local_gb=40, flavorid=202),
+    'sh1.large': dict(memory_mb=8192, vcpus=4, local_gb=80, flavorid=203),
+    'sh1.xlarge': dict(memory_mb=16384, vcpus=8, local_gb=160, flavorid=204),
+    'sh1.2xlarge': dict(memory_mb=32768, vcpus=16, local_gb=320, flavorid=205),
+    'sh1.4xlarge': dict(memory_mb=65536, vcpus=32, local_gb=320, flavorid=206),
+    'sh1.8xlarge': dict(memory_mb=131072, vcpus=64, local_gb=500,
+                         flavorid=207),
+    'sh1.16xlarge': dict(memory_mb=262144, vcpus=128, local_gb=500,
+                         flavorid=208),
+    'sh1.32xlarge': dict(memory_mb=524288, vcpus=256, local_gb=1000,
+                         flavorid=209),
+    'tp64.8x8': dict(memory_mb=16384, vcpus=1, local_gb=1000, flavorid=302)
+    }
     try:
         i = instance_types.insert()
         for name, values in INSTANCE_TYPES.iteritems():

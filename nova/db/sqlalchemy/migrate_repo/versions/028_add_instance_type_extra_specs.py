@@ -17,6 +17,8 @@
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer
 from sqlalchemy import MetaData, String, Table
 from nova import log as logging
+from nova import db
+from nova import context
 
 LOG = logging.getLogger(__name__)
 
@@ -55,6 +57,76 @@ def upgrade(migrate_engine):
     for table in (instance_type_extra_specs_table, ):
         try:
             table.create()
+            #
+            instance_type_rows = list(instance_types.select().execute())
+            for instance_type in instance_type_rows:
+                id = instance_type.id
+                name = instance_type.name
+                if (name == 'm1.tiny') or \
+                   (name == 'm1.small') or \
+                   (name == 'm1.medium') or \
+                   (name == 'm1.large') or \
+                   (name == 'm1.xlarge'):
+                    extra_specs = dict(cpu_arch='x86_64',
+                                       hypervisor_type='QEMU')
+                elif (name == 'cg1.small'):
+                    extra_specs = dict(
+                                      cpu_arch='x86_64',
+                                      xpu_arch='fermi',
+                                      xpus=1,
+                                      hypervisor_type='LXC')
+                elif (name == 'cg1.medium'):
+                    extra_specs = dict(
+                                      cpu_arch='x86_64',
+                                      xpu_arch='fermi',
+                                      xpus=2,
+                                      hypervisor_type='LXC')
+                elif (name == 'cg1.large'):
+                    extra_specs = dict(
+                                      cpu_arch='x86_64',
+                                      xpu_arch='fermi',
+                                      xpus=3,
+                                      hypervisor_type='LXC')
+                elif (name == 'cg1.xlarge'):
+                    extra_specs = dict(
+                                      cpu_arch='x86_64',
+                                      xpu_arch='fermi',
+                                      xpus=4,
+                                      hypervisor_type='LXC')
+                elif (name == 'cg1.2xlarge'):
+                    extra_specs = dict(
+                                      cpu_arch='x86_64',
+                                      xpu_arch='fermi',
+                                      xpus=4,
+                                      hypervisor_type='LXC')
+                elif (name == 'cg1.4xlarge'):
+                    extra_specs = dict(
+                                      cpu_arch='x86_64',
+                                      xpu_arch='fermi',
+                                      xpus=4,
+                                      hypervisor_type='LXC')
+                elif (name == 'sh1.small') or  \
+                     (name == 'sh1.medium') or \
+                     (name == 'sh1.large') or \
+                     (name == 'sh1.xlarge') or \
+                     (name == 'sh1.2xlarge') or \
+                     (name == 'sh1.4xlarge') or \
+                     (name == 'sh1.8xlarge') or \
+                     (name == 'sh1.16xlarge') or \
+                     (name == 'sh1.32xlarge'):
+                    extra_specs = dict(
+                                      cpu_arch='x86_64',
+                                      system_type='UV',
+                                      hypervisor_type='QEMU')
+                elif (name == 'tp64.8x8'):
+                    extra_specs = dict(
+                                      cpu_arch='tilepro64',
+                                      hypervisor_type='tilera_hv')
+
+                db.api.instance_type_extra_specs_update_or_create(
+                                          context.get_admin_context(),
+                                          id,
+                                          extra_specs)
         except Exception:
             LOG.info(repr(table))
             LOG.exception('Exception while creating table')
