@@ -46,6 +46,7 @@ import traceback
 from eventlet import greenthread
 
 from nova import block_device
+from nova import compute
 import nova.context
 from nova.compute import aggregate_states
 from nova.compute import instance_types
@@ -124,7 +125,20 @@ compute_opts = [
     cfg.IntOpt("heal_instance_info_cache_interval",
                default=60,
                help="Number of seconds between instance info_cache self "
-                        "healing updates")
+                        "healing updates"),
+    cfg.ListOpt('additional_compute_capabilities',
+               default=[],
+               help='a list of additional capabilities for this compute '
+               'host to advertise. Valid entries are name=value pairs '
+               'this functionality will be replaced when HostAggregates '
+               'become more funtional for general grouping in Folsom. (see: '
+               'http://etherpad.openstack.org/FolsomNovaHostAggregates-v2)'),
+    cfg.ListOpt('instance_type_extra_specs',
+               default=[],
+               help='a list of additional capabilities corresponding to '
+               'instacne_type_extra_specs for this compute '
+               'host to advertise. Valid entries are name=value, pairs '
+               'For example, "key1:val1, key2:val2"'),
     ]
 
 FLAGS = flags.FLAGS
@@ -185,6 +199,22 @@ def wrap_instance_fault(function):
     return decorated_function
 
 
+def _get_additional_capabilities():
+    """Return additional capabilities to advertise for this compute host
+    This will be replaced once HostAggrgates are able to handle more general
+    host grouping for custom schedulers."""
+    capabilities = {}
+    for cap in FLAGS.additional_compute_capabilities:
+        if '=' in cap:
+            name, value = cap.split('=', 1)
+        else:
+            name = cap
+            value = True
+        capabilities[name] = value
+
+    return capabilities
+
+
 def _get_image_meta(context, image_ref):
     image_service, image_id = nova.image.get_image_service(context, image_ref)
     return image_service.show(context, image_id)
@@ -213,6 +243,8 @@ class ComputeManager(manager.SchedulerDependentManager):
         self._last_host_check = 0
         self._last_bw_usage_poll = 0
         self._last_info_cache_heal = 0
+        self.compute_api = compute.API()
+        self.extra_specs = {}
 
         super(ComputeManager, self).__init__(service_name="compute",
                                              *args, **kwargs)
@@ -261,6 +293,8 @@ class ComputeManager(manager.SchedulerDependentManager):
                     LOG.warning(_('Hypervisor driver does not support '
                                   'firewall rules'))
 
+        self._get_instance_type_extra_specs_capabilities(context)
+
     def _get_power_state(self, context, instance):
         """Retrieve the power state for the given instance."""
         LOG.debug(_('Checking state'), instance=instance)
@@ -269,6 +303,35 @@ class ComputeManager(manager.SchedulerDependentManager):
         except exception.NotFound:
             return power_state.FAILED
 
+    def _get_instance_type_extra_specs_capabilities(self, context):
+        """Return additional capabilities to advertise for this compute host."""
+        for pair in FLAGS.instance_type_extra_specs:
+            keyval = pair.split(':', 1)
+            keyval[0] = keyval[0].strip()
+            keyval[1] = keyval[1].strip()
+            self.extra_specs[keyval[0]] = keyval[1]
+    
+        instances = self.db.instance_get_all_by_host(context, self.host)
+        for instance in instances:
+            instance_type_extra_specs = self.db.instance_type_extra_specs_get( \
+                context, instance.instance_type_id)
+            for key in instance_type_extra_specs:
+                op_req = instance_type_extra_specs[key]
+                words = op_req.split()
+                op = words[0]
+                req = words[1]
+                if op == '=':
+                    self.extra_specs[key] = str(float(self.extra_specs[key]) 
+                        - float(req))
+                if op.find('==') == 0 \
+                    or op.find('>=') == 0 or op.find('<=') == 0:
+                        if op.find('-') == 2:
+                            self.extra_specs[key] = str(float(self.extra_specs[key]) 
+                                + float(req))
+                        elif op.find('+') == 2:
+                            self.extra_specs[key] = str(float(self.extra_specs[key]) 
+                                - float(req))
+    
     def get_console_topic(self, context, **kwargs):
         """Retrieves the console host for a project on this host.
 
@@ -433,6 +496,27 @@ class ComputeManager(manager.SchedulerDependentManager):
                 instance = self._spawn(context, instance, image_meta,
                                        network_info, block_device_info,
                                        injected_files, admin_password)
+                # deduct resource HERE
+                instance_type_extra_specs = \
+                    self.db.instance_type_extra_specs_get( \
+                        context, instance.instance_type_id)
+                for key in instance_type_extra_specs:
+                    op_req = instance_type_extra_specs[key]
+                    words = op_req.split()
+                    op = words[0]
+                    req = words[1]
+                    if op == '=':
+                        self.extra_specs[key] = str(float(self.extra_specs[key]) 
+                            - float(req))
+                    if op.find('==') == 0 \
+                        or op.find('>=') == 0 or op.find('<=') == 0:
+                            if op.find('-') == 2:
+                                self.extra_specs[key] = str(float(self.extra_specs[key]) 
+                                    + float(req))
+                            elif op.find('+') == 2:
+                                self.extra_specs[key] = str(float(self.extra_specs[key]) 
+                                    - float(req))
+
             except Exception:
                 with utils.save_and_reraise_exception():
                     self._deallocate_network(context, instance)
@@ -729,7 +813,34 @@ class ComputeManager(manager.SchedulerDependentManager):
                               task_state=None,
                               terminated_at=utils.utcnow())
 
-        self.db.instance_destroy(context, instance_id)
+        # Pull the system_metadata before we delete the instance, so we
+        # can pass it to delete.end notification, as it will not be able
+        # to look it up anymore, if it needs it.
+        system_meta = self.db.instance_system_metadata_get(context,
+                instance_uuid)
+        self.db.instance_destroy(context, instance_uuid)
+
+        # add resource HERE
+        instance_type_extra_specs = \
+            self.db.instance_type_extra_specs_get( \
+                context, instance.instance_type_id)
+        for key in instance_type_extra_specs:
+            op_req = instance_type_extra_specs[key]
+            words = op_req.split()
+            op = words[0]
+            req = words[1]
+            if op == '=':
+                self.extra_specs[key] = str(float(self.extra_specs[key]) 
+                    + float(req))
+            if op.find('==') == 0 \
+                or op.find('>=') == 0 or op.find('<=') == 0:
+                    if op.find('-') == 2:
+                        self.extra_specs[key] = str(float(self.extra_specs[key]) 
+                            - float(req))
+                    elif op.find('+') == 2:
+                        self.extra_specs[key] = str(float(self.extra_specs[key]) 
+                            + float(req))
+
         self._notify_about_instance_usage(instance, "delete.end")
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
@@ -2283,8 +2394,10 @@ class ComputeManager(manager.SchedulerDependentManager):
             LOG.info(_("Updating host status"))
             # This will grab info about the host and queue it
             # to be sent to the Schedulers.
-            self.update_service_capabilities(
-                self.driver.get_host_stats(refresh=True))
+            capabilities = _get_additional_capabilities()
+            capabilities.update(self.extra_specs)  
+            capabilities.update(self.driver.get_host_stats(refresh=True))
+            self.update_service_capabilities(capabilities)
 
     @manager.periodic_task(ticks_between_runs=10)
     def _sync_power_states(self, context):
