@@ -38,7 +38,7 @@ from nova.openstack.common import importutils
 LOG = logging.getLogger(__name__)
 
 scheduler_driver_opt = cfg.StrOpt('scheduler_driver',
-        default='nova.scheduler.multi.MultiScheduler',
+        default='nova.scheduler.filter_scheduler.FilterScheduler',
         help='Default driver to use for the scheduler')
 
 FLAGS = flags.FLAGS
