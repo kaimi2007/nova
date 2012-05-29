@@ -27,10 +27,10 @@ import subprocess
 import time
 
 from nova.compute import power_state
-from nova.openstack.common import cfg
 from nova import exception
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import cfg
 from nova import utils
 
 FLAGS = flags.FLAGS
@@ -272,13 +272,12 @@ class BareMetalNodes(object):
         out_msg = file.readline().find("Unreachable")
         utils.execute('sudo', 'rm', tile_output)
         if out_msg == -1:
-            cmd = _("TILERA_BOARD_#%(node_id)s %(node_ip)s is ready")
-            LOG.debug(cmd % locals())
+            LOG.debug(_("TILERA_BOARD_#%(node_id)s %(node_ip)s is ready"),
+                      locals())
             return True
         else:
-            cmd = _("TILERA_BOARD_#%(node_id)s %(node_ip)s is not ready,"
-                    " out_msg=%(out_msg)s")
-            LOG.debug(cmd % local())
+            LOG.debug(_("TILERA_BOARD_#%(node_id)s %(node_ip)s is not ready,"
+                        " out_msg=%(out_msg)s"), locals())
             self.power_mgr(node_id, 2)
             return False
 
@@ -289,8 +288,7 @@ class BareMetalNodes(object):
         From basepath to /tftpboot, kernel is set based on the given mode
         such as 0-NoSet, 1-SetVmlinux, or 9-RemoveVmlinux.
         """
-        cmd = _("Noting to do for tilera nodes: vmlinux is in CF")
-        LOG.debug(cmd)
+        LOG.debug(_("Noting to do for tilera nodes: vmlinux is in CF"))
 
     def sleep_mgr(self, time_in_seconds):
         """
@@ -327,7 +325,7 @@ class BareMetalNodes(object):
             return power_state.RUNNING
         except Exception as ex:
             self.deactivate_node(node_id)
-            raise exception.Error(_("Node is unknown error state."))
+            raise exception.NovaException(_("Node is unknown error state."))
 
     def get_console_output(self, console_log, node_id):
         """

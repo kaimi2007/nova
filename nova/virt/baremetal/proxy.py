@@ -32,23 +32,22 @@ A connection to a hypervisor through baremetal.
 import hashlib
 import os
 import shutil
-import time
 
+from nova.compute import instance_types
+from nova.compute import power_state
+from nova.compute import vm_states
 from nova import context as nova_context
 from nova import db
 from nova import exception
 from nova import flags
 from nova import log as logging
-from nova import utils
+from nova import notifications
 from nova.openstack.common import cfg
-from nova.compute import instance_types
-from nova.compute import power_state
-from nova.compute import vm_states
-from nova.virt import disk
+from nova import utils
+from nova.virt.baremetal import dom
+from nova.virt.baremetal import nodes
 from nova.virt.disk import api as disk
 from nova.virt import driver
-from nova.virt.baremetal import nodes
-from nova.virt.baremetal import dom
 from nova.virt.libvirt import utils as libvirt_utils
 
 
@@ -59,18 +58,9 @@ LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
 
 baremetal_opts = [
-    cfg.StrOpt('baremetal_injected_network_template',
-                default='$pybasedir/nova/virt/interfaces.template',
-                help='Template file for injected network'),
     cfg.StrOpt('baremetal_type',
                 default='baremetal',
                 help='baremetal domain type'),
-    cfg.StrOpt('baremetal_uri',
-                default='',
-                help='Override the default baremetal URI'),
-    cfg.BoolOpt('baremetal_allow_project_net_traffic',
-                 default=True,
-                 help='Whether to allow in project network traffic')
     ]
 
 FLAGS.register_opts(baremetal_opts)
@@ -96,16 +86,17 @@ def _late_load_cheetah():
 class ProxyConnection(driver.ComputeDriver):
 
     def __init__(self, read_only):
+        # Note that baremetal doesn't have a read-only connection
+        # mode, so the read_only parameter is ignored
         super(ProxyConnection, self).__init__()
         self.baremetal_nodes = nodes.get_baremetal_nodes()
         self._wrapped_conn = None
-        self.read_only = read_only
         self._host_state = None
 
     @property
     def HostState(self):
         if not self._host_state:
-            self._host_state = HostState(self.read_only)
+            self._host_state = HostState(self)
         return self._host_state
 
     def init_host(self, host):
@@ -138,17 +129,15 @@ class ProxyConnection(driver.ComputeDriver):
 
     def destroy(self, instance, network_info, block_device_info=None,
                 cleanup=True):
-        timer = utils.LoopingCall(f=None)
-
         while True:
             try:
                 self._conn.destroy_domain(instance['name'])
                 break
             except Exception as ex:
-                msg = (_("Error encountered when destroying instance "
-                        "'%(name)s': %(ex)s") %
-                        {"name": instance["name"], "ex": ex})
-                LOG.debug(msg)
+                LOG.debug(_("Error encountered when destroying instance "
+                            "'%(name)s': %(ex)s") %
+                          {"name": instance["name"], "ex": ex},
+                          instance=instance)
                 break
 
         if cleanup:
@@ -160,7 +149,7 @@ class ProxyConnection(driver.ComputeDriver):
         target = os.path.join(FLAGS.instances_path, instance['name'])
         instance_name = instance['name']
         LOG.info(_('instance %(instance_name)s: deleting instance files'
-                ' %(target)s') % locals())
+                ' %(target)s') % locals(), instance=instance)
         if FLAGS.baremetal_type == 'lxc':
             disk.destroy_container(self.container)
         if os.path.exists(target):
@@ -168,15 +157,15 @@ class ProxyConnection(driver.ComputeDriver):
 
     @exception.wrap_exception
     def attach_volume(self, instance_name, device_path, mountpoint):
-        raise exception.APIError("attach_volume not supported for baremetal.")
+        raise exception.Invalid("attach_volume not supported for baremetal.")
 
     @exception.wrap_exception
     def detach_volume(self, instance_name, mountpoint):
-        raise exception.APIError("detach_volume not supported for baremetal.")
+        raise exception.Invalid("detach_volume not supported for baremetal.")
 
     @exception.wrap_exception
     def snapshot(self, instance, image_id):
-        raise exception.APIError("snapshot not supported for baremetal.")
+        raise exception.Invalid("snapshot not supported for baremetal.")
 
     @exception.wrap_exception
     def reboot(self, instance):
@@ -186,13 +175,14 @@ class ProxyConnection(driver.ComputeDriver):
             try:
                 state = self._conn.reboot_domain(instance['name'])
                 if state == power_state.RUNNING:
-                    LOG.debug(_('instance %s: rebooted'), instance['name'])
+                    LOG.debug(_('instance %s: rebooted'), instance['name'],
+                              instance=instance)
                     timer.stop()
             except Exception:
-                LOG.exception(_('_wait_for_reboot failed'))
+                LOG.exception(_('_wait_for_reboot failed'), instance=instance)
                 timer.stop()
         timer.f = _wait_for_reboot
-        return timer.start(interval=0.5, now=True)
+        return timer.start(interval=0.5)
 
     @exception.wrap_exception
     def rescue(self, context, instance, network_info):
@@ -206,7 +196,6 @@ class ProxyConnection(driver.ComputeDriver):
         """
         self.destroy(instance, False)
 
-        xml_dict = self.to_xml_dict(instance, rescue=True)
         rescue_images = {'image_id': FLAGS.baremetal_rescue_image_id,
                          'kernel_id': FLAGS.baremetal_rescue_kernel_id,
                          'ramdisk_id': FLAGS.baremetal_rescue_ramdisk_id}
@@ -219,13 +208,14 @@ class ProxyConnection(driver.ComputeDriver):
             try:
                 state = self._conn.reboot_domain(instance['name'])
                 if state == power_state.RUNNING:
-                    LOG.debug(_('instance %s: rescued'), instance['name'])
+                    LOG.debug(_('instance %s: rescued'), instance['name'],
+                              instance=instance)
                     timer.stop()
             except Exception:
-                LOG.exception(_('_wait_for_rescue failed'))
+                LOG.exception(_('_wait_for_rescue failed'), instance=instance)
                 timer.stop()
-        timer.f = _wait_for_reboot
-        return timer.start(interval=0.5, now=True)
+        timer.f = _wait_for_rescue
+        return timer.start(interval=0.5)
 
     @exception.wrap_exception
     def unrescue(self, instance, network_info):
@@ -252,33 +242,48 @@ class ProxyConnection(driver.ComputeDriver):
         self._create_image(context, instance, xml_dict,
             network_info=network_info,
             block_device_info=block_device_info)
-        LOG.debug(_("instance %s: is building"), instance['name'])
-        LOG.debug(xml_dict)
+        LOG.debug(_("instance %s: is building"), instance['name'],
+                  instance=instance)
+        LOG.debug(xml_dict, instance=instance)
 
         def _wait_for_boot():
             try:
-                LOG.debug(_("Key is injected but instance is not running yet"))
-                db.instance_update(context, instance['id'],
-                    {'vm_state': vm_states.BUILDING})
+                LOG.debug(_("Key is injected but instance is not running yet"),
+                          instance=instance)
+                (old_ref, new_ref) = db.instance_update_and_get_original(
+                        context, instance['id'],
+                        {'vm_state': vm_states.BUILDING})
+                notifications.send_update(context, old_ref, new_ref)
+
                 state = self._conn.create_domain(xml_dict, bpath)
                 if state == power_state.RUNNING:
-                    LOG.debug(_('instance %s: booted'), instance['name'])
-                    db.instance_update(context, instance['id'],
+                    LOG.debug(_('instance %s: booted'), instance['name'],
+                              instance=instance)
+                    (old_ref, new_ref) = db.instance_update_and_get_original(
+                            context, instance['id'],
                             {'vm_state': vm_states.ACTIVE})
-                    LOG.debug(_('~~~~~~ current state = %s ~~~~~~'), state)
+                    notifications.send_update(context, old_ref, new_ref)
+
+                    LOG.debug(_('~~~~~~ current state = %s ~~~~~~'), state,
+                              instance=instance)
                     LOG.debug(_("instance %s spawned successfully"),
-                            instance['name'])
+                            instance['name'], instance=instance)
                 else:
-                    LOG.debug(_('instance %s:not booted'), instance['name'])
-            except Exception as Exn:
-                LOG.debug(_("Bremetal assignment is overcommitted."))
-                db.instance_update(context, instance['id'],
-                           {'vm_state': vm_states.OVERCOMMIT,
-                            'power_state': power_state.SUSPENDED})
+                    LOG.debug(_('instance %s:not booted'), instance['name'],
+                              instance=instance)
+            except Exception:
+                LOG.exception(_("Baremetal assignment is overcommitted."),
+                          instance=instance)
+                (old_ref, new_ref) = db.instance_update_and_get_original(
+                        context, instance['id'],
+                        {'vm_state': vm_states.ERROR,
+                         'power_state': power_state.FAILED})
+                notifications.send_update(context, old_ref, new_ref)
+
             timer.stop()
         timer.f = _wait_for_boot
 
-        return timer.start(interval=0.5, now=True)
+        return timer.start(interval=0.5)
 
     def get_console_output(self, instance):
         console_log = os.path.join(FLAGS.instances_path, instance['name'],
@@ -351,7 +356,8 @@ class ProxyConnection(driver.ComputeDriver):
         libvirt_utils.ensure_tree(basepath(suffix=''))
         utils.execute('chmod', '0777', basepath(suffix=''))
 
-        LOG.info(_('instance %s: Creating image'), inst['name'])
+        LOG.info(_('instance %s: Creating image'), inst['name'],
+                 instance=inst)
 
         if FLAGS.baremetal_type == 'lxc':
             container_dir = '%s/rootfs' % basepath(suffix='')
@@ -404,8 +410,7 @@ class ProxyConnection(driver.ComputeDriver):
                           cow=False,  # FLAGS.use_cow_images,
                           image_id=disk_images['image_id'],
                           user_id=inst['user_id'],
-                          project_id=inst['project_id'],
-                          size=size)
+                          project_id=inst['project_id'])
 
         # For now, we assume that if we're not using a kernel, we're using a
         # partitioned disk image where the target partition is the first
@@ -471,8 +476,8 @@ class ProxyConnection(driver.ComputeDriver):
             for injection in ('metadata', 'key', 'net'):
                 if locals()[injection]:
                     LOG.info(_('instance %(inst_name)s: injecting '
-                               '%(injection)s into image %(img_id)s')
-                             % locals())
+                               '%(injection)s into image %(img_id)s'),
+                             locals(), instance=inst)
             try:
                 disk.inject_data(injection_path, key, net, metadata,
                                  partition=target_partition,
@@ -482,15 +487,16 @@ class ProxyConnection(driver.ComputeDriver):
             except Exception as e:
                 # This could be a windows image, or a vmdk format disk
                 LOG.warn(_('instance %(inst_name)s: ignoring error injecting'
-                        ' data into image %(img_id)s (%(e)s)') % locals())
+                        ' data into image %(img_id)s (%(e)s)') % locals(),
+                         instance=inst)
 
     def _prepare_xml_info(self, instance, network_info, rescue,
                           block_device_info=None):
         # block_device_mapping = driver.block_device_info_get_mapping(
         #    block_device_info)
-        map = 0
-        for (network, mapping) in network_info:
-            map += 1
+        _map = 0
+        for (_, mapping) in network_info:
+            _map += 1
 
         nics = []
         # FIXME(vish): stick this in db
@@ -526,9 +532,11 @@ class ProxyConnection(driver.ComputeDriver):
         return xml_info
 
     def to_xml_dict(self, instance, rescue=False, network_info=None):
-        LOG.debug(_('instance %s: starting toXML method'), instance['name'])
+        LOG.debug(_('instance %s: starting toXML method'), instance['name'],
+                  instance=instance)
         xml_info = self._prepare_xml_info(instance, rescue, network_info)
-        LOG.debug(_('instance %s: finished toXML method'), instance['name'])
+        LOG.debug(_('instance %s: finished toXML method'), instance['name'],
+                  instance=instance)
         return xml_info
 
     def get_info(self, instance):
@@ -601,11 +609,7 @@ class ProxyConnection(driver.ComputeDriver):
         :returns: The total number of vcpu that currently used.
 
         """
-
-        total = 0
-        for dom_id in self._conn.list_domains():
-            total += 1
-        return total
+        return len(self._conn.list_domains())
 
     def get_memory_mb_used(self):
         """Get the free memory size(MB) of physical computer.
@@ -663,9 +667,9 @@ class ProxyConnection(driver.ComputeDriver):
         #TODO(mdragon): console proxy should be implemented for baremetal,
         #               in case someone wants to use it.
         #               For now return fake data.
-        return  {'address': '127.0.0.1',
-                 'username': 'fakeuser',
-                 'password': 'fakepassword'}
+        return {'address': '127.0.0.1',
+                'username': 'fakeuser',
+                'password': 'fakepassword'}
 
     def refresh_security_group_rules(self, security_group_id):
         # Bare metal doesn't currently support security groups
@@ -752,9 +756,9 @@ class HostState(object):
     node is running on.
     """
 
-    def __init__(self, read_only):
+    def __init__(self, connection):
         super(HostState, self).__init__()
-        self.read_only = read_only
+        self.connection = connection
         self._stats = {}
         self.update_status()
 
@@ -771,11 +775,10 @@ class HostState(object):
         We can get host status information.
         """
         LOG.debug(_("Updating host stats"))
-        connection = get_connection(self.read_only)
         data = {}
-        data["vcpus"] = connection.get_vcpu_total()
-        data["vcpus_used"] = connection.get_vcpu_used()
-        data["cpu_info"] = connection.get_cpu_info()
+        data["vcpus"] = self.connection.get_vcpu_total()
+        data["vcpus_used"] = self.connection.get_vcpu_used()
+        data["cpu_info"] = self.connection.get_cpu_info()
         data["cpu_arch"] = FLAGS.cpu_arch
         data["xpus"] = FLAGS.xpus
         data["xpu_arch"] = FLAGS.xpu_arch
@@ -783,12 +786,12 @@ class HostState(object):
         data["net_arch"] = FLAGS.net_arch
         data["net_info"] = FLAGS.net_info
         data["net_mbps"] = FLAGS.net_mbps
-        data["disk_total"] = connection.get_local_gb_total()
-        data["disk_used"] = connection.get_local_gb_used()
+        data["disk_total"] = self.connection.get_local_gb_total()
+        data["disk_used"] = self.connection.get_local_gb_used()
         data["disk_available"] = data["disk_total"] - data["disk_used"]
-        data["host_memory_total"] = connection.get_memory_mb_total()
+        data["host_memory_total"] = self.connection.get_memory_mb_total()
         data["host_memory_free"] = (data["host_memory_total"] -
-                                    connection.get_memory_mb_used())
-        data["hypervisor_type"] = connection.get_hypervisor_type()
-        data["hypervisor_version"] = connection.get_hypervisor_version()
+                                    self.connection.get_memory_mb_used())
+        data["hypervisor_type"] = self.connection.get_hypervisor_type()
+        data["hypervisor_version"] = self.connection.get_hypervisor_version()
         self._stats = data
