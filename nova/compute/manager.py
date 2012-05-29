@@ -816,9 +816,9 @@ class ComputeManager(manager.SchedulerDependentManager):
         # Pull the system_metadata before we delete the instance, so we
         # can pass it to delete.end notification, as it will not be able
         # to look it up anymore, if it needs it.
-        system_meta = self.db.instance_system_metadata_get(context,
-                instance_uuid)
-        self.db.instance_destroy(context, instance_uuid)
+        #system_meta = self.db.instance_system_metadata_get(context,
+        #        instance_uuid)
+        self.db.instance_destroy(context, instance_id)
 
         # add resource HERE
         instance_type_extra_specs = \
