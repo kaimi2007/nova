@@ -21,6 +21,10 @@ Weighing Functions.
 
 import operator
 
+# dkang
+from nova import db 
+from nova.openstack.common import cfg
+#!dkang
 from nova import exception
 from nova import flags
 from nova import log as logging
@@ -32,6 +36,25 @@ from nova import utils
 
 
 FLAGS = flags.FLAGS
+# dkang
+simple_scheduler_opts = [
+    cfg.IntOpt("max_cores",
+               default=16,
+               help="maximum number of instance cores to allow per host"),
+    cfg.IntOpt("max_gigabytes",
+               default=10000,
+               help="maximum number of volume gigabytes to allow per host"),
+    cfg.IntOpt("max_networks",
+               default=1000,
+               help="maximum number of networks to allow per host"),
+    cfg.BoolOpt('skip_isolated_core_check',
+                default=True,
+                help='Allow overcommitting vcpus on isolated hosts'),
+    ]
+
+FLAGS = flags.FLAGS
+FLAGS.register_opts(simple_scheduler_opts)
+#!dkang
 LOG = logging.getLogger(__name__)
 
 
@@ -258,3 +281,37 @@ class FilterScheduler(driver.Scheduler):
 
         self.cost_function_cache[topic] = cost_fns
         return cost_fns
+
+# from this below, dkang added
+    def schedule_create_volume(self, context, volume_id, *_args, **_kwargs):
+        """Picks a host that is up and has the fewest volumes."""
+        elevated = context.elevated()
+
+        volume_ref = db.volume_get(context, volume_id)
+        availability_zone = volume_ref.get('availability_zone')
+
+        zone, host = None, None
+        if availability_zone:
+            zone, _x, host = availability_zone.partition(':')
+        if host and context.is_admin:
+            service = db.service_get_by_args(elevated, host, 'nova-volume')
+            if not utils.service_is_up(service):
+                raise exception.WillNotSchedule(host=host)
+            driver.cast_to_volume_host(context, host, 'create_volume',
+                    volume_id=volume_id, **_kwargs)
+            return None
+
+        results = db.service_get_all_volume_sorted(elevated)
+        if zone:
+            results = [(service, gigs) for (service, gigs) in results
+                       if service['availability_zone'] == zone]
+        for result in results:
+            (service, volume_gigabytes) = result
+            if volume_gigabytes + volume_ref['size'] > FLAGS.max_gigabytes:
+                msg = _("Not enough allocatable volume gigabytes remaining")
+                raise exception.NoValidHost(reason=msg)
+            if utils.service_is_up(service) and not service['disabled']:
+                driver.cast_to_volume_host(context, service['host'],
+                        'create_volume', volume_id=volume_id, **_kwargs)
+                return None
+        msg = _("Is the appropriate service running?")
