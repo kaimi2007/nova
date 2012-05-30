@@ -164,6 +164,12 @@ libvirt_opts = [
                 default=False,
                 help='Use a separated OS thread pool to realize non-blocking'
                      ' libvirt calls')
+    cfg.StrOpt('dev_cgroups_path',
+               default=None,
+               help='Override the default disk prefix for the devices '
+               'attached to a server, which is dependent on '
+               'libvirt_type. (valid options are: sd, xvd, uvd, vd)'),
+
     ]
 
 FLAGS = flags.FLAGS
@@ -171,6 +177,12 @@ FLAGS.register_opts(libvirt_opts)
 
 flags.DECLARE('live_migration_retry_count', 'nova.compute.manager')
 flags.DECLARE('vncserver_proxyclient_address', 'nova.vnc')
+
+# Variables for tracking gpus available and gpus assigned
+if FLAGS.connection_type == 'gpu':
+    gpus_available = []
+    gpus_assigned = {}
+    vcpus_used = 0
 
 
 def patch_tpool_proxy():
@@ -272,6 +284,9 @@ class LibvirtConnection(driver.ComputeDriver):
 
     def init_host(self, host):
         # NOTE(nsokolov): moved instance restarting to ComputeManager
+        if FLAGS.connection_type == 'gpu':
+            global gpus_available
+            gpus_available = range(FLAGS.xpus)
         pass
 
     @property
@@ -380,6 +395,104 @@ class LibvirtConnection(driver.ComputeDriver):
             info = self._map_to_instance_info(domain)
             infos.append(info)
         return infos
+
+    def allow_gpus(self, inst):
+        dev_whitelist = os.path.join(FLAGS.dev_cgroups_path,
+                                      inst['name'],
+                                      'devices.allow')
+        # Allow Nvidia Conroller
+        perm = "c 195:255  rwm"
+#        cmd = "sudo echo %s >> %s" % (perm, dev_whitelist)
+        cmd = "echo %s | sudo tee -a %s" % (perm, dev_whitelist)
+        msg = _("executing  %s") % cmd
+        LOG.info(msg)
+        subprocess.Popen(cmd, shell=True)
+        for i in range(FLAGS.xpus):
+            # Allow each gpu device
+            perm = "c 195:%d  rwm" % i
+#            cmd = "sudo echo %s >> %s" % (perm, dev_whitelist)
+            cmd = "echo %s | sudo tee -a %s" % (perm, dev_whitelist)
+            msg = _("executing  %s") % cmd
+            LOG.info(msg)
+            subprocess.Popen(cmd, shell=True)
+
+    def assign_gpus(self, inst):
+        """Assigns gpus to a specific instance"""
+        global gpus_available
+        global gpus_assigned
+        global vcpus_used
+        ctxt = nova_context.get_admin_context()
+        gpus_in_meta = 0
+        gpus_in_extra = 0
+        env_file = os.path.join(FLAGS.instances_path,
+                                inst['name'],
+                                'rootfs/etc/environment')
+        msg = _("instance_type_id is %d .") % inst.instance_type_id
+        LOG.info(msg)
+        print "(JP) %s" % msg
+        instance_extra = db.instance_type_extra_specs_get( \
+                                ctxt, inst.instance_type_id)
+        msg = _("instance_extra is %s .") % instance_extra
+        LOG.info(msg)
+        msg = _("vcpus for this instance are %d .") % inst.vcpus
+        LOG.info(msg)
+        vcpus_used = vcpus_used + inst.vcpus
+        if 'xpus' in inst['metadata']:
+            gpus_in_meta = int(inst['metadata']['xpus'])
+            msg = _("xpus in metadata asked, %d .") % gpus_in_meta
+            LOG.info(msg)
+        if 'xpus' in instance_extra:
+            gpus_in_extra = int(instance_extra['xpus'])
+            msg = _("xpus in instance_extra asked, %d .") % gpus_in_extra
+            LOG.info(msg)
+
+        if gpus_in_meta > gpus_in_extra:
+            gpus_needed = gpus_in_meta
+        else:
+            gpus_needed = gpus_in_extra
+        #added by JP for debug
+        #gpus_needed = 1
+        msg = _("GPUS asked, %d .") % gpus_needed
+#        raise Exception(_("Test Error"))
+        LOG.info(msg)
+        print "(JP) %s" % msg
+        # Allow gpu devices inside the container
+        self.allow_gpus(inst)
+        # Set environemnt
+        gpus_assigned_list = []
+#        self.destroy(inst, network_info)
+
+        if gpus_needed > len(gpus_available):
+            raise Exception(_("Overcommit Error"))
+        for i in range(gpus_needed):
+            gpus_assigned_list.append(gpus_available.pop())
+        if gpus_needed:
+            print 'GPUs are definitely needed.'
+            gpus_assigned[inst['name']] = gpus_assigned_list
+            gpus_visible = str(gpus_assigned_list).strip('[]')
+            flag = "CUDA_VISIBLE_DEVICES=%s" % gpus_visible
+            cmd = "echo %s | sudo tee -a %s" % (flag, env_file)
+#            cmd = "echo %s >> %s" % (flag, env_file)
+            msg = _("executing the command %s") % cmd
+            LOG.info(msg)
+            print "(JP) %s" % msg
+            subprocess.Popen(cmd, shell=True)
+#            utils.executeShell(cmd, run_as_root=True)
+
+    def deassign_gpus(self, inst):
+        """Assigns gpus to a specific instance"""
+        global gpus_available
+        global gpus_assigned
+        global vcpus_used
+
+        vcpus_used = vcpus_used - inst.vcpus
+        if vcpus_used < 0:
+            vcpus_used = 0
+        #Check if already deassigned
+        if inst['name'] in gpus_assigned:
+            gpus_available.extend(gpus_assigned[inst['name']])
+            del gpus_assigned[inst['name']]
+        return
 
     def plug_vifs(self, instance, network_info):
         """Plug VIFs into networks."""
@@ -491,6 +604,9 @@ class LibvirtConnection(driver.ComputeDriver):
         LOG.info(_('Deleting instance files %(target)s') % locals(),
                  instance=instance)
         if FLAGS.libvirt_type == 'lxc':
+            disk.destroy_container(self.container)
+        if FLAGS.connection_type == 'gpu':
+            self.deassign_gpus(instance)
             disk.destroy_container(self.container)
         if os.path.exists(target):
             shutil.rmtree(target)
@@ -793,6 +909,8 @@ class LibvirtConnection(driver.ComputeDriver):
                 raise utils.LoopingCallDone
 
             if state == power_state.RUNNING:
+                if FLAGS.connection_type == 'gpu':
+                    allow_gpus(instance)
                 LOG.info(_("Instance rebooted successfully."),
                          instance=instance)
                 raise utils.LoopingCallDone
@@ -937,6 +1055,9 @@ class LibvirtConnection(driver.ComputeDriver):
                 raise utils.LoopingCallDone
 
             if state == power_state.RUNNING:
+                if FLAGS.connection_type == 'gpu':
+                    self.assign_gpus(instance)
+
                 LOG.info(_("Instance spawned successfully."),
                          instance=instance)
                 raise utils.LoopingCallDone
@@ -2478,6 +2599,9 @@ class HostState(object):
 
     def update_status(self):
         """Retrieve status info from libvirt."""
+        if FLAGS.connection_type == 'gpu':
+            global gpus_available
+            global vcpus_used
         LOG.debug(_("Updating host stats"))
         if self.connection is None:
             self.connection = get_connection(self.read_only)
@@ -2486,6 +2610,11 @@ class HostState(object):
         data["vcpus_used"] = self.connection.get_vcpu_used()
         data["cpu_info"] = utils.loads(self.connection.get_cpu_info())
         data["disk_total"] = self.connection.get_local_gb_total()
+        data["gpus"] = FLAGS.xpus
+        data["gpu_arch"] = FLAGS.xpu_arch
+        if FLAGS.connection_type == 'gpu':
+            data["gpus_used"] = len(gpus_available)
+        data["gpu_info"] = FLAGS.xpu_info
         data["disk_used"] = self.connection.get_local_gb_used()
         data["disk_available"] = data["disk_total"] - data["disk_used"]
         data["host_memory_total"] = self.connection.get_memory_mb_total()
