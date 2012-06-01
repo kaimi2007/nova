@@ -242,6 +242,7 @@ class BareMetalNodes(object):
                "ifconfig xgbe0 hw ether " + mac_address +
                " - --wait --run - ifconfig xgbe0 " + ip_address +
                " - --wait --quit")
+        LOG.debug(_(cmd))
         subprocess.Popen(cmd, shell=True)
         #utils.execute(cmd, shell=True)
         self.sleep_mgr(5)
@@ -303,6 +304,7 @@ class BareMetalNodes(object):
         cmd = (FLAGS.tile_monitor +
                " --resume --net " + node_ip + " --run - " +
                "/usr/sbin/sshd - --wait --quit")
+        LOG.debug(_(cmd))
         subprocess.Popen(cmd, shell=True)
         self.sleep_mgr(5)
 

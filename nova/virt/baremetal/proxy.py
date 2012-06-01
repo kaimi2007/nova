@@ -41,7 +41,7 @@ from nova import db
 from nova import exception
 from nova import flags
 from nova import log as logging
-from nova import notifications
+#from nova import notifications
 from nova.openstack.common import cfg
 from nova import utils
 from nova.virt.baremetal import dom
@@ -92,6 +92,12 @@ class ProxyConnection(driver.ComputeDriver):
         self.baremetal_nodes = nodes.get_baremetal_nodes()
         self._wrapped_conn = None
         self._host_state = None
+        self.extra_specs = {}
+        for pair in FLAGS.instance_type_extra_specs:
+            keyval = pair.split(':', 1)
+            keyval[0] = keyval[0].strip()
+            keyval[1] = keyval[1].strip()
+            self.extra_specs[keyval[0]] = keyval[1]
 
     @property
     def HostState(self):
@@ -250,19 +256,21 @@ class ProxyConnection(driver.ComputeDriver):
             try:
                 LOG.debug(_("Key is injected but instance is not running yet"),
                           instance=instance)
-                (old_ref, new_ref) = db.instance_update_and_get_original(
+                #(old_ref, new_ref) = db.instance_update_and_get_original(
+                db.instance_update(
                         context, instance['id'],
                         {'vm_state': vm_states.BUILDING})
-                notifications.send_update(context, old_ref, new_ref)
+                #notifications.send_update(context, old_ref, new_ref)
 
                 state = self._conn.create_domain(xml_dict, bpath)
                 if state == power_state.RUNNING:
                     LOG.debug(_('instance %s: booted'), instance['name'],
                               instance=instance)
-                    (old_ref, new_ref) = db.instance_update_and_get_original(
+                    #(old_ref, new_ref) = db.instance_update_and_get_original(
+                    db.instance_update(
                             context, instance['id'],
                             {'vm_state': vm_states.ACTIVE})
-                    notifications.send_update(context, old_ref, new_ref)
+                    #notifications.send_update(context, old_ref, new_ref)
 
                     LOG.debug(_('~~~~~~ current state = %s ~~~~~~'), state,
                               instance=instance)
@@ -274,11 +282,12 @@ class ProxyConnection(driver.ComputeDriver):
             except Exception:
                 LOG.exception(_("Baremetal assignment is overcommitted."),
                           instance=instance)
-                (old_ref, new_ref) = db.instance_update_and_get_original(
+                #(old_ref, new_ref) = db.instance_update_and_get_original(
+                db.instance_update(
                         context, instance['id'],
                         {'vm_state': vm_states.ERROR,
                          'power_state': power_state.FAILED})
-                notifications.send_update(context, old_ref, new_ref)
+                #notifications.send_update(context, old_ref, new_ref)
 
             timer.stop()
         timer.f = _wait_for_boot
@@ -471,7 +480,7 @@ class ProxyConnection(driver.ComputeDriver):
 
             injection_path = basepath('root')
             img_id = inst.image_ref
-            disable_auto_fsck = True
+            #disable_auto_fsck = True
 
             for injection in ('metadata', 'key', 'net'):
                 if locals()[injection]:
@@ -481,8 +490,9 @@ class ProxyConnection(driver.ComputeDriver):
             try:
                 disk.inject_data(injection_path, key, net, metadata,
                                  partition=target_partition,
-                                 use_cow=False,  # FLAGS.use_cow_images,
-                                 disable_auto_fsck=disable_auto_fsck)
+                                 use_cow=False)
+                                 #use_cow=False,  # FLAGS.use_cow_images,
+                                 #disable_auto_fsck=disable_auto_fsck)
 
             except Exception as e:
                 # This could be a windows image, or a vmdk format disk
@@ -696,26 +706,34 @@ class ProxyConnection(driver.ComputeDriver):
             raise exception.ComputeServiceUnavailable(host=host)
 
         # Updating host information
+        total_ram_mb = self.get_memory_mb_total()
+        free_ram_mb = self.get_memory_mb_used()
+        total_disk_gb = self.get_local_gb_total()
+        used_disk_gb = self.get_local_gb_used()
+
+        # Updating host information
         dic = {'vcpus': self.get_vcpu_total(),
-               'memory_mb': self.get_memory_mb_total(),
-               'local_gb': self.get_local_gb_total(),
+               'memory_mb': total_ram_mb,
+               'local_gb': total_disk_gb,
                'vcpus_used': self.get_vcpu_used(),
-               'memory_mb_used': self.get_memory_mb_used(),
-               'local_gb_used': self.get_local_gb_used(),
+               'memory_mb_used': total_ram_mb - free_ram_mb,
+               'local_gb_used': used_disk_gb,
                'hypervisor_type': self.get_hypervisor_type(),
                'hypervisor_version': self.get_hypervisor_version(),
                'cpu_info': self.get_cpu_info(),
-               'cpu_arch': FLAGS.cpu_arch,
-               'xpu_arch': FLAGS.xpu_arch,
-               'xpus': FLAGS.xpus,
-               'xpu_info': FLAGS.xpu_info,
-               'net_arch': FLAGS.net_arch,
-               'net_info': FLAGS.net_info,
-               'net_mbps': FLAGS.net_mbps,
+               #'cpu_arch': FLAGS.cpu_arch,
+               'cpu_arch': self.extra_specs['cpu_arch'],
+               #'xpu_arch': FLAGS.xpu_arch,
+               #'xpus': FLAGS.xpus,
+               #'xpu_info': FLAGS.xpu_info,
+               #'net_arch': FLAGS.net_arch,
+               #'net_info': FLAGS.net_info,
+               #'net_mbps': FLAGS.net_mbps,
                'service_id': service_ref['id']}
 
         compute_node_ref = service_ref['compute_node']
-        LOG.info(_('#### RLK: cpu_arch = %s ') % FLAGS.cpu_arch)
+        #LOG.info(_('#### RLK: cpu_arch = %s ') % FLAGS.cpu_arch)
+        LOG.info(_('#### RLK: cpu_arch = %s ') % self.extra_specs['cpu_arch'])
         if not compute_node_ref:
             LOG.info(_('Compute_service record created for %s ') % host)
             dic['service_id'] = service_ref['id']
@@ -760,6 +778,12 @@ class HostState(object):
         super(HostState, self).__init__()
         self.connection = connection
         self._stats = {}
+        self.extra_specs = {}
+        for pair in FLAGS.instance_type_extra_specs:
+            keyval = pair.split(':', 1)
+            keyval[0] = keyval[0].strip()
+            keyval[1] = keyval[1].strip()
+            self.extra_specs[keyval[0]] = keyval[1]
         self.update_status()
 
     def get_host_stats(self, refresh=False):
@@ -779,13 +803,14 @@ class HostState(object):
         data["vcpus"] = self.connection.get_vcpu_total()
         data["vcpus_used"] = self.connection.get_vcpu_used()
         data["cpu_info"] = self.connection.get_cpu_info()
-        data["cpu_arch"] = FLAGS.cpu_arch
-        data["xpus"] = FLAGS.xpus
-        data["xpu_arch"] = FLAGS.xpu_arch
-        data["xpu_info"] = FLAGS.xpu_info
-        data["net_arch"] = FLAGS.net_arch
-        data["net_info"] = FLAGS.net_info
-        data["net_mbps"] = FLAGS.net_mbps
+        #data["cpu_arch"] = FLAGS.cpu_arch
+        data["cpu_arch"] = self.extra_specs['cpu_arch']
+        #data["xpus"] = FLAGS.xpus
+        #data["xpu_arch"] = FLAGS.xpu_arch
+        #data["xpu_info"] = FLAGS.xpu_info
+        #data["net_arch"] = FLAGS.net_arch
+        #data["net_info"] = FLAGS.net_info
+        #data["net_mbps"] = FLAGS.net_mbps
         data["disk_total"] = self.connection.get_local_gb_total()
         data["disk_used"] = self.connection.get_local_gb_used()
         data["disk_available"] = data["disk_total"] - data["disk_used"]

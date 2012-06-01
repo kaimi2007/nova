@@ -18,7 +18,8 @@ from nova.compute import power_state
 from nova import exception
 from nova import flags
 from nova import log as logging
-from nova.openstack.common import jsonutils
+#from nova.openstack.common import jsonutils
+from nova import utils
 from nova.virt.baremetal import nodes
 
 FLAGS = flags.FLAGS
@@ -31,14 +32,16 @@ def read_domains(fname):
         f = open(fname, 'r')
         json = f.read()
         f.close()
-        domains = jsonutils.loads(json)
+        #domains = jsonutils.loads(json)
+        domains = utils.loads(json)
         return domains
     except IOError:
         raise exception.NotFound()
 
 
 def write_domains(fname, domains):
-    json = jsonutils.dumps(domains)
+    #json = jsonutils.dumps(domains)
+    json = utils.dumps(domains)
     f = open(fname, 'w')
     f.write(json)
     f.close()
