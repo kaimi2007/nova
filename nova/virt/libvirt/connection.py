@@ -50,6 +50,8 @@ import sys
 import time
 import uuid
 
+import subprocess
+
 from eventlet import greenthread
 from eventlet import tpool
 
@@ -163,7 +165,7 @@ libvirt_opts = [
     cfg.BoolOpt('libvirt_nonblocking',
                 default=False,
                 help='Use a separated OS thread pool to realize non-blocking'
-                     ' libvirt calls')
+                     ' libvirt calls'),
     cfg.StrOpt('dev_cgroups_path',
                default=None,
                help='Override the default disk prefix for the devices '
@@ -183,7 +185,9 @@ if FLAGS.connection_type == 'gpu':
     gpus_available = []
     gpus_assigned = {}
     vcpus_used = 0
-
+    num_gpus = None
+    gpu_arch = None
+    gpu_info = None
 
 def patch_tpool_proxy():
     """eventlet.tpool.Proxy doesn't work with old-style class in __str__()
@@ -237,6 +241,7 @@ class LibvirtConnection(driver.ComputeDriver):
         self._wrapped_conn = None
         self.container = None
         self.read_only = read_only
+        self.extra_specs = {}
         if FLAGS.firewall_driver not in firewall.drivers:
             FLAGS.set_default('firewall_driver', firewall.drivers[0])
         fw_class = utils.import_class(FLAGS.firewall_driver)
@@ -286,8 +291,56 @@ class LibvirtConnection(driver.ComputeDriver):
         # NOTE(nsokolov): moved instance restarting to ComputeManager
         if FLAGS.connection_type == 'gpu':
             global gpus_available
-            gpus_available = range(FLAGS.xpus)
+            global num_gpus
+            global gpu_arch
+            global gpu_info
+            context = nova.context.get_admin_context() 
+#            gpus_available = range(FLAGS.xpus)
+            self._get_instance_type_extra_specs_capabilities(context) 
+            if 'gpus' in self.extra_specs:
+                num_gpus = self.extra_specs['gpus']
+                gpus_available = range(int(self.extra_specs['gpus']))
+                print "**************************"
+                print num_gpus
+                print gpus_available
+                print int(num_gpus) - len(gpus_available)
+                print "**************************"
+            if 'gpu_arch' in self.extra_specs:
+                gpu_arch = self.extra_specs['gpu_arch']
+            if 'gpu_info' in self.extra_specs:
+                gpu_info = self.extra_specs['gpu_info']
         pass
+
+
+    def _get_instance_type_extra_specs_capabilities(self, context):
+        """Return additional capabilities to advertise for this compute host."""
+        for pair in FLAGS.instance_type_extra_specs:
+            keyval = pair.split(':', 1)
+            keyval[0] = keyval[0].strip()
+            keyval[1] = keyval[1].strip()
+            self.extra_specs[keyval[0]] = keyval[1]
+    
+#        instances = db.instance_get_all_by_host(context, self.host)
+#        for instance in instances:
+#            instance_type_extra_specs = db.instance_type_extra_specs_get( \
+#                context, instance.instance_type_id)
+#            for key in instance_type_extra_specs:
+#                op_req = instance_type_extra_specs[key]
+#                words = op_req.split()
+#                op = words[0]
+#                req = words[1]
+#                if op == '=':
+#                    self.extra_specs[key] = str(float(self.extra_specs[key])
+#                        - float(req))
+#                if op.find('==') == 0 \
+#                    or op.find('>=') == 0 or op.find('<=') == 0:
+#                        if op.find('-') == 2:
+#                            self.extra_specs[key] = str(float(self.extra_specs[key])
+#                                + float(req))
+#                        elif op.find('+') == 2:
+#                            self.extra_specs[key] = str(float(self.extra_specs[key])
+#                                - float(req))
+
 
     @property
     def libvirt_xml(self):
@@ -397,6 +450,7 @@ class LibvirtConnection(driver.ComputeDriver):
         return infos
 
     def allow_gpus(self, inst):
+        global num_gpus
         dev_whitelist = os.path.join(FLAGS.dev_cgroups_path,
                                       inst['name'],
                                       'devices.allow')
@@ -407,7 +461,7 @@ class LibvirtConnection(driver.ComputeDriver):
         msg = _("executing  %s") % cmd
         LOG.info(msg)
         subprocess.Popen(cmd, shell=True)
-        for i in range(FLAGS.xpus):
+        for i in range(int(num_gpus)):
             # Allow each gpu device
             perm = "c 195:%d  rwm" % i
 #            cmd = "sudo echo %s >> %s" % (perm, dev_whitelist)
@@ -437,13 +491,16 @@ class LibvirtConnection(driver.ComputeDriver):
         msg = _("vcpus for this instance are %d .") % inst.vcpus
         LOG.info(msg)
         vcpus_used = vcpus_used + inst.vcpus
-        if 'xpus' in inst['metadata']:
-            gpus_in_meta = int(inst['metadata']['xpus'])
-            msg = _("xpus in metadata asked, %d .") % gpus_in_meta
+        if 'gpus' in inst['metadata']:
+            gpus_in_meta = int(inst['metadata']['gpus'])
+            msg = _("gpus in metadata asked, %d .") % gpus_in_meta
             LOG.info(msg)
-        if 'xpus' in instance_extra:
-            gpus_in_extra = int(instance_extra['xpus'])
-            msg = _("xpus in instance_extra asked, %d .") % gpus_in_extra
+        if 'gpus' in instance_extra:
+            gpus_in_extra = int(instance_extra['gpus'].split()[1])
+	    print "*****************"
+	    print gpus_in_extra
+            print "*****************"
+            msg = _("gpus in instance_extra asked, %d .") % gpus_in_extra
             LOG.info(msg)
 
         if gpus_in_meta > gpus_in_extra:
@@ -2602,6 +2659,9 @@ class HostState(object):
         if FLAGS.connection_type == 'gpu':
             global gpus_available
             global vcpus_used
+            global num_gpus 
+            global gpu_arch 
+            global gpu_info 
         LOG.debug(_("Updating host stats"))
         if self.connection is None:
             self.connection = get_connection(self.read_only)
@@ -2610,13 +2670,18 @@ class HostState(object):
         data["vcpus_used"] = self.connection.get_vcpu_used()
         data["cpu_info"] = utils.loads(self.connection.get_cpu_info())
         data["disk_total"] = self.connection.get_local_gb_total()
-        data["gpus"] = FLAGS.xpus
-        data["gpu_arch"] = FLAGS.xpu_arch
         if FLAGS.connection_type == 'gpu':
-            data["gpus_used"] = len(gpus_available)
-        data["gpu_info"] = FLAGS.xpu_info
+            print "*****************"
+            print num_gpus
+            print gpus_available
+            print "*****************"
+            data["gpus"] = num_gpus 
+            data["gpu_arch"] = gpu_arch
+            data["gpus_used"] = int(num_gpus) - int(len(gpus_available))
+            data["gpu_info"] = gpu_info
         data["disk_used"] = self.connection.get_local_gb_used()
         data["disk_available"] = data["disk_total"] - data["disk_used"]
+        print data["disk_available"]
         data["host_memory_total"] = self.connection.get_memory_mb_total()
         data["host_memory_free"] = (data["host_memory_total"] -
                                     self.connection.get_memory_mb_used())

@@ -70,7 +70,7 @@ def get_connection(read_only=False):
     t = FLAGS.connection_type
     if t == 'fake':
         conn = fake.get_connection(read_only)
-    elif t == 'libvirt':
+    elif t == 'libvirt' or t == 'gpu':
         conn = libvirt_conn.get_connection(read_only)
     elif t == 'xenapi':
         conn = xenapi_conn.get_connection(read_only)

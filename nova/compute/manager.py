@@ -136,9 +136,13 @@ compute_opts = [
     cfg.ListOpt('instance_type_extra_specs',
                default=[],
                help='a list of additional capabilities corresponding to '
-               'instacne_type_extra_specs for this compute '
+               'instance_type_extra_specs for this compute '
                'host to advertise. Valid entries are name=value, pairs '
                'For example, "key1:val1, key2:val2"'),
+#    cfg.IntOpt("xpus",
+#               default=0,
+#               help="Number of xpus"),
+
     ]
 
 FLAGS = flags.FLAGS
