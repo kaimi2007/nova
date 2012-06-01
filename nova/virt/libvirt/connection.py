@@ -163,7 +163,7 @@ libvirt_opts = [
     cfg.BoolOpt('libvirt_nonblocking',
                 default=False,
                 help='Use a separated OS thread pool to realize non-blocking'
-                     ' libvirt calls')
+                     ' libvirt calls'),
     cfg.StrOpt('dev_cgroups_path',
                default=None,
                help='Override the default disk prefix for the devices '
