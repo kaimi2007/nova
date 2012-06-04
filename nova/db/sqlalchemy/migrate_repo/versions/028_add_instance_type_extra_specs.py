@@ -120,8 +120,7 @@ def upgrade(migrate_engine):
                                       hypervisor_type='s== QEMU')
                 elif (name == 'tp64.8x8'):
                     extra_specs = dict(
-                                      cpu_arch='s== tilepro64',
-                                      hypervisor_type='s== tilera_hv')
+                                      cpu_arch='s== tilepro64')
 
                 db.api.instance_type_extra_specs_update_or_create(
                                           context.get_admin_context(),
