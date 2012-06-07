@@ -34,8 +34,9 @@ class ComputeFilter(filters.BaseHostFilter):
         # NOTE(lorinh): For now, we are just checking exact matching on the
         # values. Later on, we want to handle numerical
         # values so we can represent things like number of GPU cards
+        cap_extra_specs = capabilities.get('instance_type_extra_specs', None)
         for key, req in instance_type['extra_specs'].iteritems():
-            cap = capabilities.get(key, None)
+            cap = cap_extra_specs.get(key, None)
             if cap == None:
                 return False
             if type(req) == BooleanType or type(req) == IntType or \

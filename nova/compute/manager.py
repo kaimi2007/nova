@@ -2400,6 +2400,8 @@ class ComputeManager(manager.SchedulerDependentManager):
             # to be sent to the Schedulers.
             capabilities = _get_additional_capabilities()
             capabilities.update(self.extra_specs)  
+            enclosed_extra = {'instance_type_extra_specs':self.extra_specs}
+            capabilities.update(enclosed_extra)
             capabilities.update(self.driver.get_host_stats(refresh=True))
             self.update_service_capabilities(capabilities)
 
