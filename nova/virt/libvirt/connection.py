@@ -2675,10 +2675,9 @@ class HostState(object):
             print num_gpus
             print gpus_available
             print "*****************"
-            data["gpus"] = num_gpus 
-            data["gpu_arch"] = gpu_arch
-            data["gpus_used"] = int(num_gpus) - int(len(gpus_available))
-            data["gpu_info"] = gpu_info
+            if 'gpus' in self.extra_specs:
+                self.extra_spec["gpus"] = int(len(gpus_available)) 
+            data.update({"instance_type_extra_specs": self.extra_specs})
         data["disk_used"] = self.connection.get_local_gb_used()
         data["disk_available"] = data["disk_total"] - data["disk_used"]
         print data["disk_available"]
