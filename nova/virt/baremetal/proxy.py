@@ -804,7 +804,8 @@ class HostState(object):
         data["vcpus_used"] = self.connection.get_vcpu_used()
         data["cpu_info"] = self.connection.get_cpu_info()
         #data["cpu_arch"] = FLAGS.cpu_arch
-        data["cpu_arch"] = self.extra_specs['cpu_arch']
+        #data["cpu_arch"] = self.extra_specs['cpu_arch']
+        data.update({"instance_type_extra_specs": self.extra_specs})
         #data["xpus"] = FLAGS.xpus
         #data["xpu_arch"] = FLAGS.xpu_arch
         #data["xpu_info"] = FLAGS.xpu_info
