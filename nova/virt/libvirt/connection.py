@@ -703,7 +703,9 @@ class LibvirtConnection(driver.ComputeDriver):
                                         mount_device)
 
         if FLAGS.libvirt_type == 'lxc':
-            self._attach_lxc_volume(xml, virt_dom, instance_name)
+            #self._attach_lxc_volume(xml, virt_dom, instance_name)
+            self.attach_volume_lxc(connection_info, instance_name, \
+                                   mountpoint, virt_dom)
         else:
             try:
                 virt_dom.attachDevice(xml)
@@ -764,6 +766,128 @@ class LibvirtConnection(driver.ComputeDriver):
 
         if lxc_container_target:
             disk.bind(lxc_host_volume, lxc_container_target, instance_name)
+
+    def attach_volume_lxc(self, connection_info, instance_name, \
+                          mountpoint, virt_dom):
+        # get device path
+        data = connection_info['data']
+        device_path = data['device_path']
+        LOG.info(_('attach_volume: device_path(%s)') % str(device_path))
+
+        # get id of the virt_dom
+        spid = str(virt_dom.ID())
+        LOG.info(_('attach_volume: pid(%s)') % spid)
+
+        # get PID of the init process
+        ps_command = subprocess.Popen("ps -o pid --ppid %s --noheaders" % \
+                           spid, shell=True, stdout=subprocess.PIPE)
+        init_pid = ps_command.stdout.read()
+        init_pid = str(int(init_pid))
+        retcode = ps_command.wait()
+        assert retcode == 0, "ps command returned %d" % retcode
+
+        LOG.info(_('attach_volume: init_pid(%s)') % init_pid)
+        # get major, minor number of the device
+        s = os.stat(device_path)
+        major_num = os.major(s.st_rdev)
+        minor_num = os.minor(s.st_rdev)
+        LOG.info(_('attach_volume: path(%s)') % device_path)
+        LOG.info(_('attach_volume: major_num(%(major_num)d) ' \
+                   'minor_num(%(minor_num)d)') % locals())
+
+        # allow the device
+        dev_whitelist = os.path.join(FLAGS.dev_cgroups_path,
+                                     instance_name,
+                                     'devices.allow')
+        # Allow the disk
+        perm = "b %d:%d rwm" % (major_num, minor_num)
+        cmd = "echo %s | sudo tee -a %s" % (perm, dev_whitelist)
+        LOG.info(_('attach_volume: cmd(%s)') % cmd)
+        subprocess.Popen(cmd, shell=True)
+
+        cmd_lxc = 'sudo lxc-attach -n %s -- ' % init_pid
+        # check if 'mountpoint' already exists
+
+        LOG.info(_('attach_volume: mountpoint(%s)') % mountpoint)
+        dev_key = init_pid + mountpoint
+        LOG.info(_('attach_volume: dev_key(%s)') % dev_key)
+        if dev_key in lxc_mounts:
+            LOG.info(_('attach_volume: dev_key(%s) is already used') \
+                        % dev_key)
+            raise Exception(_('the same mount point(%s) is already used.')\
+                        % mountpoint)
+
+        # create device(s) for mount
+        # sudo lxc-attach -n pid -- mknod -m 777
+        #                 <mountpoint> b <major #> <minor #>
+        cmd = '/bin/mknod -m 777 %s b %d %d '\
+             % (mountpoint, major_num, minor_num)
+        cmd = cmd_lxc + cmd
+        LOG.info(_('attach_volume: cmd (%s)') % cmd)
+        subprocess.call(cmd, shell=True)
+
+        # create a directory for mount
+        cmd = '/bin/mkdir -p /vmnt '
+        cmd = cmd_lxc + cmd
+        LOG.info(_('attach_volume: cmd (%s)') % cmd)
+        subprocess.call(cmd, shell=True)
+
+        # create a sub-directory for mount
+        found = 0
+        for n in range(0, 100):
+            dir_name = '/vmnt/vol' + str(n)
+            cmd = cmd_lxc + '/bin/ls ' + dir_name
+            LOG.info(_('attach_volume: cmd (%s)') % cmd)
+            p = subprocess.Popen(cmd, shell=True,  \
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            x = p.communicate()
+            LOG.info(_('attach_volume: return x[0](%s)') % x[0])
+            LOG.info(_('attach_volume: return x[1](%s)') % x[1])
+            #if len(x[1]) > 5: # new  "No such file exists..."
+            s = x[1].lower()
+            if (len(s) > 0 and s.find('no such') >= 0):
+            # new  "No such file exists..."
+                cmd = cmd_lxc + ' /bin/mkdir ' + dir_name
+                LOG.info(_('attach_volume: cmd (%s)') % cmd)
+                subprocess.call(cmd, shell=True)
+                found = 1
+                break
+        if found == 0:
+            cmd = '/bin/rm %s ' % (mountpoint)
+            cmd = cmd_lxc + cmd
+            LOG.info(_('attach_volume: cmd (%s)') % cmd)
+            subprocess.call(cmd, shell=True)
+            raise Exception(_('cannot find mounting directories'))
+
+        lxc_mounts[dev_key] = dir_name
+        cmd = cmd_lxc + '/bin/chmod 777 ' + mountpoint
+        LOG.info(_('attach_volume: cmd (%s)') % cmd)
+        subprocess.call(cmd, shell=True)
+
+        # mount
+        cmd = cmd_lxc + ' /bin/mount ' + mountpoint + ' ' + dir_name
+        LOG.info(_('attach_volume: cmd (%s)') % cmd)
+        p = subprocess.Popen(cmd, shell=True, \
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        x = p.communicate()
+
+        # change owner
+        user = FLAGS.user
+        user = user.rsplit("/")
+        user = user[len(user) - 1]
+        cmd = '/bin/chown %s /vmnt' % user
+        cmd = cmd_lxc + cmd
+        LOG.info(_('attach_volume: cmd (%s)') % cmd)
+        subprocess.call(cmd, shell=True)
+
+        cmd = '/bin/chown %s %s ' % (user, dir_name)
+        cmd = cmd_lxc + cmd
+        LOG.info(_('attach_volume: cmd (%s)') % cmd)
+        subprocess.call(cmd, shell=True)
+
+        cmd = cmd_lxc + " /bin/chmod 'og+w' " + ' ' + dir_name
+        LOG.info(_('attach_volume: cmd (%s)') % cmd)
+        subprocess.call(cmd, shell=True)
 
     @exception.wrap_exception()
     def _detach_lxc_volume(self, xml, virt_dom, instance_name):
