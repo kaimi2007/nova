@@ -189,6 +189,8 @@ if FLAGS.connection_type == 'gpu':
     gpu_arch = None
     gpu_info = None
 
+extra_specs = {}
+
 def patch_tpool_proxy():
     """eventlet.tpool.Proxy doesn't work with old-style class in __str__()
     or __repr__() calls. See bug #962840 for details.
@@ -241,7 +243,6 @@ class LibvirtConnection(driver.ComputeDriver):
         self._wrapped_conn = None
         self.container = None
         self.read_only = read_only
-        self.extra_specs = {}
         if FLAGS.firewall_driver not in firewall.drivers:
             FLAGS.set_default('firewall_driver', firewall.drivers[0])
         fw_class = utils.import_class(FLAGS.firewall_driver)
@@ -297,18 +298,18 @@ class LibvirtConnection(driver.ComputeDriver):
             context = nova.context.get_admin_context() 
 #            gpus_available = range(FLAGS.xpus)
             self._get_instance_type_extra_specs_capabilities(context) 
-            if 'gpus' in self.extra_specs:
-                num_gpus = self.extra_specs['gpus']
-                gpus_available = range(int(self.extra_specs['gpus']))
+            if 'gpus' in extra_specs:
+                num_gpus = extra_specs['gpus']
+                gpus_available = range(int(extra_specs['gpus']))
                 print "**************************"
                 print num_gpus
                 print gpus_available
                 print int(num_gpus) - len(gpus_available)
                 print "**************************"
-            if 'gpu_arch' in self.extra_specs:
-                gpu_arch = self.extra_specs['gpu_arch']
-            if 'gpu_info' in self.extra_specs:
-                gpu_info = self.extra_specs['gpu_info']
+            if 'gpu_arch' in extra_specs:
+                gpu_arch = extra_specs['gpu_arch']
+            if 'gpu_info' in extra_specs:
+                gpu_info = extra_specs['gpu_info']
         pass
 
 
@@ -318,7 +319,7 @@ class LibvirtConnection(driver.ComputeDriver):
             keyval = pair.split(':', 1)
             keyval[0] = keyval[0].strip()
             keyval[1] = keyval[1].strip()
-            self.extra_specs[keyval[0]] = keyval[1]
+            extra_specs[keyval[0]] = keyval[1]
     
 #        instances = db.instance_get_all_by_host(context, self.host)
 #        for instance in instances:
@@ -2799,9 +2800,11 @@ class HostState(object):
             print num_gpus
             print gpus_available
             print "*****************"
-            if 'gpus' in self.extra_specs:
-                self.extra_spec["gpus"] = int(len(gpus_available)) 
-            data.update({"instance_type_extra_specs": self.extra_specs})
+            if 'gpus' in extra_specs:
+                extra_specs["gpus"] = int(len(gpus_available)) 
+                extra_specs["hypervisor_type"] = \
+                          self.connection.get_hypervisor_type()
+            data.update({"instance_type_extra_specs": extra_specs})
         data["disk_used"] = self.connection.get_local_gb_used()
         data["disk_available"] = data["disk_total"] - data["disk_used"]
         print data["disk_available"]
