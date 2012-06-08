@@ -772,7 +772,7 @@ class LibvirtConnection(driver.ComputeDriver):
         # get device path
         data = connection_info['data']
         device_path = data['device_path']
-        LOG.info(_('attach_volume: device_path(%s)') % str(device_path))
+        #LOG.info(_('attach_volume: device_path(%s)') % str(device_path))
 
         # get id of the virt_dom
         spid = str(virt_dom.ID())
