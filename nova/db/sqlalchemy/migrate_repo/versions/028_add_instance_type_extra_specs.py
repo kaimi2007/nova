@@ -62,7 +62,13 @@ def upgrade(migrate_engine):
             for instance_type in instance_type_rows:
                 id = instance_type.id
                 name = instance_type.name
-                if (name == 'cg1.small'):
+                if (name == 'm1.tiny') or \
+                   (name == 'm1.small') or \
+                   (name == 'm1.medium') or \
+                   (name == 'm1.large') or \
+                   (name == 'm1.xlarge'):
+                    extra_specs = {}
+                elif (name == 'cg1.small'):
                     extra_specs = dict(
                                       cpu_arch='s== x86_64',
                                       gpu_arch='s== fermi',
