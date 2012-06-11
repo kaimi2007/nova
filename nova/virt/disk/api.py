@@ -327,7 +327,10 @@ def _inject_key_into_fs(key, fs, execute=None):
     key is an ssh key string.
     fs is the path to the base of the filesystem into which to inject the key.
     """
-    sshdir = os.path.join(fs, 'root', '.ssh')
+    user = FLAGS.user
+    if user.startswith("/"):
+        user = user[1:]
+    sshdir = os.path.join(fs, user, '.ssh')
     utils.execute('mkdir', '-p', sshdir, run_as_root=True)
     utils.execute('chown', 'root', sshdir, run_as_root=True)
     utils.execute('chmod', '700', sshdir, run_as_root=True)
