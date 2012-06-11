@@ -31,74 +31,49 @@ class ComputeFilter(filters.BaseHostFilter):
         if 'extra_specs' not in instance_type:
             return True
 
-        # NOTE(lorinh): For now, we are just checking exact matching on the
-        # values. Later on, we want to handle numerical
-        # values so we can represent things like number of GPU cards
-        cap_extra_specs = capabilities.get('instance_type_extra_specs', None)
+        # Now, it can do various operations:
+        #   =, s==, s!=, s>=, s>, s<=, s<, <in>, <or>, ==, !=, >=, <=
+        op_methods = {'=': lambda x, y: (float(x) >= float(y)),
+                      '<in>': lambda x, y: (x.find(y) != -1),
+                      '==': lambda x, y: (float(x) == float(y)),
+                      '!=': lambda x, y: (float(x) != float(y)),
+                      's==': lambda x, y: operator.eq,
+                      's!=': lambda x, y: operator.ne,
+                      's<': lambda x, y: operator.lt,
+                      's<=': lambda x, y: operator.le,
+                      's>': lambda x, y: operator.gt,
+                      's>=': lambda x, y: operator.ge}
+
         for key, req in instance_type['extra_specs'].iteritems():
-            cap = cap_extra_specs.get(key, None)
+            cap = capabilities.get(key, None)
             if cap == None:
                 return False
-            if type(req) == BooleanType or type(req) == IntType or \
-                type(req) == LongType or type(req) == FloatType:
+            if (type(req) == BooleanType or type(req) == IntType or
+                type(req) == LongType or type(req) == FloatType):
                     if cap != req:
                         return False
             else:
                 words = req.split()
-                if len(words) == 1:
+                if len(words) == 1: 
                     if cap != req:
                         return False
                 else:
-                    op = words[0]
-                    new_req = words[1]
-                    for i in range (2,len(words)):
+                    op = words[0] 
+                    method = op_methods.get(op) 
+                    new_req = words[1] 
+                    for i in range(2, len(words)):
                         new_req += words[i]
 
-                    if op == '=':
-                        if float(new_req) > float(cap):
-                            return False
-                    elif op == '<in>': # TBD: multiple ins
-                        if cap.find(new_req) == -1:
-                            return False
-                    elif op == '==':
-                        if float(new_req) != float(cap):
-                            return False
-                    elif op == '!=':
-                        if float(new_req) == float(cap):
-                            return False
-                    elif op == 's==':
-                        if new_req != cap:
-                            return False
-                    elif op == 's!=':
-                        if new_req == cap:
-                            return False
-                    elif op == 's<':
-                        if new_req <= cap:
-                            return False
-                    elif op == 's<=':
-                        if new_req < cap:
-                            return False
-
-                    elif op == 's>':
-                        if new_req >= cap:
-                            return False
-                    elif op == 's>=':
-                        if new_req > cap:
-                            return False
-                    elif op.find('<=') == 0:
-                        if float(new_req) < float(cap):
-                            return False
-                    elif op.find('>=') == 0:
-                        if float(new_req) > float(cap):
-                            return False
-                    elif op == '<or>': # Ex: <or> v1 <or> v2 <or> v3
+                    if op == '<or>':  # Ex: <or> v1 <or> v2 <or> v3
                         found = 0
-                        for idx in range (1, len(words), 2):
+                        for idx in range(1, len(words), 2):
                             if words[idx] == cap:
                                 found = 1
                                 break
                         if found == 0:
                             return False
+                    elif method:
+                        return method(new_req, cap)
                     else:
                         if float(cap) != float(req):
                             return False
