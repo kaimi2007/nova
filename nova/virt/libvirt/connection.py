@@ -82,6 +82,10 @@ Template = None
 
 LOG = logging.getLogger(__name__)
 
+#ISI
+lxc_mounts = {}
+#!ISI
+
 libvirt_opts = [
     cfg.StrOpt('rescue_image_id',
                default=None,
@@ -310,6 +314,10 @@ class LibvirtConnection(driver.ComputeDriver):
                 gpu_arch = extra_specs['gpu_arch']
             if 'gpu_info' in extra_specs:
                 gpu_info = extra_specs['gpu_info']
+
+        if FLAGS.libvirt_type == 'lxc':
+            FLAGS.use_cow_images = False
+
         pass
 
 
@@ -2797,8 +2805,8 @@ class HostState(object):
         data["disk_total"] = self.connection.get_local_gb_total()
         if FLAGS.connection_type == 'gpu':
             print "*****************"
-            print num_gpus
-            print gpus_available
+            print  num_gpus
+            print  gpus_available
             print "*****************"
             if 'gpus' in extra_specs:
                 extra_specs["gpus"] = int(len(gpus_available)) 
