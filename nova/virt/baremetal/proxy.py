@@ -92,12 +92,6 @@ class ProxyConnection(driver.ComputeDriver):
         self.baremetal_nodes = nodes.get_baremetal_nodes()
         self._wrapped_conn = None
         self._host_state = None
-        self.extra_specs = {}
-        for pair in FLAGS.instance_type_extra_specs:
-            keyval = pair.split(':', 1)
-            keyval[0] = keyval[0].strip()
-            keyval[1] = keyval[1].strip()
-            self.extra_specs[keyval[0]] = keyval[1]
 
     @property
     def HostState(self):
@@ -721,19 +715,10 @@ class ProxyConnection(driver.ComputeDriver):
                'hypervisor_type': self.get_hypervisor_type(),
                'hypervisor_version': self.get_hypervisor_version(),
                'cpu_info': self.get_cpu_info(),
-               #'cpu_arch': FLAGS.cpu_arch,
-               'cpu_arch': self.extra_specs['cpu_arch'],
-               #'xpu_arch': FLAGS.xpu_arch,
-               #'xpus': FLAGS.xpus,
-               #'xpu_info': FLAGS.xpu_info,
-               #'net_arch': FLAGS.net_arch,
-               #'net_info': FLAGS.net_info,
-               #'net_mbps': FLAGS.net_mbps,
                'service_id': service_ref['id']}
 
         compute_node_ref = service_ref['compute_node']
         #LOG.info(_('#### RLK: cpu_arch = %s ') % FLAGS.cpu_arch)
-        LOG.info(_('#### RLK: cpu_arch = %s ') % self.extra_specs['cpu_arch'])
         if not compute_node_ref:
             LOG.info(_('Compute_service record created for %s ') % host)
             dic['service_id'] = service_ref['id']
@@ -805,6 +790,9 @@ class HostState(object):
         data["cpu_info"] = self.connection.get_cpu_info()
         #data["cpu_arch"] = FLAGS.cpu_arch
         #data["cpu_arch"] = self.extra_specs['cpu_arch']
+        self.extra_specs["hypervisor_type"] = \
+                          self.connection.get_hypervisor_type()
+        self.extra_specs["baremetal_driver"] = FLAGS.baremetal_driver
         data.update({"instance_type_extra_specs": self.extra_specs})
         #data["xpus"] = FLAGS.xpus
         #data["xpu_arch"] = FLAGS.xpu_arch

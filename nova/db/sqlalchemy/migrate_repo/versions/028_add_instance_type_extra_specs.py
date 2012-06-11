@@ -106,7 +106,11 @@ def upgrade(migrate_engine):
                                       system_type='s== UV')
                 elif (name == 'tp64.8x8'):
                     extra_specs = dict(
-                                      cpu_arch='s== tilepro64')
+                                      #cpu_arch='s== tilepro64')
+                                      cpu_arch='s== tilepro64',
+                                      vcores='= 64',
+                                      hypervisor_type='s== tilera_hv',
+                                      baremetal_driver='s== tilera')
 
                 db.api.instance_type_extra_specs_update_or_create(
                                           context.get_admin_context(),
