@@ -175,7 +175,9 @@ libvirt_opts = [
                help='Override the default disk prefix for the devices '
                'attached to a server, which is dependent on '
                'libvirt_type. (valid options are: sd, xvd, uvd, vd)'),
-
+    cfg.StrOpt('user',
+               default='/root',
+               help='Override the default home directory of the user '),
     ]
 
 FLAGS = flags.FLAGS
