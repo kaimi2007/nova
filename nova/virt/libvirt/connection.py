@@ -175,6 +175,7 @@ libvirt_opts = [
                help='Override the default disk prefix for the devices '
                'attached to a server, which is dependent on '
                'libvirt_type. (valid options are: sd, xvd, uvd, vd)'),
+
     cfg.StrOpt('user',
                default='/root',
                help='Override the default home directory of the user '),
@@ -745,6 +746,43 @@ class LibvirtConnection(driver.ComputeDriver):
                     if child.get('dev') == device:
                         return ElementTree.tostring(node)
 
+    def detach_volume_lxc(self, connection_info, instance_name, \
+                          mountpoint, virt_dom):
+        # get id of the virt_dom
+        spid = str(virt_dom.ID())
+        LOG.info(_('detach_volume: pid(%s)') % spid)
+
+        # get PID of the init process
+        ps_command = subprocess.Popen("ps -o pid --ppid %s --noheaders" \
+                              % spid, shell=True, stdout=subprocess.PIPE)
+        init_pid = ps_command.stdout.read()
+        init_pid = str(int(init_pid))
+        retcode = ps_command.wait()
+        assert retcode == 0, "ps command returned %d" % retcode
+
+        dev_key = init_pid + mountpoint
+        if dev_key not in lxc_mounts:
+            raise Exception(_('no such process(%(init_pid)s) or ' \
+                  'mount point(%(mountpoint)s)') % locals())
+        dir_name = lxc_mounts[dev_key]
+
+        LOG.info(_('detach_volume: init_pid(%s)') % init_pid)
+        cmd_lxc = 'sudo lxc-attach -n %s -- ' % str(init_pid)
+        cmd = cmd_lxc + ' /bin/umount ' + dir_name
+        LOG.info(_('detach_volume: cmd(%s)') % cmd)
+        p = subprocess.Popen(cmd, shell=True, \
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        x = p.communicate()
+        cmd = cmd_lxc + ' /bin/rmdir  ' + dir_name
+        LOG.info(_('detach_volume: cmd(%s)') % cmd)
+        subprocess.call(cmd, shell=True)
+
+        del lxc_mounts[dev_key]  # delete dictionary entry
+
+        cmd = cmd_lxc + ' /bin/rm ' + mountpoint
+        LOG.info(_('detach_volume: cmd(%s)') % cmd)
+        subprocess.call(cmd, shell=True)
+
     @exception.wrap_exception()
     def detach_volume(self, connection_info, instance_name, mountpoint):
         mount_device = mountpoint.rpartition("/")[2]
@@ -753,12 +791,14 @@ class LibvirtConnection(driver.ComputeDriver):
             #             migration, so we should still logout even if
             #             the instance doesn't exist here anymore.
             virt_dom = self._lookup_by_name(instance_name)
-            xml = self._get_disk_xml(virt_dom.XMLDesc(0), mount_device)
-            if not xml:
-                raise exception.DiskNotFound(location=mount_device)
             if FLAGS.libvirt_type == 'lxc':
-                self._detach_lxc_volume(xml, virt_dom, instance_name)
+                self.detach_volume_lxc(connection_info, \
+                                       instance_name, mountpoint, \
+                                       virt_dom)
             else:
+                xml = self._get_disk_xml(virt_dom.XMLDesc(0), mount_device)
+                if not xml:
+                    raise exception.DiskNotFound(location=mount_device)
                 virt_dom.detachDevice(xml)
         finally:
             self.volume_driver_method('disconnect_volume',
