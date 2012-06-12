@@ -44,8 +44,9 @@ class ComputeFilter(filters.BaseHostFilter):
                       's>': lambda x, y: operator.gt,
                       's>=': lambda x, y: operator.ge}
 
+        cap_extra_specs = capabilities.get('instance_type_extra_specs', None)
         for key, req in instance_type['extra_specs'].iteritems():
-            cap = capabilities.get(key, None)
+            cap = cap_extra_specs.get(key, None)
             if cap == None:
                 return False
             if (type(req) == BooleanType or type(req) == IntType or
@@ -73,7 +74,7 @@ class ComputeFilter(filters.BaseHostFilter):
                         if found == 0:
                             return False
                     elif method:
-                        return method(new_req, cap)
+                        return method(cap, new_req)
                     else:
                         if float(cap) != float(req):
                             return False
