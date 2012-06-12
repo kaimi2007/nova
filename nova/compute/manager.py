@@ -133,6 +133,12 @@ compute_opts = [
                'this functionality will be replaced when HostAggregates '
                'become more funtional for general grouping in Folsom. (see: '
                'http://etherpad.openstack.org/FolsomNovaHostAggregates-v2)'),
+    cfg.ListOpt('instance_type_extra_specs',
+               default=[],
+               help='a list of additional capabilities corresponding to '
+               'instance_type_extra_specs for this compute '
+               'host to advertise. Valid entries are name=value, pairs '
+               'For example, "key1:val1, key2:val2"'),
 #    cfg.IntOpt("xpus",
 #               default=0,
 #               help="Number of xpus"),
