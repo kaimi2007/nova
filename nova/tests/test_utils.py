@@ -19,15 +19,14 @@ import datetime
 import hashlib
 import os
 import os.path
-import socket
 import shutil
+import socket
 import StringIO
 import tempfile
 
 import eventlet
 from eventlet import greenpool
 import iso8601
-import lockfile
 import mox
 
 import nova
@@ -424,6 +423,51 @@ class GenericUtilsTestCase(test.TestCase):
                 self.assertEqual(fake_execute.uid, 2)
             self.assertEqual(fake_execute.uid, os.getuid())
 
+    def test_service_is_up(self):
+        fts_func = datetime.datetime.fromtimestamp
+        fake_now = 1000
+        down_time = 5
+
+        self.flags(service_down_time=down_time)
+        self.mox.StubOutWithMock(utils, 'utcnow')
+
+        # Up (equal)
+        utils.utcnow().AndReturn(fts_func(fake_now))
+        service = {'updated_at': fts_func(fake_now - down_time),
+                   'created_at': fts_func(fake_now - down_time)}
+        self.mox.ReplayAll()
+        result = utils.service_is_up(service)
+        self.assertTrue(result)
+
+        self.mox.ResetAll()
+        # Up
+        utils.utcnow().AndReturn(fts_func(fake_now))
+        service = {'updated_at': fts_func(fake_now - down_time + 1),
+                   'created_at': fts_func(fake_now - down_time + 1)}
+        self.mox.ReplayAll()
+        result = utils.service_is_up(service)
+        self.assertTrue(result)
+
+        self.mox.ResetAll()
+        # Down
+        utils.utcnow().AndReturn(fts_func(fake_now))
+        service = {'updated_at': fts_func(fake_now - down_time - 1),
+                   'created_at': fts_func(fake_now - down_time - 1)}
+        self.mox.ReplayAll()
+        result = utils.service_is_up(service)
+        self.assertFalse(result)
+
+    def test_xhtml_escape(self):
+        self.assertEqual('&quot;foo&quot;', utils.xhtml_escape('"foo"'))
+        self.assertEqual('&apos;foo&apos;', utils.xhtml_escape("'foo'"))
+
+    def test_hash_file(self):
+        data = 'Mary had a little lamb, its fleece as white as snow'
+        flo = StringIO.StringIO(data)
+        h1 = utils.hash_file(flo)
+        h2 = hashlib.sha1(data).hexdigest()
+        self.assertEquals(h1, h2)
+
 
 class IsUUIDLikeTestCase(test.TestCase):
     def assertUUIDLike(self, val, expected):
@@ -448,93 +492,6 @@ class IsUUIDLikeTestCase(test.TestCase):
 
     def test_gen_valid_uuid(self):
         self.assertUUIDLike(str(utils.gen_uuid()), True)
-
-
-class ToPrimitiveTestCase(test.TestCase):
-    def test_list(self):
-        self.assertEquals(utils.to_primitive([1, 2, 3]), [1, 2, 3])
-
-    def test_empty_list(self):
-        self.assertEquals(utils.to_primitive([]), [])
-
-    def test_tuple(self):
-        self.assertEquals(utils.to_primitive((1, 2, 3)), [1, 2, 3])
-
-    def test_dict(self):
-        self.assertEquals(utils.to_primitive(dict(a=1, b=2, c=3)),
-                          dict(a=1, b=2, c=3))
-
-    def test_empty_dict(self):
-        self.assertEquals(utils.to_primitive({}), {})
-
-    def test_datetime(self):
-        x = datetime.datetime(1, 2, 3, 4, 5, 6, 7)
-        self.assertEquals(utils.to_primitive(x), "0001-02-03 04:05:06.000007")
-
-    def test_iter(self):
-        class IterClass(object):
-            def __init__(self):
-                self.data = [1, 2, 3, 4, 5]
-                self.index = 0
-
-            def __iter__(self):
-                return self
-
-            def next(self):
-                if self.index == len(self.data):
-                    raise StopIteration
-                self.index = self.index + 1
-                return self.data[self.index - 1]
-
-        x = IterClass()
-        self.assertEquals(utils.to_primitive(x), [1, 2, 3, 4, 5])
-
-    def test_iteritems(self):
-        class IterItemsClass(object):
-            def __init__(self):
-                self.data = dict(a=1, b=2, c=3).items()
-                self.index = 0
-
-            def __iter__(self):
-                return self
-
-            def next(self):
-                if self.index == len(self.data):
-                    raise StopIteration
-                self.index = self.index + 1
-                return self.data[self.index - 1]
-
-        x = IterItemsClass()
-        ordered = utils.to_primitive(x)
-        ordered.sort()
-        self.assertEquals(ordered, [['a', 1], ['b', 2], ['c', 3]])
-
-    def test_instance(self):
-        class MysteryClass(object):
-            a = 10
-
-            def __init__(self):
-                self.b = 1
-
-        x = MysteryClass()
-        self.assertEquals(utils.to_primitive(x, convert_instances=True),
-                          dict(b=1))
-
-        self.assertEquals(utils.to_primitive(x), x)
-
-    def test_typeerror(self):
-        x = bytearray  # Class, not instance
-        self.assertEquals(utils.to_primitive(x), u"<type 'bytearray'>")
-
-    def test_nasties(self):
-        def foo():
-            pass
-        x = [datetime, foo, dir]
-        ret = utils.to_primitive(x)
-        self.assertEquals(len(ret), 3)
-        self.assertTrue(ret[0].startswith(u"<module 'datetime' from "))
-        self.assertTrue(ret[1].startswith('<function foo at 0x'))
-        self.assertEquals(ret[2], '<built-in function dir>')
 
 
 class MonkeyPatchTestCase(test.TestCase):
@@ -580,161 +537,6 @@ class MonkeyPatchTestCase(test.TestCase):
             in nova.tests.monkey_patch_example.CALLED_FUNCTION)
         self.assertFalse(package_b + 'ExampleClassB.example_method_add'
             in nova.tests.monkey_patch_example.CALLED_FUNCTION)
-
-
-class DeprecationTest(test.TestCase):
-    def setUp(self):
-        super(DeprecationTest, self).setUp()
-
-        def fake_warn_deprecated_class(cls, msg):
-            self.warn = ('class', cls, msg)
-
-        def fake_warn_deprecated_function(func, msg):
-            self.warn = ('function', func, msg)
-
-        self.stubs.Set(utils, 'warn_deprecated_class',
-                       fake_warn_deprecated_class)
-        self.stubs.Set(utils, 'warn_deprecated_function',
-                       fake_warn_deprecated_function)
-        self.warn = None
-
-    def test_deprecated_function_no_message(self):
-        def test_function():
-            pass
-
-        decorated = utils.deprecated()(test_function)
-
-        decorated()
-        self.assertEqual(self.warn, ('function', test_function, ''))
-
-    def test_deprecated_function_with_message(self):
-        def test_function():
-            pass
-
-        decorated = utils.deprecated('string')(test_function)
-
-        decorated()
-        self.assertEqual(self.warn, ('function', test_function, 'string'))
-
-    def test_deprecated_class_no_message(self):
-        @utils.deprecated()
-        class TestClass(object):
-            pass
-
-        TestClass()
-        self.assertEqual(self.warn, ('class', TestClass, ''))
-
-    def test_deprecated_class_with_message(self):
-        @utils.deprecated('string')
-        class TestClass(object):
-            pass
-
-        TestClass()
-        self.assertEqual(self.warn, ('class', TestClass, 'string'))
-
-    def test_deprecated_classmethod_no_message(self):
-        @utils.deprecated()
-        class TestClass(object):
-            @classmethod
-            def class_method(cls):
-                pass
-
-        TestClass.class_method()
-        self.assertEqual(self.warn, ('class', TestClass, ''))
-
-    def test_deprecated_classmethod_with_message(self):
-        @utils.deprecated('string')
-        class TestClass(object):
-            @classmethod
-            def class_method(cls):
-                pass
-
-        TestClass.class_method()
-        self.assertEqual(self.warn, ('class', TestClass, 'string'))
-
-    def test_deprecated_staticmethod_no_message(self):
-        @utils.deprecated()
-        class TestClass(object):
-            @staticmethod
-            def static_method():
-                pass
-
-        TestClass.static_method()
-        self.assertEqual(self.warn, ('class', TestClass, ''))
-
-    def test_deprecated_staticmethod_with_message(self):
-        @utils.deprecated('string')
-        class TestClass(object):
-            @staticmethod
-            def static_method():
-                pass
-
-        TestClass.static_method()
-        self.assertEqual(self.warn, ('class', TestClass, 'string'))
-
-    def test_deprecated_instancemethod(self):
-        @utils.deprecated()
-        class TestClass(object):
-            def instance_method(self):
-                pass
-
-        # Instantiate the class...
-        obj = TestClass()
-        self.assertEqual(self.warn, ('class', TestClass, ''))
-
-        # Reset warn...
-        self.warn = None
-
-        # Call the instance method...
-        obj.instance_method()
-
-        # Make sure that did *not* generate a warning
-        self.assertEqual(self.warn, None)
-
-    def test_service_is_up(self):
-        fts_func = datetime.datetime.fromtimestamp
-        fake_now = 1000
-        down_time = 5
-
-        self.flags(service_down_time=down_time)
-        self.mox.StubOutWithMock(utils, 'utcnow')
-
-        # Up (equal)
-        utils.utcnow().AndReturn(fts_func(fake_now))
-        service = {'updated_at': fts_func(fake_now - down_time),
-                   'created_at': fts_func(fake_now - down_time)}
-        self.mox.ReplayAll()
-        result = utils.service_is_up(service)
-        self.assertTrue(result)
-
-        self.mox.ResetAll()
-        # Up
-        utils.utcnow().AndReturn(fts_func(fake_now))
-        service = {'updated_at': fts_func(fake_now - down_time + 1),
-                   'created_at': fts_func(fake_now - down_time + 1)}
-        self.mox.ReplayAll()
-        result = utils.service_is_up(service)
-        self.assertTrue(result)
-
-        self.mox.ResetAll()
-        # Down
-        utils.utcnow().AndReturn(fts_func(fake_now))
-        service = {'updated_at': fts_func(fake_now - down_time - 1),
-                   'created_at': fts_func(fake_now - down_time - 1)}
-        self.mox.ReplayAll()
-        result = utils.service_is_up(service)
-        self.assertFalse(result)
-
-    def test_xhtml_escape(self):
-        self.assertEqual('&quot;foo&quot;', utils.xhtml_escape('"foo"'))
-        self.assertEqual('&apos;foo&apos;', utils.xhtml_escape("'foo'"))
-
-    def test_hash_file(self):
-        data = 'Mary had a little lamb, its fleece as white as snow'
-        flo = StringIO.StringIO(data)
-        h1 = utils.hash_file(flo)
-        h2 = hashlib.sha1(data).hexdigest()
-        self.assertEquals(h1, h2)
 
 
 class Iso8601TimeTest(test.TestCase):

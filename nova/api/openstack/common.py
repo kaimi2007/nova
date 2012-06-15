@@ -25,16 +25,18 @@ from xml.dom import minidom
 
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
-from nova.compute import vm_states
 from nova.compute import task_states
+from nova.compute import utils as compute_utils
+from nova.compute import vm_states
+from nova import exception
 from nova import flags
 from nova import log as logging
-from nova.network import model as network_model
 from nova import quota
 
 
 LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
+QUOTAS = quota.QUOTAS
 
 
 XML_NS_V11 = 'http://docs.openstack.org/compute/api/v1.1'
@@ -272,9 +274,9 @@ def get_version_from_href(href):
 def check_img_metadata_properties_quota(context, metadata):
     if metadata is None:
         return
-    num_metadata = len(metadata)
-    quota_metadata = quota.allowed_metadata_items(context, num_metadata)
-    if quota_metadata < num_metadata:
+    try:
+        QUOTAS.limit_check(context, metadata_items=len(metadata))
+    except exception.OverQuota:
         expl = _("Image metadata limit exceeded")
         raise webob.exc.HTTPRequestEntityTooLarge(explanation=expl,
                                                 headers={'Retry-After': 0})
@@ -319,12 +321,6 @@ def get_networks_for_instance_from_nw_info(nw_info):
     return networks
 
 
-def get_nw_info_for_instance(context, instance):
-    info_cache = instance['info_cache'] or {}
-    cached_nwinfo = info_cache.get('network_info') or []
-    return network_model.NetworkInfo.hydrate(cached_nwinfo)
-
-
 def get_networks_for_instance(context, instance):
     """Returns a prepared nw_info list for passing into the view builders
 
@@ -336,7 +332,7 @@ def get_networks_for_instance(context, instance):
                                      {'addr': '172.16.2.1', 'version': 4}]},
          ...}
     """
-    nw_info = get_nw_info_for_instance(context, instance)
+    nw_info = compute_utils.get_nw_info_for_instance(instance)
     return get_networks_for_instance_from_nw_info(nw_info)
 
 
@@ -442,19 +438,19 @@ def check_snapshots_enabled(f):
 class ViewBuilder(object):
     """Model API responses as dictionaries."""
 
-    _collection_name = None
-
-    def _get_links(self, request, identifier):
+    def _get_links(self, request, identifier, collection_name):
         return [{
             "rel": "self",
-            "href": self._get_href_link(request, identifier),
+            "href": self._get_href_link(request, identifier, collection_name),
         },
         {
             "rel": "bookmark",
-            "href": self._get_bookmark_link(request, identifier),
+            "href": self._get_bookmark_link(request,
+                                            identifier,
+                                            collection_name),
         }]
 
-    def _get_next_link(self, request, identifier):
+    def _get_next_link(self, request, identifier, collection_name):
         """Return href string with proper limit and marker params."""
         params = request.params.copy()
         params["marker"] = identifier
@@ -462,29 +458,33 @@ class ViewBuilder(object):
                                           FLAGS.osapi_compute_link_prefix)
         url = os.path.join(prefix,
                            request.environ["nova.context"].project_id,
-                           self._collection_name)
+                           collection_name)
         return "%s?%s" % (url, dict_to_query_str(params))
 
-    def _get_href_link(self, request, identifier):
+    def _get_href_link(self, request, identifier, collection_name):
         """Return an href string pointing to this object."""
         prefix = self._update_link_prefix(request.application_url,
                                           FLAGS.osapi_compute_link_prefix)
         return os.path.join(prefix,
                             request.environ["nova.context"].project_id,
-                            self._collection_name,
+                            collection_name,
                             str(identifier))
 
-    def _get_bookmark_link(self, request, identifier):
+    def _get_bookmark_link(self, request, identifier, collection_name):
         """Create a URL that refers to a specific resource."""
         base_url = remove_version_from_href(request.application_url)
         base_url = self._update_link_prefix(base_url,
                                             FLAGS.osapi_compute_link_prefix)
         return os.path.join(base_url,
                             request.environ["nova.context"].project_id,
-                            self._collection_name,
+                            collection_name,
                             str(identifier))
 
-    def _get_collection_links(self, request, items, id_key="uuid"):
+    def _get_collection_links(self,
+                              request,
+                              items,
+                              collection_name,
+                              id_key="uuid"):
         """Retrieve 'next' link, if applicable."""
         links = []
         limit = int(request.params.get("limit", 0))
@@ -492,11 +492,15 @@ class ViewBuilder(object):
             last_item = items[-1]
             if id_key in last_item:
                 last_item_id = last_item[id_key]
-            else:
+            elif 'id' in last_item:
                 last_item_id = last_item["id"]
+            else:
+                last_item_id = last_item["flavorid"]
             links.append({
                 "rel": "next",
-                "href": self._get_next_link(request, last_item_id),
+                "href": self._get_next_link(request,
+                                            last_item_id,
+                                            collection_name),
             })
         return links
 

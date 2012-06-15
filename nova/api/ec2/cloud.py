@@ -25,7 +25,6 @@ datastore.
 import base64
 import re
 import time
-import urllib
 
 from nova.api.ec2 import ec2utils
 from nova.api.ec2 import inst_state
@@ -34,14 +33,13 @@ from nova import block_device
 from nova import compute
 from nova.compute import instance_types
 from nova.compute import vm_states
-from nova import crypto
 from nova import db
 from nova import exception
 from nova import flags
 from nova.image import s3
 from nova import log as logging
 from nova import network
-from nova.openstack.common import importutils
+from nova.openstack.common import excutils
 from nova import quota
 from nova import utils
 from nova import volume
@@ -51,6 +49,8 @@ FLAGS = flags.FLAGS
 
 LOG = logging.getLogger(__name__)
 
+QUOTAS = quota.QUOTAS
+
 
 def validate_ec2_id(val):
     if not validator.validate_str()(val):
@@ -59,33 +59,6 @@ def validate_ec2_id(val):
         ec2utils.ec2_id_to_id(val)
     except exception.InvalidEc2Id:
         raise exception.InvalidInstanceIDMalformed(val)
-
-
-def _gen_key(context, user_id, key_name):
-    """Generate a key
-
-    This is a module level method because it is slow and we need to defer
-    it into a process pool."""
-    # NOTE(vish): generating key pair is slow so check for legal
-    #             creation before creating key_pair
-    try:
-        db.key_pair_get(context, user_id, key_name)
-        raise exception.KeyPairExists(key_name=key_name)
-    except exception.NotFound:
-        pass
-
-    if quota.allowed_key_pairs(context, 1) < 1:
-        msg = _("Quota exceeded, too many key pairs.")
-        raise exception.EC2APIError(msg)
-
-    private_key, public_key, fingerprint = crypto.generate_key_pair()
-    key = {}
-    key['user_id'] = user_id
-    key['name'] = key_name
-    key['public_key'] = public_key
-    key['fingerprint'] = fingerprint
-    db.key_pair_create(context, key)
-    return {'private_key': private_key, 'fingerprint': fingerprint}
 
 
 # EC2 API can return the following values as documented in the EC2 API
@@ -215,9 +188,11 @@ class CloudController(object):
         self.image_service = s3.S3ImageService()
         self.network_api = network.API()
         self.volume_api = volume.API()
+        self.security_group_api = CloudSecurityGroupAPI()
         self.compute_api = compute.API(network_api=self.network_api,
-                                       volume_api=self.volume_api)
-        self.sgh = importutils.import_object(FLAGS.security_group_handler)
+                                   volume_api=self.volume_api,
+                                   security_group_api=self.security_group_api)
+        self.keypair_api = compute.api.KeypairAPI()
 
     def __str__(self):
         return 'CloudController'
@@ -357,9 +332,14 @@ class CloudController(object):
         return True
 
     def describe_key_pairs(self, context, key_name=None, **kwargs):
-        key_pairs = db.key_pair_get_all_by_user(context, context.user_id)
+        key_pairs = self.keypair_api.get_key_pairs(context, context.user_id)
         if not key_name is None:
             key_pairs = [x for x in key_pairs if x['name'] in key_name]
+
+        #If looking for non existent key pair
+        if key_name != None and key_pairs == []:
+            msg = _('Could not find key pair(s): %s') % ','.join(key_name)
+            raise exception.EC2APIError(msg)
 
         result = []
         for key_pair in key_pairs:
@@ -374,52 +354,55 @@ class CloudController(object):
         return {'keySet': result}
 
     def create_key_pair(self, context, key_name, **kwargs):
-        if not re.match('^[a-zA-Z0-9_\- ]+$', str(key_name)):
-            err = _("Value (%s) for KeyName is invalid."
-                    " Content limited to Alphanumeric character, "
-                    "spaces, dashes, and underscore.") % key_name
-            raise exception.EC2APIError(err)
-
-        if len(str(key_name)) > 255:
-            err = _("Value (%s) for Keyname is invalid."
-                    " Length exceeds maximum of 255.") % key_name
-            raise exception.EC2APIError(err)
-
         LOG.audit(_("Create key pair %s"), key_name, context=context)
-        data = _gen_key(context, context.user_id, key_name)
+
+        try:
+            keypair = self.keypair_api.create_key_pair(context,
+                                                       context.user_id,
+                                                       key_name)
+        except exception.KeypairLimitExceeded:
+            msg = _("Quota exceeded, too many key pairs.")
+            raise exception.EC2APIError(msg)
+        except exception.InvalidKeypair:
+            msg = _("Keypair data is invalid")
+            raise exception.EC2APIError(msg)
+        except exception.KeyPairExists:
+            msg = _("Key pair '%s' already exists.") % key_name
+            raise exception.KeyPairExists(msg)
         return {'keyName': key_name,
-                'keyFingerprint': data['fingerprint'],
-                'keyMaterial': data['private_key']}
+                'keyFingerprint': keypair['fingerprint'],
+                'keyMaterial': keypair['private_key']}
         # TODO(vish): when context is no longer an object, pass it here
 
     def import_key_pair(self, context, key_name, public_key_material,
                         **kwargs):
         LOG.audit(_("Import key %s"), key_name, context=context)
-        try:
-            db.key_pair_get(context, context.user_id, key_name)
-            raise exception.KeyPairExists(key_name=key_name)
-        except exception.NotFound:
-            pass
-
-        if quota.allowed_key_pairs(context, 1) < 1:
-            msg = _("Quota exceeded, too many key pairs.")
-            raise exception.EC2APIError(msg)
 
         public_key = base64.b64decode(public_key_material)
-        fingerprint = crypto.generate_fingerprint(public_key)
-        key = {}
-        key['user_id'] = context.user_id
-        key['name'] = key_name
-        key['public_key'] = public_key
-        key['fingerprint'] = fingerprint
-        db.key_pair_create(context, key)
+
+        try:
+            keypair = self.keypair_api.import_key_pair(context,
+                                                       context.user_id,
+                                                       key_name,
+                                                       public_key)
+        except exception.KeypairLimitExceeded:
+            msg = _("Quota exceeded, too many key pairs.")
+            raise exception.EC2APIError(msg)
+        except exception.InvalidKeypair:
+            msg = _("Keypair data is invalid")
+            raise exception.EC2APIError(msg)
+        except exception.KeyPairExists:
+            msg = _("Key pair '%s' already exists.") % key_name
+            raise exception.EC2APIError(msg)
+
         return {'keyName': key_name,
-                'keyFingerprint': fingerprint}
+                'keyFingerprint': keypair['fingerprint']}
 
     def delete_key_pair(self, context, key_name, **kwargs):
         LOG.audit(_("Delete key pair %s"), key_name, context=context)
         try:
-            db.key_pair_destroy(context, context.user_id, key_name)
+            self.keypair_api.delete_key_pair(context, context.user_id,
+                                             key_name)
         except exception.NotFound:
             # aws returns true even if the key doesn't exist
             pass
@@ -427,25 +410,12 @@ class CloudController(object):
 
     def describe_security_groups(self, context, group_name=None, group_id=None,
                                  **kwargs):
-        self.compute_api.ensure_default_security_group(context)
-        if group_name or group_id:
-            groups = []
-            if group_name:
-                for name in group_name:
-                    group = db.security_group_get_by_name(context,
-                                                          context.project_id,
-                                                          name)
-                    groups.append(group)
-            if group_id:
-                for gid in group_id:
-                    group = db.security_group_get(context, gid)
-                    groups.append(group)
-        elif context.is_admin:
-            groups = db.security_group_get_all(context)
-        else:
-            groups = db.security_group_get_by_project(context,
-                                                      context.project_id)
-        groups = [self._format_security_group(context, g) for g in groups]
+        raw_groups = self.security_group_api.list(context,
+                                                  group_name,
+                                                  group_id,
+                                                  context.project_id)
+
+        groups = [self._format_security_group(context, g) for g in raw_groups]
 
         return {'securityGroupInfo':
                 list(sorted(groups,
@@ -552,146 +522,51 @@ class CloudController(object):
             notfound = exception.SecurityGroupNotFound
             if not source_security_group:
                 raise notfound(security_group_id=source_security_group_name)
-            values['group_id'] = source_security_group['id']
-        elif cidr_ip:
-            # If this fails, it throws an exception. This is what we want.
-            cidr_ip = urllib.unquote(cidr_ip).decode()
-
-            if not utils.is_valid_cidr(cidr_ip):
-                # Raise exception for non-valid address
-                raise exception.EC2APIError(_("Invalid CIDR"))
-
-            values['cidr'] = cidr_ip
+            group_id = source_security_group['id']
+            return self.security_group_api.new_group_ingress_rule(
+                                    group_id, ip_protocol, from_port, to_port)
         else:
-            values['cidr'] = '0.0.0.0/0'
+            cidr = self.security_group_api.parse_cidr(cidr_ip)
+            return self.security_group_api.new_cidr_ingress_rule(
+                                        cidr, ip_protocol, from_port, to_port)
 
-        if source_security_group_name:
-            # Open everything if an explicit port range or type/code are not
-            # specified, but only if a source group was specified.
-            ip_proto_upper = ip_protocol.upper() if ip_protocol else ''
-            if (ip_proto_upper == 'ICMP' and
-                from_port is None and to_port is None):
-                from_port = -1
-                to_port = -1
-            elif (ip_proto_upper in ['TCP', 'UDP'] and from_port is None
-                  and to_port is None):
-                from_port = 1
-                to_port = 65535
-
-        if ip_protocol and from_port is not None and to_port is not None:
-
-            ip_protocol = str(ip_protocol)
-            try:
-                # Verify integer conversions
-                from_port = int(from_port)
-                to_port = int(to_port)
-            except ValueError:
-                if ip_protocol.upper() == 'ICMP':
-                    raise exception.InvalidInput(reason="Type and"
-                         " Code must be integers for ICMP protocol type")
-                else:
-                    raise exception.InvalidInput(reason="To and From ports "
-                          "must be integers")
-
-            if ip_protocol.upper() not in ['TCP', 'UDP', 'ICMP']:
-                raise exception.InvalidIpProtocol(protocol=ip_protocol)
-
-            # Verify that from_port must always be less than
-            # or equal to to_port
-            if (ip_protocol.upper() in ['TCP', 'UDP'] and
-                (from_port > to_port)):
-                raise exception.InvalidPortRange(from_port=from_port,
-                      to_port=to_port, msg="Former value cannot"
-                                            " be greater than the later")
-
-            # Verify valid TCP, UDP port ranges
-            if (ip_protocol.upper() in ['TCP', 'UDP'] and
-                (from_port < 1 or to_port > 65535)):
-                raise exception.InvalidPortRange(from_port=from_port,
-                      to_port=to_port, msg="Valid TCP ports should"
-                                           " be between 1-65535")
-
-            # Verify ICMP type and code
-            if (ip_protocol.upper() == "ICMP" and
-                (from_port < -1 or from_port > 255 or
-                to_port < -1 or to_port > 255)):
-                raise exception.InvalidPortRange(from_port=from_port,
-                      to_port=to_port, msg="For ICMP, the"
-                                           " type:code must be valid")
-
-            values['protocol'] = ip_protocol
-            values['from_port'] = from_port
-            values['to_port'] = to_port
-        else:
-            # If cidr based filtering, protocol and ports are mandatory
-            if 'cidr' in values:
-                return None
-
-        return values
-
-    def _security_group_rule_exists(self, security_group, values):
-        """Indicates whether the specified rule values are already
-           defined in the given security group.
-        """
-        for rule in security_group.rules:
-            is_duplicate = True
-            keys = ('group_id', 'cidr', 'from_port', 'to_port', 'protocol')
-            for key in keys:
-                if rule.get(key) != values.get(key):
-                    is_duplicate = False
-                    break
-            if is_duplicate:
-                return rule['id']
-        return False
-
-    def revoke_security_group_ingress(self, context, group_name=None,
-                                      group_id=None, **kwargs):
+    def _validate_group_identifier(self, group_name, group_id):
         if not group_name and not group_id:
             err = _("Not enough parameters, need group_name or group_id")
             raise exception.EC2APIError(err)
-        self.compute_api.ensure_default_security_group(context)
-        notfound = exception.SecurityGroupNotFound
-        if group_name:
-            security_group = db.security_group_get_by_name(context,
-                                                           context.project_id,
-                                                           group_name)
-            if not security_group:
-                raise notfound(security_group_id=group_name)
-        if group_id:
-            security_group = db.security_group_get(context, group_id)
-            if not security_group:
-                raise notfound(security_group_id=group_id)
 
-        msg = _("Revoke security group ingress %s")
-        LOG.audit(msg, security_group['name'], context=context)
-        prevalues = []
-        try:
-            prevalues = kwargs['ip_permissions']
-        except KeyError:
-            prevalues.append(kwargs)
-        rule_id = None
+    def _validate_rulevalues(self, rulesvalues):
+        if not rulesvalues:
+            err = _("%s Not enough parameters to build a valid rule")
+            raise exception.EC2APIError(err % rulesvalues)
+
+    def revoke_security_group_ingress(self, context, group_name=None,
+                                      group_id=None, **kwargs):
+        self._validate_group_identifier(group_name, group_id)
+
+        security_group = self.security_group_api.get(context, group_name,
+                                                     group_id)
+
+        prevalues = kwargs.get('ip_permissions', [kwargs])
+
         rule_ids = []
         for values in prevalues:
             rulesvalues = self._rule_args_to_dict(context, values)
-            if not rulesvalues:
-                err = _("%s Not enough parameters to build a valid rule")
-                raise exception.EC2APIError(err % rulesvalues)
-
+            self._validate_rulevalues(rulesvalues)
             for values_for_rule in rulesvalues:
                 values_for_rule['parent_group_id'] = security_group.id
-                rule_id = self._security_group_rule_exists(security_group,
-                                                           values_for_rule)
-                if rule_id:
-                    db.security_group_rule_destroy(context, rule_id)
-                    rule_ids.append(rule_id)
-        if rule_id:
-            # NOTE(vish): we removed a rule, so refresh
-            self.compute_api.trigger_security_group_rules_refresh(
-                    context,
-                    security_group_id=security_group['id'])
-            self.sgh.trigger_security_group_rule_destroy_refresh(
-                    context, rule_ids)
+
+                rule_ids.append(self.security_group_api.rule_exists(
+                                             security_group, values_for_rule))
+
+        rule_ids = [id for id in rule_ids if id]
+
+        if rule_ids:
+            self.security_group_api.remove_rules(context, security_group,
+                                                 rule_ids)
+
             return True
+
         raise exception.EC2APIError(_("No rule for the specified parameters."))
 
     # TODO(soren): This has only been tested with Boto as the client.
@@ -700,63 +575,27 @@ class CloudController(object):
     #              is sketchy.
     def authorize_security_group_ingress(self, context, group_name=None,
                                          group_id=None, **kwargs):
-        if not group_name and not group_id:
-            err = _("Not enough parameters, need group_name or group_id")
-            raise exception.EC2APIError(err)
-        self.compute_api.ensure_default_security_group(context)
-        notfound = exception.SecurityGroupNotFound
-        if group_name:
-            security_group = db.security_group_get_by_name(context,
-                                                           context.project_id,
-                                                           group_name)
-            if not security_group:
-                raise notfound(security_group_id=group_name)
-        if group_id:
-            security_group = db.security_group_get(context, group_id)
-            if not security_group:
-                raise notfound(security_group_id=group_id)
+        self._validate_group_identifier(group_name, group_id)
 
-        msg = _("Authorize security group ingress %s")
-        LOG.audit(msg, security_group['name'], context=context)
-        prevalues = []
-        try:
-            prevalues = kwargs['ip_permissions']
-        except KeyError:
-            prevalues.append(kwargs)
+        security_group = self.security_group_api.get(context, group_name,
+                                                     group_id)
+
+        prevalues = kwargs.get('ip_permissions', [kwargs])
         postvalues = []
         for values in prevalues:
             rulesvalues = self._rule_args_to_dict(context, values)
-            if not rulesvalues:
-                err = _("%s Not enough parameters to build a valid rule")
-                raise exception.EC2APIError(err % rulesvalues)
+            self._validate_rulevalues(rulesvalues)
             for values_for_rule in rulesvalues:
                 values_for_rule['parent_group_id'] = security_group.id
-                if self._security_group_rule_exists(security_group,
-                                                    values_for_rule):
+                if self.security_group_api.rule_exists(security_group,
+                                                       values_for_rule):
                     err = _('%s - This rule already exists in group')
                     raise exception.EC2APIError(err % values_for_rule)
                 postvalues.append(values_for_rule)
 
-        allowed = quota.allowed_security_group_rules(context,
-                                                   security_group['id'],
-                                                   1)
-        if allowed < 1:
-            msg = _("Quota exceeded, too many security group rules.")
-            raise exception.EC2APIError(msg)
-
-        rule_ids = []
-        for values_for_rule in postvalues:
-            security_group_rule = db.security_group_rule_create(
-                    context,
-                    values_for_rule)
-            rule_ids.append(security_group_rule['id'])
-
         if postvalues:
-            self.compute_api.trigger_security_group_rules_refresh(
-                    context,
-                    security_group_id=security_group['id'])
-            self.sgh.trigger_security_group_rule_create_refresh(
-                    context, rule_ids)
+            self.security_group_api.add_rules(context, security_group['id'],
+                                           security_group['name'], postvalues)
             return True
 
         raise exception.EC2APIError(_("No rule for the specified parameters."))
@@ -779,39 +618,25 @@ class CloudController(object):
         return source_project_id
 
     def create_security_group(self, context, group_name, group_description):
-        if not re.match('^[a-zA-Z0-9_\- ]+$', str(group_name)):
-            # Some validation to ensure that values match API spec.
-            # - Alphanumeric characters, spaces, dashes, and underscores.
-            # TODO(Daviey): LP: #813685 extend beyond group_name checking, and
-            #  probably create a param validator that can be used elsewhere.
-            err = _("Value (%s) for parameter GroupName is invalid."
-                    " Content limited to Alphanumeric characters, "
-                    "spaces, dashes, and underscores.") % group_name
-            # err not that of master ec2 implementation, as they fail to raise.
-            raise exception.InvalidParameterValue(err=err)
+        if isinstance(group_name, unicode):
+            group_name = group_name.encode('utf-8')
+        if FLAGS.ec2_strict_validation:
+            # EC2 specification gives constraints for name and description:
+            # Accepts alphanumeric characters, spaces, dashes, and underscores
+            allowed = '^[a-zA-Z0-9_\- ]+$'
+            self.security_group_api.validate_property(group_name, 'name',
+                                                      allowed)
+            self.security_group_api.validate_property(group_description,
+                                                      'description', allowed)
+        else:
+            # Amazon accepts more symbols.
+            # So, allow POSIX [:print:] characters.
+            allowed = r'^[\x20-\x7E]+$'
+            self.security_group_api.validate_property(group_name, 'name',
+                                                      allowed)
 
-        if len(str(group_name)) > 255:
-            err = _("Value (%s) for parameter GroupName is invalid."
-                    " Length exceeds maximum of 255.") % group_name
-            raise exception.InvalidParameterValue(err=err)
-
-        LOG.audit(_("Create Security Group %s"), group_name, context=context)
-        self.compute_api.ensure_default_security_group(context)
-        if db.security_group_exists(context, context.project_id, group_name):
-            msg = _('group %s already exists')
-            raise exception.EC2APIError(msg % group_name)
-
-        if quota.allowed_security_groups(context, 1) < 1:
-            msg = _("Quota exceeded, too many security groups.")
-            raise exception.EC2APIError(msg)
-
-        group = {'user_id': context.user_id,
-                 'project_id': context.project_id,
-                 'name': group_name,
-                 'description': group_description}
-        group_ref = db.security_group_create(context, group)
-
-        self.sgh.trigger_security_group_create_refresh(context, group)
+        group_ref = self.security_group_api.create(context, group_name,
+                                                   group_description)
 
         return {'securityGroupSet': [self._format_security_group(context,
                                                                  group_ref)]}
@@ -821,24 +646,12 @@ class CloudController(object):
         if not group_name and not group_id:
             err = _("Not enough parameters, need group_name or group_id")
             raise exception.EC2APIError(err)
-        notfound = exception.SecurityGroupNotFound
-        if group_name:
-            security_group = db.security_group_get_by_name(context,
-                                                           context.project_id,
-                                                           group_name)
-            if not security_group:
-                raise notfound(security_group_id=group_name)
-        elif group_id:
-            security_group = db.security_group_get(context, group_id)
-            if not security_group:
-                raise notfound(security_group_id=group_id)
-        if db.security_group_in_use(context, security_group.id):
-            raise exception.InvalidGroup(reason="In Use")
-        LOG.audit(_("Delete security group %s"), group_name, context=context)
-        db.security_group_destroy(context, security_group.id)
 
-        self.sgh.trigger_security_group_destroy_refresh(context,
-                                                        security_group.id)
+        security_group = self.security_group_api.get(context, group_name,
+                                                     group_id)
+
+        self.security_group_api.destroy(context, security_group)
+
         return True
 
     def get_console_output(self, context, instance_id, **kwargs):
@@ -874,11 +687,16 @@ class CloudController(object):
     def _format_volume(self, context, volume):
         instance_ec2_id = None
         instance_data = None
-        if volume.get('instance', None):
-            instance_id = volume['instance']['id']
+
+        if volume.get('instance_uuid', None):
+            instance_uuid = volume['instance_uuid']
+            instance = db.instance_get_by_uuid(context.elevated(),
+                    instance_uuid)
+
+            instance_id = instance['id']
             instance_ec2_id = ec2utils.id_to_ec2_id(instance_id)
             instance_data = '%s[%s]' % (instance_ec2_id,
-                                        volume['instance']['host'])
+                                        instance['host'])
         v = {}
         v['volumeId'] = ec2utils.id_to_ec2_vol_id(volume['id'])
         v['status'] = volume['status']
@@ -1699,3 +1517,32 @@ class CloudController(object):
             self.compute_api.start(context, instance_id=instance_id)
 
         return {'imageId': image_id}
+
+
+class CloudSecurityGroupAPI(compute.api.SecurityGroupAPI):
+    @staticmethod
+    def raise_invalid_property(msg):
+        raise exception.InvalidParameterValue(err=msg)
+
+    @staticmethod
+    def raise_group_already_exists(msg):
+        raise exception.EC2APIError(message=msg)
+
+    @staticmethod
+    def raise_invalid_group(msg):
+        raise exception.InvalidGroup(reason=msg)
+
+    @staticmethod
+    def raise_invalid_cidr(cidr, decoding_exception=None):
+        if decoding_exception:
+            raise decoding_exception
+        else:
+            raise exception.EC2APIError(_("Invalid CIDR"))
+
+    @staticmethod
+    def raise_over_quota(msg):
+        raise exception.EC2APIError(message=msg)
+
+    @staticmethod
+    def raise_not_found(msg):
+        pass

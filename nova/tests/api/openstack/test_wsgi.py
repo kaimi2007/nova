@@ -1,15 +1,12 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
 import inspect
-import json
 import webob
 
+from nova.api.openstack import wsgi
 from nova import exception
 from nova import test
-from nova import utils
-from nova.api.openstack import wsgi
 from nova.tests.api.openstack import fakes
-import nova.context
 
 
 class RequestTest(test.TestCase):

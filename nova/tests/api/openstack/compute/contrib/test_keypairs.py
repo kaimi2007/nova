@@ -13,17 +13,20 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import json
-
-import webob
 from lxml import etree
+import webob
 
-from nova.api.openstack import wsgi
 from nova.api.openstack.compute.contrib import keypairs
+from nova.api.openstack import wsgi
 from nova import db
 from nova import exception
+from nova.openstack.common import jsonutils
+from nova import quota
 from nova import test
 from nova.tests.api.openstack import fakes
+
+
+QUOTAS = quota.QUOTAS
 
 
 def fake_keypair(name):
@@ -66,7 +69,7 @@ class KeypairsTest(test.TestCase):
         req = webob.Request.blank('/v2/fake/os-keypairs')
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 200)
-        res_dict = json.loads(res.body)
+        res_dict = jsonutils.loads(res.body)
         response = {'keypairs': [{'keypair': fake_keypair('FAKE')}]}
         self.assertEqual(res_dict, response)
 
@@ -74,11 +77,11 @@ class KeypairsTest(test.TestCase):
         body = {'keypair': {'name': 'create_test'}}
         req = webob.Request.blank('/v2/fake/os-keypairs')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers['Content-Type'] = 'application/json'
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 200)
-        res_dict = json.loads(res.body)
+        res_dict = jsonutils.loads(res.body)
         self.assertTrue(len(res_dict['keypair']['fingerprint']) > 0)
         self.assertTrue(len(res_dict['keypair']['private_key']) > 0)
 
@@ -86,7 +89,7 @@ class KeypairsTest(test.TestCase):
         body = {'keypair': {'name': ''}}
         req = webob.Request.blank('/v2/fake/os-keypairs')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers['Content-Type'] = 'application/json'
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 400)
@@ -99,7 +102,7 @@ class KeypairsTest(test.TestCase):
         }
         req = webob.Request.blank('/v2/fake/os-keypairs')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers['Content-Type'] = 'application/json'
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 400)
@@ -112,25 +115,24 @@ class KeypairsTest(test.TestCase):
         }
         req = webob.Request.blank('/v2/fake/os-keypairs')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers['Content-Type'] = 'application/json'
         res = req.get_response(fakes.wsgi_app())
-        res_dict = json.loads(res.body)
+        res_dict = jsonutils.loads(res.body)
         self.assertEqual(res.status_int, 400)
 
     def test_keypair_create_quota_limit(self):
 
-        def db_key_pair_count_by_user_max(self, user_id):
+        def fake_quotas_count(self, context, resource, *args, **kwargs):
             return 100
 
-        self.stubs.Set(db, "key_pair_count_by_user",
-                       db_key_pair_count_by_user_max)
+        self.stubs.Set(QUOTAS, "count", fake_quotas_count)
 
         req = webob.Request.blank('/v2/fake/os-keypairs')
         req.method = 'POST'
         req.headers['Content-Type'] = 'application/json'
         body = {'keypair': {'name': 'foo'}}
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 413)
 
@@ -152,22 +154,21 @@ class KeypairsTest(test.TestCase):
 
         req = webob.Request.blank('/v2/fake/os-keypairs')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers['Content-Type'] = 'application/json'
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 200)
         # FIXME(ja): sholud we check that public_key was sent to create?
-        res_dict = json.loads(res.body)
+        res_dict = jsonutils.loads(res.body)
         self.assertTrue(len(res_dict['keypair']['fingerprint']) > 0)
         self.assertFalse('private_key' in res_dict['keypair'])
 
     def test_keypair_import_quota_limit(self):
 
-        def db_key_pair_count_by_user_max(self, user_id):
+        def fake_quotas_count(self, context, resource, *args, **kwargs):
             return 100
 
-        self.stubs.Set(db, "key_pair_count_by_user",
-                       db_key_pair_count_by_user_max)
+        self.stubs.Set(QUOTAS, "count", fake_quotas_count)
 
         body = {
             'keypair': {
@@ -186,7 +187,27 @@ class KeypairsTest(test.TestCase):
 
         req = webob.Request.blank('/v2/fake/os-keypairs')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
+        req.headers['Content-Type'] = 'application/json'
+        res = req.get_response(fakes.wsgi_app())
+        self.assertEqual(res.status_int, 413)
+
+    def test_keypair_create_quota_limit(self):
+
+        def fake_quotas_count(self, context, resource, *args, **kwargs):
+            return 100
+
+        self.stubs.Set(QUOTAS, "count", fake_quotas_count)
+
+        body = {
+            'keypair': {
+                'name': 'create_test',
+            },
+        }
+
+        req = webob.Request.blank('/v2/fake/os-keypairs')
+        req.method = 'POST'
+        req.body = jsonutils.dumps(body)
         req.headers['Content-Type'] = 'application/json'
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 413)
@@ -196,7 +217,7 @@ class KeypairsTest(test.TestCase):
         body = {'keypair': {'name': 'create_duplicate'}}
         req = webob.Request.blank('/v2/fake/os-keypairs')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers['Content-Type'] = 'application/json'
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 409)
@@ -211,7 +232,7 @@ class KeypairsTest(test.TestCase):
 
         req = webob.Request.blank('/v2/fake/os-keypairs')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers['Content-Type'] = 'application/json'
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 400)

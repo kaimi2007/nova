@@ -20,14 +20,9 @@
 
 from eventlet import tpool
 
-from nova import context
-from nova import db
 from nova import flags
 from nova import log as logging
-from nova import utils
-
 import nova.virt.firewall as base_firewall
-from nova.virt import netutils
 
 
 LOG = logging.getLogger(__name__)
@@ -160,7 +155,7 @@ class NWFilterFirewall(base_firewall.FirewallDriver):
             # in the thread pool no matter what.
             tpool.execute(self._conn.nwfilterDefineXML, xml)
         else:
-            # NOTE(maoy): self._conn is a eventlet.tpool.Proxy object
+            # NOTE(maoy): self._conn is an eventlet.tpool.Proxy object
             self._conn.nwfilterDefineXML(xml)
 
     def unfilter_instance(self, instance, network_info):

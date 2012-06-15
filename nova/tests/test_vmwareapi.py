@@ -19,17 +19,17 @@
 Test suite for VMWareAPI.
 """
 
+from nova.compute import power_state
 from nova import context
 from nova import db
 from nova import exception
 from nova import flags
 from nova import test
-from nova.compute import power_state
 from nova.tests.glance import stubs as glance_stubs
 from nova.tests.vmwareapi import db_fakes
 from nova.tests.vmwareapi import stubs
-from nova.virt import vmwareapi_conn
 from nova.virt.vmwareapi import fake as vmwareapi_fake
+from nova.virt import vmwareapi_conn
 
 
 FLAGS = flags.FLAGS
@@ -51,7 +51,7 @@ class VMWareAPIVMTestCase(test.TestCase):
         db_fakes.stub_out_db_instance_api(self.stubs)
         stubs.set_stubs(self.stubs)
         glance_stubs.stubout_glance_client(self.stubs)
-        self.conn = vmwareapi_conn.get_connection(False)
+        self.conn = vmwareapi_conn.VMWareESXDriver(False)
         # NOTE(vish): none of the network plugging code is actually
         #             being tested
         self.network_info = [({'bridge': 'fa0',

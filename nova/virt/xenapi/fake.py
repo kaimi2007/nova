@@ -51,7 +51,6 @@ A fake XenAPI SDK.
 """
 
 
-import json
 import random
 import uuid
 from xml.sax import saxutils
@@ -60,6 +59,7 @@ import pprint
 
 from nova import exception
 from nova import log as logging
+from nova.openstack.common import jsonutils
 from nova import utils
 
 
@@ -151,7 +151,7 @@ def create_vdi(name_label, sr_ref, **kwargs):
         'sharable': False,
         'other_config': {},
         'location': '',
-        'xenstore_data': '',
+        'xenstore_data': {},
         'sm_config': {},
         'physical_utilisation': '123',
         'managed': True,
@@ -161,10 +161,10 @@ def create_vdi(name_label, sr_ref, **kwargs):
     return _create_object('VDI', vdi_rec)
 
 
-def create_vbd(vm_ref, vdi_ref):
+def create_vbd(vm_ref, vdi_ref, userdevice=0):
     vbd_rec = {'VM': vm_ref,
                'VDI': vdi_ref,
-               'userdevice': '0',
+               'userdevice': str(userdevice),
                'currently_attached': False}
     vbd_ref = _create_object('VBD', vbd_rec)
     after_VBD_create(vbd_ref, vbd_rec)
@@ -337,7 +337,7 @@ def as_json(*args, **kwargs):
     then these are rendered as a JSON list.  If it's given keyword
     arguments then these are rendered as a JSON dict."""
     arg = args or kwargs
-    return json.dumps(arg)
+    return jsonutils.dumps(arg)
 
 
 class Failure(Exception):
@@ -442,13 +442,14 @@ class SessionBase(object):
         return _db_content['PIF']
 
     def VM_get_xenstore_data(self, _1, vm_ref):
-        return _db_content['VM'][vm_ref].get('xenstore_data', '')
+        return _db_content['VM'][vm_ref].get('xenstore_data', {})
 
     def VM_remove_from_xenstore_data(self, _1, vm_ref, key):
         db_ref = _db_content['VM'][vm_ref]
         if not 'xenstore_data' in db_ref:
             return
-        db_ref['xenstore_data'][key] = None
+        if key in db_ref['xenstore_data']:
+            del db_ref['xenstore_data'][key]
 
     def VM_add_to_xenstore_data(self, _1, vm_ref, key, value):
         db_ref = _db_content['VM'][vm_ref]
@@ -460,7 +461,8 @@ class SessionBase(object):
         db_ref = _db_content['VDI'][vdi_ref]
         if not 'other_config' in db_ref:
             return
-        db_ref['other_config'][key] = None
+        if key in db_ref['other_config']:
+            del db_ref['other_config'][key]
 
     def VDI_add_to_other_config(self, _1, vdi_ref, key, value):
         db_ref = _db_content['VDI'][vdi_ref]
@@ -473,19 +475,14 @@ class SessionBase(object):
         name_label = db_ref['name_label']
         read_only = db_ref['read_only']
         sharable = db_ref['sharable']
-        vdi_ref = create_vdi(name_label, sr_ref, sharable=sharable,
-                             read_only=read_only)
-        return vdi_ref
+        other_config = db_ref['other_config'].copy()
+        return create_vdi(name_label, sr_ref, sharable=sharable,
+                          read_only=read_only, other_config=other_config)
 
     def VDI_clone(self, _1, vdi_to_clone_ref):
         db_ref = _db_content['VDI'][vdi_to_clone_ref]
-        name_label = db_ref['name_label']
-        read_only = db_ref['read_only']
         sr_ref = db_ref['SR']
-        sharable = db_ref['sharable']
-        vdi_ref = create_vdi(name_label, sr_ref, sharable=sharable,
-                             read_only=read_only)
-        return vdi_ref
+        return self.VDI_copy(_1, vdi_to_clone_ref, sr_ref)
 
     def host_compute_free_memory(self, _1, ref):
         #Always return 12GB available
@@ -513,17 +510,17 @@ class SessionBase(object):
         elif (plugin, method) == ('migration', 'transfer_vhd'):
             return ''
         elif (plugin, method) == ('xenhost', 'host_data'):
-            return json.dumps({'host_memory': {'total': 10,
-                                               'overhead': 20,
-                                               'free': 30,
-                                               'free-computed': 40}, })
+            return jsonutils.dumps({'host_memory': {'total': 10,
+                                                    'overhead': 20,
+                                                    'free': 30,
+                                                    'free-computed': 40}, })
         elif (plugin == 'xenhost' and method in ['host_reboot',
                                                  'host_startup',
                                                  'host_shutdown']):
-            return json.dumps({"power_action": method[5:]})
+            return jsonutils.dumps({"power_action": method[5:]})
         elif (plugin, method) == ('xenhost', 'set_host_enabled'):
             enabled = 'enabled' if _5.get('enabled') == 'true' else 'disabled'
-            return json.dumps({"status": enabled})
+            return jsonutils.dumps({"status": enabled})
         else:
             raise Exception('No simulation in host_call_plugin for %s,%s' %
                             (plugin, method))

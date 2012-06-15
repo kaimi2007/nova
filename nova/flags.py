@@ -30,22 +30,17 @@ import os
 import socket
 import sys
 
-from nova.compat import flagfile
 from nova.openstack.common import cfg
 
 
-class NovaConfigOpts(cfg.CommonConfigOpts):
-
-    def __init__(self, *args, **kwargs):
-        super(NovaConfigOpts, self).__init__(*args, **kwargs)
-        self.disable_interspersed_args()
-
-    def __call__(self, argv):
-        with flagfile.handle_flagfiles_managed(argv[1:]) as args:
-            return argv[:1] + super(NovaConfigOpts, self).__call__(args)
+FLAGS = cfg.CONF
 
 
-FLAGS = NovaConfigOpts()
+def parse_args(argv, default_config_files=None):
+    FLAGS.disable_interspersed_args()
+    return argv[:1] + FLAGS(argv[1:],
+                            project='nova',
+                            default_config_files=default_config_files)
 
 
 class UnrecognizedFlag(Exception):
@@ -99,10 +94,6 @@ core_opts = [
                default='sqlite:///$state_path/$sqlite_db',
                help='The SQLAlchemy connection string used to connect to the '
                     'database'),
-    cfg.IntOpt('sql_connection_debug',
-               default=0,
-               help='Verbosity of SQL debugging information. 0=None, '
-                    '100=Everything'),
     cfg.StrOpt('api_paste_config',
                default="api-paste.ini",
                help='File name for the paste.deploy config for nova-api'),
@@ -125,9 +116,13 @@ debug_opts = [
     cfg.BoolOpt('fake_network',
                 default=False,
                 help='If passed, use fake network devices and addresses'),
-    cfg.BoolOpt('fake_rabbit',
-                default=False,
-                help='If passed, use a fake RabbitMQ provider'),
+    cfg.IntOpt('sql_connection_debug',
+               default=0,
+               help='Verbosity of SQL debugging information. 0=None, '
+                    '100=Everything'),
+    cfg.BoolOpt('sql_connection_trace',
+               default=False,
+               help='Add python stack traces to SQL as comment strings'),
 ]
 
 FLAGS.register_cli_opts(log_opts)
@@ -189,41 +184,6 @@ global_opts = [
     cfg.StrOpt('network_topic',
                default='network',
                help='the topic network nodes listen on'),
-    cfg.StrOpt('rabbit_host',
-               default='localhost',
-               help='the RabbitMQ host'),
-    cfg.IntOpt('rabbit_port',
-               default=5672,
-               help='the RabbitMQ port'),
-    cfg.BoolOpt('rabbit_use_ssl',
-                default=False,
-                help='connect over SSL for RabbitMQ'),
-    cfg.StrOpt('rabbit_userid',
-               default='guest',
-               help='the RabbitMQ userid'),
-    cfg.StrOpt('rabbit_password',
-               default='guest',
-               help='the RabbitMQ password'),
-    cfg.StrOpt('rabbit_virtual_host',
-               default='/',
-               help='the RabbitMQ virtual host'),
-    cfg.IntOpt('rabbit_retry_interval',
-               default=1,
-               help='how frequently to retry connecting with RabbitMQ'),
-    cfg.IntOpt('rabbit_retry_backoff',
-               default=2,
-               help='how long to backoff for between retries when connecting '
-                    'to RabbitMQ'),
-    cfg.IntOpt('rabbit_max_retries',
-               default=0,
-               help='maximum retries with trying to connect to RabbitMQ '
-                    '(the default of 0 implies an infinite retry count)'),
-    cfg.StrOpt('control_exchange',
-               default='nova',
-               help='the main RabbitMQ exchange to connect to'),
-    cfg.BoolOpt('rabbit_durable_queues',
-                default=False,
-                help='use durable queues in RabbitMQ'),
     cfg.BoolOpt('api_rate_limit',
                 default=True,
                 help='whether to rate limit the api'),
@@ -368,7 +328,10 @@ global_opts = [
     cfg.StrOpt('host',
                default=socket.gethostname(),
                help='Name of this node.  This can be an opaque identifier.  '
-                    'It is not necessarily a hostname, FQDN, or IP address.'),
+                    'It is not necessarily a hostname, FQDN, or IP address. '
+                    'However, the node name must be valid within '
+                    'an AMQP key, and if using ZeroMQ, a valid '
+                    'hostname, FQDN, or IP address'),
     cfg.StrOpt('node_availability_zone',
                default='nova',
                help='availability zone of this node'),
@@ -394,7 +357,7 @@ global_opts = [
                      'host rebooted'),
     cfg.StrOpt('default_ephemeral_format',
                default=None,
-               help='The default format a ephemeral_volume will be '
+               help='The default format an ephemeral_volume will be '
                     'formatted with on creation.'),
     cfg.StrOpt('root_helper',
                default='sudo',
@@ -408,7 +371,7 @@ global_opts = [
     cfg.BoolOpt('enable_instance_password',
                 default=True,
                 help='Allows use of instance password during '
-                       'server creation'),
+                     'server creation'),
     cfg.IntOpt('password_length',
                default=12,
                help='Length of generated instance admin passwords'),
@@ -425,9 +388,9 @@ global_opts = [
                 default=False,
                 help='Allow destination machine to match source for resize. '
                      'Useful when testing in single-host environments.'),
-    cfg.StrOpt('stub_network',
-               default=False,
-               help='Stub network related code'),
+    cfg.BoolOpt('stub_network',
+                default=False,
+                help='Stub network related code'),
     cfg.IntOpt('reclaim_instance_interval',
                default=0,
                help='Interval in seconds for reclaiming deleted instances'),

@@ -19,15 +19,15 @@
 Tests For Scheduler
 """
 
-import json
-
 from nova.compute import api as compute_api
 from nova.compute import power_state
+from nova.compute import rpcapi as compute_rpcapi
 from nova.compute import vm_states
 from nova import context
 from nova import db
 from nova import exception
 from nova import flags
+from nova.openstack.common import jsonutils
 from nova import rpc
 from nova.rpc import common as rpc_common
 from nova.scheduler import driver
@@ -227,14 +227,15 @@ class SchedulerManagerTestCase(test.TestCase):
                          *self.fake_args, **self.fake_kwargs)
 
     def test_run_instance_exception_puts_instance_in_error_state(self):
-        """Test that an NoValidHost exception for run_instance puts
+        """Test that a NoValidHost exception for run_instance puts
         the instance in ERROR state and eats the exception.
         """
 
         fake_instance_uuid = 'fake-instance-id'
+        inst = {"vm_state": "", "task_state": ""}
 
         self._mox_schedule_method_helper('schedule_run_instance')
-        self.mox.StubOutWithMock(db, 'instance_update')
+        self.mox.StubOutWithMock(db, 'instance_update_and_get_original')
 
         request_spec = {'instance_properties':
                 {'uuid': fake_instance_uuid}}
@@ -243,8 +244,8 @@ class SchedulerManagerTestCase(test.TestCase):
         self.manager.driver.schedule_run_instance(self.context,
                 *self.fake_args, **self.fake_kwargs).AndRaise(
                         exception.NoValidHost(reason=""))
-        db.instance_update(self.context, fake_instance_uuid,
-                {'vm_state': vm_states.ERROR})
+        db.instance_update_and_get_original(self.context, fake_instance_uuid,
+                {"vm_state": vm_states.ERROR}).AndReturn((inst, inst))
 
         self.mox.ReplayAll()
         self.manager.run_instance(self.context, self.topic,
@@ -255,10 +256,11 @@ class SchedulerManagerTestCase(test.TestCase):
         the instance in ACTIVE state
         """
         fake_instance_uuid = 'fake-instance-id'
+        inst = {"vm_state": "", "task_state": ""}
 
         self._mox_schedule_method_helper('schedule_prep_resize')
 
-        self.mox.StubOutWithMock(db, 'instance_update')
+        self.mox.StubOutWithMock(db, 'instance_update_and_get_original')
 
         request_spec = {'instance_properties':
                 {'uuid': fake_instance_uuid}}
@@ -267,9 +269,9 @@ class SchedulerManagerTestCase(test.TestCase):
         self.manager.driver.schedule_prep_resize(self.context,
                 *self.fake_args, **self.fake_kwargs).AndRaise(
                         exception.NoValidHost(reason=""))
-        db.instance_update(self.context, fake_instance_uuid,
-                {'vm_state': vm_states.ACTIVE,
-                 'task_state': None})
+        db.instance_update_and_get_original(self.context, fake_instance_uuid,
+                {"vm_state": vm_states.ACTIVE, "task_state": None}).AndReturn(
+                        (inst, inst))
 
         self.mox.ReplayAll()
         self.manager.prep_resize(self.context, self.topic,
@@ -283,7 +285,7 @@ class SchedulerManagerTestCase(test.TestCase):
 
         self._mox_schedule_method_helper('schedule_prep_resize')
 
-        self.mox.StubOutWithMock(db, 'instance_update')
+        self.mox.StubOutWithMock(db, 'instance_update_and_get_original')
 
         request_spec = {'instance_properties':
                 {'uuid': fake_instance_uuid}}
@@ -292,8 +294,13 @@ class SchedulerManagerTestCase(test.TestCase):
         self.manager.driver.schedule_prep_resize(self.context,
                 *self.fake_args, **self.fake_kwargs).AndRaise(
                 self.AnException('something happened'))
-        db.instance_update(self.context, fake_instance_uuid,
-                {'vm_state': vm_states.ERROR})
+
+        inst = {
+            "vm_state": "",
+            "task_state": "",
+        }
+        db.instance_update_and_get_original(self.context, fake_instance_uuid,
+                {"vm_state": vm_states.ERROR}).AndReturn((inst, inst))
 
         self.mox.ReplayAll()
 
@@ -389,10 +396,10 @@ class SchedulerTestCase(test.TestCase):
         self.driver.compute_api.create_db_entry_for_new_instance(
                 self.context, instance_type, image, base_options,
                 security_group,
-                block_device_mapping).AndReturn(fake_instance)
+                block_device_mapping, None).AndReturn(fake_instance)
         self.mox.ReplayAll()
         instance = self.driver.create_instance_db_entry(self.context,
-                request_spec)
+                request_spec, None)
         self.mox.VerifyAll()
         self.assertEqual(instance, fake_instance)
 
@@ -407,7 +414,7 @@ class SchedulerTestCase(test.TestCase):
 
         self.mox.ReplayAll()
         instance = self.driver.create_instance_db_entry(self.context,
-                request_spec)
+                request_spec, None)
         self.assertEqual(instance, fake_instance)
 
     def _live_migration_instance(self):
@@ -421,7 +428,9 @@ class SchedulerTestCase(test.TestCase):
                 'power_state': power_state.RUNNING,
                 'memory_mb': 1024,
                 'root_gb': 1024,
-                'ephemeral_gb': 0}
+                'ephemeral_gb': 0,
+                'vm_state': '',
+                'task_state': ''}
 
     def test_live_migration_basic(self):
         """Test basic schedule_live_migration functionality"""
@@ -429,7 +438,7 @@ class SchedulerTestCase(test.TestCase):
         self.mox.StubOutWithMock(self.driver, '_live_migration_src_check')
         self.mox.StubOutWithMock(self.driver, '_live_migration_dest_check')
         self.mox.StubOutWithMock(self.driver, '_live_migration_common_check')
-        self.mox.StubOutWithMock(db, 'instance_update')
+        self.mox.StubOutWithMock(db, 'instance_update_and_get_original')
         self.mox.StubOutWithMock(driver, 'cast_to_compute_host')
 
         dest = 'fake_host2'
@@ -443,8 +452,9 @@ class SchedulerTestCase(test.TestCase):
                 dest, block_migration, disk_over_commit)
         self.driver._live_migration_common_check(self.context, instance,
                 dest, block_migration, disk_over_commit)
-        db.instance_update(self.context, instance['id'],
-                {'vm_state': vm_states.MIGRATING})
+        db.instance_update_and_get_original(self.context, instance['id'],
+                {"vm_state": vm_states.MIGRATING}).AndReturn(
+                        (instance, instance))
 
         driver.cast_to_compute_host(self.context, instance['host'],
                 'live_migration', update_db=False,
@@ -457,6 +467,29 @@ class SchedulerTestCase(test.TestCase):
                 block_migration=block_migration,
                 disk_over_commit=disk_over_commit)
 
+    def _check_shared_storage(self, dest, instance, check_result):
+        tmp_filename = 'test-filename'
+        rpc.queue_get_for(self.context, FLAGS.compute_topic,
+                dest).AndReturn('dest_queue')
+        rpc.call(self.context, 'dest_queue',
+                {'method': 'create_shared_storage_test_file',
+                 'args': {},
+                 'version': compute_rpcapi.ComputeAPI.RPC_API_VERSION}, None
+                ).AndReturn(tmp_filename)
+        rpc.queue_get_for(self.context, FLAGS.compute_topic,
+                instance['host']).AndReturn('src_queue')
+        rpc.call(self.context, 'src_queue',
+                {'method': 'check_shared_storage_test_file',
+                 'args': {'filename': tmp_filename},
+                 'version': compute_rpcapi.ComputeAPI.RPC_API_VERSION}, None
+                ).AndReturn(check_result)
+        rpc.queue_get_for(self.context, FLAGS.compute_topic,
+                dest).AndReturn('dest_queue')
+        rpc.cast(self.context, 'dest_queue',
+                {'method': 'cleanup_shared_storage_test_file',
+                 'args': {'filename': tmp_filename},
+                 'version': compute_rpcapi.ComputeAPI.RPC_API_VERSION})
+
     def test_live_migration_all_checks_pass(self):
         """Test live migration when all checks pass."""
 
@@ -465,10 +498,10 @@ class SchedulerTestCase(test.TestCase):
         self.mox.StubOutWithMock(db, 'service_get_all_compute_by_host')
         self.mox.StubOutWithMock(self.driver, '_get_compute_info')
         self.mox.StubOutWithMock(db, 'instance_get_all_by_host')
-        self.mox.StubOutWithMock(db, 'queue_get_for')
+        self.mox.StubOutWithMock(rpc, 'queue_get_for')
         self.mox.StubOutWithMock(rpc, 'call')
         self.mox.StubOutWithMock(rpc, 'cast')
-        self.mox.StubOutWithMock(db, 'instance_update')
+        self.mox.StubOutWithMock(db, 'instance_update_and_get_original')
         self.mox.StubOutWithMock(driver, 'cast_to_compute_host')
 
         dest = 'fake_host2'
@@ -493,28 +526,24 @@ class SchedulerTestCase(test.TestCase):
         # assert_compute_node_has_enough_disk()
         self.driver._get_compute_info(self.context, dest,
                 'disk_available_least').AndReturn(1025)
-        db.queue_get_for(self.context, FLAGS.compute_topic,
+        rpc.queue_get_for(self.context, FLAGS.compute_topic,
                 instance['host']).AndReturn('src_queue1')
-        rpc.call(self.context, 'src_queue1',
-                {'method': 'get_instance_disk_info',
-                 'args': {'instance_name': instance['name']}}).AndReturn(
-                        json.dumps([{'disk_size': 1024 * (1024 ** 3)}]))
+        instance_disk_info_msg = {
+            'method': 'get_instance_disk_info',
+            'args': {
+                'instance_name': instance['name'],
+            },
+            'version': compute_rpcapi.ComputeAPI.RPC_API_VERSION,
+        }
+        instance_disk_info = [{'disk_size': 1024 * (1024 ** 3)}]
+        rpc.call(self.context,
+                 'src_queue1',
+                 instance_disk_info_msg,
+                 None).AndReturn(jsonutils.dumps(instance_disk_info))
 
-        # Common checks (shared storage ok, same hypervisor,e tc)
-        db.queue_get_for(self.context, FLAGS.compute_topic,
-                dest).AndReturn('dest_queue')
-        db.queue_get_for(self.context, FLAGS.compute_topic,
-                instance['host']).AndReturn('src_queue')
-        tmp_filename = 'test-filename'
-        rpc.call(self.context, 'dest_queue',
-                {'method': 'create_shared_storage_test_file'}
-                ).AndReturn(tmp_filename)
-        rpc.call(self.context, 'src_queue',
-                {'method': 'check_shared_storage_test_file',
-                 'args': {'filename': tmp_filename}}).AndReturn(False)
-        rpc.cast(self.context, 'dest_queue',
-                {'method': 'cleanup_shared_storage_test_file',
-                 'args': {'filename': tmp_filename}})
+        # Common checks (shared storage ok, same hypervisor, etc)
+        self._check_shared_storage(dest, instance, False)
+
         db.service_get_all_compute_by_host(self.context, dest).AndReturn(
                 [{'compute_node': [{'hypervisor_type': 'xen',
                                     'hypervisor_version': 1}]}])
@@ -524,14 +553,17 @@ class SchedulerTestCase(test.TestCase):
                     [{'compute_node': [{'hypervisor_type': 'xen',
                                         'hypervisor_version': 1,
                                         'cpu_info': 'fake_cpu_info'}]}])
-        db.queue_get_for(self.context, FLAGS.compute_topic,
+        rpc.queue_get_for(self.context, FLAGS.compute_topic,
                 dest).AndReturn('dest_queue')
         rpc.call(self.context, 'dest_queue',
                 {'method': 'compare_cpu',
-                 'args': {'cpu_info': 'fake_cpu_info'}}).AndReturn(True)
+                 'args': {'cpu_info': 'fake_cpu_info'},
+                 'version': compute_rpcapi.ComputeAPI.RPC_API_VERSION}, None
+                ).AndReturn(True)
 
-        db.instance_update(self.context, instance['id'],
-                {'vm_state': vm_states.MIGRATING})
+        db.instance_update_and_get_original(self.context, instance['id'],
+                {"vm_state": vm_states.MIGRATING}).AndReturn(
+                        (instance, instance))
 
         driver.cast_to_compute_host(self.context, instance['host'],
                 'live_migration', update_db=False,
@@ -684,7 +716,7 @@ class SchedulerTestCase(test.TestCase):
                 'assert_compute_node_has_enough_memory')
         self.mox.StubOutWithMock(self.driver, '_get_compute_info')
         self.mox.StubOutWithMock(db, 'instance_get_all_by_host')
-        self.mox.StubOutWithMock(db, 'queue_get_for')
+        self.mox.StubOutWithMock(rpc, 'queue_get_for')
         self.mox.StubOutWithMock(rpc, 'call')
 
         dest = 'fake_host2'
@@ -705,12 +737,20 @@ class SchedulerTestCase(test.TestCase):
         # Not enough disk
         self.driver._get_compute_info(self.context, dest,
                 'disk_available_least').AndReturn(1023)
-        db.queue_get_for(self.context, FLAGS.compute_topic,
+        rpc.queue_get_for(self.context, FLAGS.compute_topic,
                 instance['host']).AndReturn('src_queue')
-        rpc.call(self.context, 'src_queue',
-                {'method': 'get_instance_disk_info',
-                 'args': {'instance_name': instance['name']}}).AndReturn(
-                        json.dumps([{'disk_size': 1024 * (1024 ** 3)}]))
+        instance_disk_info_msg = {
+            'method': 'get_instance_disk_info',
+            'args': {
+                'instance_name': instance['name'],
+            },
+            'version': compute_rpcapi.ComputeAPI.RPC_API_VERSION,
+        }
+        instance_disk_info = [{'disk_size': 1024 * (1024 ** 3)}]
+        rpc.call(self.context,
+                 'src_queue',
+                 instance_disk_info_msg,
+                 None).AndReturn(jsonutils.dumps(instance_disk_info))
 
         self.mox.ReplayAll()
         self.assertRaises(exception.MigrationError,
@@ -725,7 +765,7 @@ class SchedulerTestCase(test.TestCase):
         self.mox.StubOutWithMock(db, 'instance_get')
         self.mox.StubOutWithMock(self.driver, '_live_migration_src_check')
         self.mox.StubOutWithMock(self.driver, '_live_migration_dest_check')
-        self.mox.StubOutWithMock(db, 'queue_get_for')
+        self.mox.StubOutWithMock(rpc, 'queue_get_for')
         self.mox.StubOutWithMock(rpc, 'call')
         self.mox.StubOutWithMock(rpc, 'cast')
 
@@ -739,20 +779,7 @@ class SchedulerTestCase(test.TestCase):
         self.driver._live_migration_dest_check(self.context, instance,
                 dest, block_migration, disk_over_commit)
 
-        db.queue_get_for(self.context, FLAGS.compute_topic,
-                dest).AndReturn('dest_queue')
-        db.queue_get_for(self.context, FLAGS.compute_topic,
-                instance['host']).AndReturn('src_queue')
-        tmp_filename = 'test-filename'
-        rpc.call(self.context, 'dest_queue',
-                {'method': 'create_shared_storage_test_file'}
-                ).AndReturn(tmp_filename)
-        rpc.call(self.context, 'src_queue',
-                {'method': 'check_shared_storage_test_file',
-                 'args': {'filename': tmp_filename}}).AndReturn(False)
-        rpc.cast(self.context, 'dest_queue',
-                {'method': 'cleanup_shared_storage_test_file',
-                 'args': {'filename': tmp_filename}})
+        self._check_shared_storage(dest, instance, False)
 
         self.mox.ReplayAll()
         self.assertRaises(exception.InvalidSharedStorage,
@@ -767,7 +794,7 @@ class SchedulerTestCase(test.TestCase):
         self.mox.StubOutWithMock(db, 'instance_get')
         self.mox.StubOutWithMock(self.driver, '_live_migration_src_check')
         self.mox.StubOutWithMock(self.driver, '_live_migration_dest_check')
-        self.mox.StubOutWithMock(db, 'queue_get_for')
+        self.mox.StubOutWithMock(rpc, 'queue_get_for')
         self.mox.StubOutWithMock(rpc, 'call')
         self.mox.StubOutWithMock(rpc, 'cast')
 
@@ -781,20 +808,7 @@ class SchedulerTestCase(test.TestCase):
         self.driver._live_migration_dest_check(self.context, instance,
                 dest, block_migration, disk_over_commit)
 
-        db.queue_get_for(self.context, FLAGS.compute_topic,
-                dest).AndReturn('dest_queue')
-        db.queue_get_for(self.context, FLAGS.compute_topic,
-                instance['host']).AndReturn('src_queue')
-        tmp_filename = 'test-filename'
-        rpc.call(self.context, 'dest_queue',
-                {'method': 'create_shared_storage_test_file'}
-                ).AndReturn(tmp_filename)
-        rpc.call(self.context, 'src_queue',
-                {'method': 'check_shared_storage_test_file',
-                 'args': {'filename': tmp_filename}}).AndReturn(False)
-        rpc.cast(self.context, 'dest_queue',
-                {'method': 'cleanup_shared_storage_test_file',
-                 'args': {'filename': tmp_filename}})
+        self._check_shared_storage(dest, instance, False)
 
         self.mox.ReplayAll()
         self.assertRaises(exception.InvalidSharedStorage,
@@ -807,7 +821,7 @@ class SchedulerTestCase(test.TestCase):
         self.mox.StubOutWithMock(db, 'instance_get')
         self.mox.StubOutWithMock(self.driver, '_live_migration_src_check')
         self.mox.StubOutWithMock(self.driver, '_live_migration_dest_check')
-        self.mox.StubOutWithMock(db, 'queue_get_for')
+        self.mox.StubOutWithMock(rpc, 'queue_get_for')
         self.mox.StubOutWithMock(rpc, 'call')
         self.mox.StubOutWithMock(rpc, 'cast')
         self.mox.StubOutWithMock(db, 'service_get_all_compute_by_host')
@@ -822,20 +836,8 @@ class SchedulerTestCase(test.TestCase):
         self.driver._live_migration_dest_check(self.context, instance,
                 dest, block_migration, disk_over_commit)
 
-        db.queue_get_for(self.context, FLAGS.compute_topic,
-                dest).AndReturn('dest_queue')
-        db.queue_get_for(self.context, FLAGS.compute_topic,
-                instance['host']).AndReturn('src_queue')
-        tmp_filename = 'test-filename'
-        rpc.call(self.context, 'dest_queue',
-                {'method': 'create_shared_storage_test_file'}
-                ).AndReturn(tmp_filename)
-        rpc.call(self.context, 'src_queue',
-                {'method': 'check_shared_storage_test_file',
-                 'args': {'filename': tmp_filename}}).AndReturn(True)
-        rpc.cast(self.context, 'dest_queue',
-                {'method': 'cleanup_shared_storage_test_file',
-                 'args': {'filename': tmp_filename}})
+        self._check_shared_storage(dest, instance, True)
+
         db.service_get_all_compute_by_host(self.context, dest).AndReturn(
                 [{'compute_node': [{'hypervisor_type': 'xen',
                                     'hypervisor_version': 1}]}])
@@ -856,7 +858,7 @@ class SchedulerTestCase(test.TestCase):
         self.mox.StubOutWithMock(db, 'instance_get')
         self.mox.StubOutWithMock(self.driver, '_live_migration_src_check')
         self.mox.StubOutWithMock(self.driver, '_live_migration_dest_check')
-        self.mox.StubOutWithMock(db, 'queue_get_for')
+        self.mox.StubOutWithMock(rpc, 'queue_get_for')
         self.mox.StubOutWithMock(rpc, 'call')
         self.mox.StubOutWithMock(rpc, 'cast')
         self.mox.StubOutWithMock(db, 'service_get_all_compute_by_host')
@@ -871,20 +873,8 @@ class SchedulerTestCase(test.TestCase):
         self.driver._live_migration_dest_check(self.context, instance,
                 dest, block_migration, disk_over_commit)
 
-        db.queue_get_for(self.context, FLAGS.compute_topic,
-                dest).AndReturn('dest_queue')
-        db.queue_get_for(self.context, FLAGS.compute_topic,
-                instance['host']).AndReturn('src_queue')
-        tmp_filename = 'test-filename'
-        rpc.call(self.context, 'dest_queue',
-                {'method': 'create_shared_storage_test_file'}
-                ).AndReturn(tmp_filename)
-        rpc.call(self.context, 'src_queue',
-                {'method': 'check_shared_storage_test_file',
-                 'args': {'filename': tmp_filename}}).AndReturn(True)
-        rpc.cast(self.context, 'dest_queue',
-                {'method': 'cleanup_shared_storage_test_file',
-                 'args': {'filename': tmp_filename}})
+        self._check_shared_storage(dest, instance, True)
+
         db.service_get_all_compute_by_host(self.context, dest).AndReturn(
                 [{'compute_node': [{'hypervisor_type': 'xen',
                                     'hypervisor_version': 1}]}])
@@ -904,7 +894,7 @@ class SchedulerTestCase(test.TestCase):
         self.mox.StubOutWithMock(db, 'instance_get')
         self.mox.StubOutWithMock(self.driver, '_live_migration_src_check')
         self.mox.StubOutWithMock(self.driver, '_live_migration_dest_check')
-        self.mox.StubOutWithMock(db, 'queue_get_for')
+        self.mox.StubOutWithMock(rpc, 'queue_get_for')
         self.mox.StubOutWithMock(rpc, 'call')
         self.mox.StubOutWithMock(rpc, 'cast')
         self.mox.StubOutWithMock(db, 'service_get_all_compute_by_host')
@@ -919,20 +909,8 @@ class SchedulerTestCase(test.TestCase):
         self.driver._live_migration_dest_check(self.context, instance,
                 dest, block_migration, disk_over_commit)
 
-        db.queue_get_for(self.context, FLAGS.compute_topic,
-                dest).AndReturn('dest_queue')
-        db.queue_get_for(self.context, FLAGS.compute_topic,
-                instance['host']).AndReturn('src_queue')
-        tmp_filename = 'test-filename'
-        rpc.call(self.context, 'dest_queue',
-                {'method': 'create_shared_storage_test_file'}
-                ).AndReturn(tmp_filename)
-        rpc.call(self.context, 'src_queue',
-                {'method': 'check_shared_storage_test_file',
-                 'args': {'filename': tmp_filename}}).AndReturn(True)
-        rpc.cast(self.context, 'dest_queue',
-                {'method': 'cleanup_shared_storage_test_file',
-                 'args': {'filename': tmp_filename}})
+        self._check_shared_storage(dest, instance, True)
+
         db.service_get_all_compute_by_host(self.context, dest).AndReturn(
                 [{'compute_node': [{'hypervisor_type': 'xen',
                                     'hypervisor_version': 1}]}])
@@ -941,12 +919,13 @@ class SchedulerTestCase(test.TestCase):
                     [{'compute_node': [{'hypervisor_type': 'xen',
                                         'hypervisor_version': 1,
                                         'cpu_info': 'fake_cpu_info'}]}])
-        db.queue_get_for(self.context, FLAGS.compute_topic,
+        rpc.queue_get_for(self.context, FLAGS.compute_topic,
                 dest).AndReturn('dest_queue')
         rpc.call(self.context, 'dest_queue',
                 {'method': 'compare_cpu',
-                 'args': {'cpu_info': 'fake_cpu_info'}}).AndRaise(
-                         rpc_common.RemoteError())
+                 'args': {'cpu_info': 'fake_cpu_info'},
+                 'version': compute_rpcapi.ComputeAPI.RPC_API_VERSION}, None
+                ).AndRaise(rpc_common.RemoteError())
 
         self.mox.ReplayAll()
         self.assertRaises(rpc_common.RemoteError,
@@ -1006,13 +985,13 @@ class SchedulerDriverModuleTestCase(test.TestCase):
 
         self.mox.StubOutWithMock(utils, 'utcnow')
         self.mox.StubOutWithMock(db, 'volume_update')
-        self.mox.StubOutWithMock(db, 'queue_get_for')
+        self.mox.StubOutWithMock(rpc, 'queue_get_for')
         self.mox.StubOutWithMock(rpc, 'cast')
 
         utils.utcnow().AndReturn('fake-now')
         db.volume_update(self.context, 31337,
                 {'host': host, 'scheduled_at': 'fake-now'})
-        db.queue_get_for(self.context, 'volume', host).AndReturn(queue)
+        rpc.queue_get_for(self.context, 'volume', host).AndReturn(queue)
         rpc.cast(self.context, queue,
                 {'method': method,
                  'args': fake_kwargs})
@@ -1027,10 +1006,10 @@ class SchedulerDriverModuleTestCase(test.TestCase):
         fake_kwargs = {'extra_arg': 'meow'}
         queue = 'fake_queue'
 
-        self.mox.StubOutWithMock(db, 'queue_get_for')
+        self.mox.StubOutWithMock(rpc, 'queue_get_for')
         self.mox.StubOutWithMock(rpc, 'cast')
 
-        db.queue_get_for(self.context, 'volume', host).AndReturn(queue)
+        rpc.queue_get_for(self.context, 'volume', host).AndReturn(queue)
         rpc.cast(self.context, queue,
                 {'method': method,
                  'args': fake_kwargs})
@@ -1045,10 +1024,10 @@ class SchedulerDriverModuleTestCase(test.TestCase):
         fake_kwargs = {'extra_arg': 'meow'}
         queue = 'fake_queue'
 
-        self.mox.StubOutWithMock(db, 'queue_get_for')
+        self.mox.StubOutWithMock(rpc, 'queue_get_for')
         self.mox.StubOutWithMock(rpc, 'cast')
 
-        db.queue_get_for(self.context, 'volume', host).AndReturn(queue)
+        rpc.queue_get_for(self.context, 'volume', host).AndReturn(queue)
         rpc.cast(self.context, queue,
                 {'method': method,
                  'args': fake_kwargs})
@@ -1066,13 +1045,13 @@ class SchedulerDriverModuleTestCase(test.TestCase):
 
         self.mox.StubOutWithMock(utils, 'utcnow')
         self.mox.StubOutWithMock(db, 'instance_update')
-        self.mox.StubOutWithMock(db, 'queue_get_for')
+        self.mox.StubOutWithMock(rpc, 'queue_get_for')
         self.mox.StubOutWithMock(rpc, 'cast')
 
         utils.utcnow().AndReturn('fake-now')
         db.instance_update(self.context, 31337,
                 {'host': host, 'scheduled_at': 'fake-now'})
-        db.queue_get_for(self.context, 'compute', host).AndReturn(queue)
+        rpc.queue_get_for(self.context, 'compute', host).AndReturn(queue)
         rpc.cast(self.context, queue,
                 {'method': method,
                  'args': fake_kwargs})
@@ -1087,10 +1066,10 @@ class SchedulerDriverModuleTestCase(test.TestCase):
         fake_kwargs = {'extra_arg': 'meow'}
         queue = 'fake_queue'
 
-        self.mox.StubOutWithMock(db, 'queue_get_for')
+        self.mox.StubOutWithMock(rpc, 'queue_get_for')
         self.mox.StubOutWithMock(rpc, 'cast')
 
-        db.queue_get_for(self.context, 'compute', host).AndReturn(queue)
+        rpc.queue_get_for(self.context, 'compute', host).AndReturn(queue)
         rpc.cast(self.context, queue,
                 {'method': method,
                  'args': fake_kwargs})
@@ -1105,10 +1084,10 @@ class SchedulerDriverModuleTestCase(test.TestCase):
         fake_kwargs = {'extra_arg': 'meow'}
         queue = 'fake_queue'
 
-        self.mox.StubOutWithMock(db, 'queue_get_for')
+        self.mox.StubOutWithMock(rpc, 'queue_get_for')
         self.mox.StubOutWithMock(rpc, 'cast')
 
-        db.queue_get_for(self.context, 'compute', host).AndReturn(queue)
+        rpc.queue_get_for(self.context, 'compute', host).AndReturn(queue)
         rpc.cast(self.context, queue,
                 {'method': method,
                  'args': fake_kwargs})
@@ -1123,10 +1102,10 @@ class SchedulerDriverModuleTestCase(test.TestCase):
         fake_kwargs = {'extra_arg': 'meow'}
         queue = 'fake_queue'
 
-        self.mox.StubOutWithMock(db, 'queue_get_for')
+        self.mox.StubOutWithMock(rpc, 'queue_get_for')
         self.mox.StubOutWithMock(rpc, 'cast')
 
-        db.queue_get_for(self.context, 'network', host).AndReturn(queue)
+        rpc.queue_get_for(self.context, 'network', host).AndReturn(queue)
         rpc.cast(self.context, queue,
                 {'method': method,
                  'args': fake_kwargs})
@@ -1181,10 +1160,10 @@ class SchedulerDriverModuleTestCase(test.TestCase):
         topic = 'unknown'
         queue = 'fake_queue'
 
-        self.mox.StubOutWithMock(db, 'queue_get_for')
+        self.mox.StubOutWithMock(rpc, 'queue_get_for')
         self.mox.StubOutWithMock(rpc, 'cast')
 
-        db.queue_get_for(self.context, topic, host).AndReturn(queue)
+        rpc.queue_get_for(self.context, topic, host).AndReturn(queue)
         rpc.cast(self.context, queue,
                 {'method': method,
                  'args': fake_kwargs})

@@ -23,7 +23,6 @@ import base64
 import binascii
 import cPickle as pickle
 import functools
-import json
 import os
 import time
 import uuid
@@ -32,8 +31,6 @@ from eventlet import greenthread
 
 from nova.compute import api as compute
 from nova.compute import power_state
-from nova.compute import task_states
-from nova.compute import vm_states
 from nova import context as nova_context
 from nova import db
 from nova import exception
@@ -41,6 +38,7 @@ from nova import flags
 from nova import log as logging
 from nova.openstack.common import cfg
 from nova.openstack.common import importutils
+from nova.openstack.common import jsonutils
 from nova import utils
 from nova.virt import driver
 from nova.virt.xenapi import firewall
@@ -49,9 +47,6 @@ from nova.virt.xenapi import vm_utils
 from nova.virt.xenapi import volume_utils
 
 
-VolumeHelper = volume_utils.VolumeHelper
-NetworkHelper = network_utils.NetworkHelper
-VMHelper = vm_utils.VMHelper
 LOG = logging.getLogger(__name__)
 
 xenapi_vmops_opts = [
@@ -79,6 +74,12 @@ flags.DECLARE('vncserver_proxyclient_address', 'nova.vnc')
 
 
 RESIZE_TOTAL_STEPS = 5
+
+DEVICE_ROOT = '0'
+DEVICE_RESCUE = '1'
+DEVICE_SWAP = '2'
+DEVICE_EPHEMERAL = '3'
+DEVICE_CD = '4'
 
 
 def cmp_version(a, b):
@@ -167,7 +168,7 @@ class VMOps(object):
         # TODO(justinsb): Should we just always use the details method?
         #  Seems to be the same number of API calls..
         name_labels = []
-        for vm_ref, vm_rec in VMHelper.list_vms(self._session):
+        for vm_ref, vm_rec in vm_utils.list_vms(self._session):
             name_labels.append(vm_rec["name_label"])
 
         return name_labels
@@ -175,11 +176,11 @@ class VMOps(object):
     def list_instances_detail(self):
         """List VM instances, returning InstanceInfo objects."""
         details = []
-        for vm_ref, vm_rec in VMHelper.list_vms(self._session):
+        for vm_ref, vm_rec in vm_utils.list_vms(self._session):
             name = vm_rec["name_label"]
 
             # TODO(justinsb): This a roundabout way to map the state
-            openstack_format = VMHelper.compile_info(vm_rec)
+            openstack_format = vm_utils.compile_info(vm_rec)
             state = openstack_format['state']
 
             instance_info = driver.InstanceInfo(name, state)
@@ -189,31 +190,31 @@ class VMOps(object):
 
     def confirm_migration(self, migration, instance, network_info):
         name_label = self._get_orig_vm_name_label(instance)
-        vm_ref = VMHelper.lookup(self._session, name_label)
+        vm_ref = vm_utils.lookup(self._session, name_label)
         return self._destroy(instance, vm_ref, network_info)
 
     def finish_revert_migration(self, instance):
         # NOTE(sirp): the original vm was suffixed with '-orig'; find it using
         # the old suffix, remove the suffix, then power it back on.
         name_label = self._get_orig_vm_name_label(instance)
-        vm_ref = VMHelper.lookup(self._session, name_label)
+        vm_ref = vm_utils.lookup(self._session, name_label)
 
         # Remove the '-orig' suffix (which was added in case the resized VM
         # ends up on the source host, common during testing)
         name_label = instance.name
-        VMHelper.set_vm_name_label(self._session, vm_ref, name_label)
+        vm_utils.set_vm_name_label(self._session, vm_ref, name_label)
 
         self._start(instance, vm_ref)
 
     def finish_migration(self, context, migration, instance, disk_info,
                          network_info, image_meta, resize_instance):
-        vdi_uuid = self._move_disks(instance, disk_info)
+        root_vdi = self._move_disks(instance, disk_info)
 
         if resize_instance:
-            self._resize_instance(instance, vdi_uuid)
+            self._resize_instance(instance, root_vdi)
 
         vm_ref = self._create_vm(context, instance,
-                                 [dict(vdi_type='root', vdi_uuid=vdi_uuid)],
+                                 {'root': root_vdi},
                                  network_info, image_meta)
 
         # 5. Start VM
@@ -231,14 +232,19 @@ class VMOps(object):
                                   False, False)
 
     def _create_disks(self, context, instance, image_meta):
-        disk_image_type = VMHelper.determine_disk_image_type(image_meta)
-        vdis = VMHelper.create_image(context, self._session,
+        disk_image_type = vm_utils.determine_disk_image_type(image_meta)
+        vdis = vm_utils.create_image(context, self._session,
                                      instance, instance.image_ref,
                                      disk_image_type)
 
-        for vdi in vdis:
-            if vdi["vdi_type"] == "root":
-                self._resize_instance(instance, vdi["vdi_uuid"])
+        # Just get the VDI ref once
+        for vdi in vdis.itervalues():
+            vdi['ref'] = self._session.call_xenapi('VDI.get_by_uuid',
+                                                   vdi['uuid'])
+
+        root_vdi = vdis.get('root')
+        if root_vdi:
+            self._resize_instance(instance, root_vdi)
 
         return vdis
 
@@ -260,17 +266,7 @@ class VMOps(object):
             vdis = self._create_disks(context, instance, image_meta)
 
             def undo_create_disks():
-                vdi_refs = []
-                for vdi in vdis:
-                    try:
-                        vdi_ref = self._session.call_xenapi(
-                                'VDI.get_by_uuid', vdi['vdi_uuid'])
-                    except self.XenAPI.Failure:
-                        continue
-
-                    vdi_refs.append(vdi_ref)
-
-                self._safe_destroy_vdis(vdi_refs)
+                self._safe_destroy_vdis([vdi['ref'] for vdi in vdis.values()])
 
             undo_mgr.undo_with(undo_create_disks)
             return vdis
@@ -281,16 +277,16 @@ class VMOps(object):
             ramdisk_file = None
 
             if instance.kernel_id:
-                kernel = VMHelper.create_kernel_image(context, self._session,
+                vdis = vm_utils.create_kernel_image(context, self._session,
                         instance, instance.kernel_id, instance.user_id,
-                        instance.project_id, vm_utils.ImageType.KERNEL)[0]
-                kernel_file = kernel.get('file')
+                        instance.project_id, vm_utils.ImageType.KERNEL)
+                kernel_file = vdis['kernel'].get('file')
 
             if instance.ramdisk_id:
-                ramdisk = VMHelper.create_kernel_image(context, self._session,
+                vdis = vm_utils.create_kernel_image(context, self._session,
                         instance, instance.ramdisk_id, instance.user_id,
-                        instance.project_id, vm_utils.ImageType.RAMDISK)[0]
-                ramdisk_file = ramdisk.get('file')
+                        instance.project_id, vm_utils.ImageType.RAMDISK)
+                ramdisk_file = vdis['ramdisk'].get('file')
 
             def undo_create_kernel_ramdisk():
                 if kernel_file or ramdisk_file:
@@ -364,25 +360,15 @@ class VMOps(object):
                    kernel_file=None, ramdisk_file=None):
         """Create VM instance."""
         instance_name = instance.name
-        vm_ref = VMHelper.lookup(self._session, instance_name)
+        vm_ref = vm_utils.lookup(self._session, instance_name)
         if vm_ref is not None:
             raise exception.InstanceExists(name=instance_name)
 
         # Ensure enough free memory is available
-        if not VMHelper.ensure_free_mem(self._session, instance):
+        if not vm_utils.ensure_free_mem(self._session, instance):
             raise exception.InsufficientFreeMemory(uuid=instance.uuid)
 
-        disk_image_type = VMHelper.determine_disk_image_type(image_meta)
-
-        # NOTE(jk0): Since vdi_type may contain either 'root' or 'swap', we
-        # need to ensure that the 'swap' VDI is not chosen as the mount
-        # point for file injection.
-        first_vdi_ref = None
-        for vdi in vdis:
-            if vdi.get('vdi_type') != 'swap':
-                # Create the VM ref and attach the first disk
-                first_vdi_ref = self._session.call_xenapi(
-                        'VDI.get_by_uuid', vdi['vdi_uuid'])
+        disk_image_type = vm_utils.determine_disk_image_type(image_meta)
 
         vm_mode = instance.vm_mode and instance.vm_mode.lower()
         if vm_mode == 'pv':
@@ -391,8 +377,8 @@ class VMOps(object):
             use_pv_kernel = False
             vm_mode = 'hvm'  # Normalize
         else:
-            use_pv_kernel = VMHelper.determine_is_pv(self._session,
-                    first_vdi_ref, disk_image_type, instance.os_type)
+            use_pv_kernel = vm_utils.determine_is_pv(self._session,
+                    vdis['root']['ref'], disk_image_type, instance.os_type)
             vm_mode = use_pv_kernel and 'pv' or 'hvm'
 
         if instance.vm_mode != vm_mode:
@@ -400,18 +386,17 @@ class VMOps(object):
             db.instance_update(nova_context.get_admin_context(),
                                instance['id'], {'vm_mode': vm_mode})
 
-        vm_ref = VMHelper.create_vm(
+        vm_ref = vm_utils.create_vm(
             self._session, instance, kernel_file, ramdisk_file,
             use_pv_kernel)
 
         # Add disks to VM
-        self._attach_disks(instance, disk_image_type, vm_ref, first_vdi_ref,
-            vdis)
+        self._attach_disks(instance, disk_image_type, vm_ref, vdis)
 
         # Alter the image before VM start for network injection.
         if FLAGS.flat_injected:
-            VMHelper.preconfigure_instance(self._session, instance,
-                                           first_vdi_ref, network_info)
+            vm_utils.preconfigure_instance(self._session, instance,
+                                           vdis['root']['ref'], network_info)
 
         self._create_vifs(vm_ref, instance, network_info)
         self.inject_network_info(instance, network_info, vm_ref)
@@ -421,76 +406,62 @@ class VMOps(object):
 
         return vm_ref
 
-    def _attach_disks(self, instance, disk_image_type, vm_ref, first_vdi_ref,
-            vdis):
+    def _attach_disks(self, instance, disk_image_type, vm_ref, vdis):
         ctx = nova_context.get_admin_context()
-
-        # device 0 reserved for RW disk
-        userdevice = 0
 
         # DISK_ISO needs two VBDs: the ISO disk and a blank RW disk
         if disk_image_type == vm_utils.ImageType.DISK_ISO:
             LOG.debug(_("Detected ISO image type, creating blank VM "
                         "for install"), instance=instance)
 
-            cd_vdi_ref = first_vdi_ref
-            first_vdi_ref = VMHelper.fetch_blank_disk(self._session,
-                            instance.instance_type_id)
+            cd_vdi = vdis.pop('root')
+            root_vdi = vm_utils.fetch_blank_disk(self._session,
+                                                 instance.instance_type_id)
+            vdis['root'] = root_vdi
 
-            VMHelper.create_vbd(self._session, vm_ref, first_vdi_ref,
-                                userdevice, bootable=False)
+            vm_utils.create_vbd(self._session, vm_ref, root_vdi['ref'],
+                                DEVICE_ROOT, bootable=False)
 
-            # device 1 reserved for rescue disk and we've used '0'
-            userdevice = 2
-            VMHelper.create_vbd(self._session, vm_ref, cd_vdi_ref,
-                                userdevice, vbd_type='CD', bootable=True)
-
-            # set user device to next free value
-            userdevice += 1
+            vm_utils.create_vbd(self._session, vm_ref, cd_vdi['ref'],
+                                DEVICE_CD, vbd_type='CD', bootable=True)
         else:
+            root_vdi = vdis['root']
+
             if instance.auto_disk_config:
                 LOG.debug(_("Auto configuring disk, attempting to "
                             "resize partition..."), instance=instance)
                 instance_type = db.instance_type_get(ctx,
                         instance.instance_type_id)
-                VMHelper.auto_configure_disk(self._session,
-                                             first_vdi_ref,
+                vm_utils.auto_configure_disk(self._session,
+                                             root_vdi['ref'],
                                              instance_type['root_gb'])
 
-            VMHelper.create_vbd(self._session, vm_ref, first_vdi_ref,
-                                userdevice, bootable=True)
+            vm_utils.create_vbd(self._session, vm_ref, root_vdi['ref'],
+                                DEVICE_ROOT, bootable=True)
 
-            # set user device to next free value
-            # userdevice 1 is reserved for rescue and we've used '0'
-            userdevice = 2
+        # Attach (optional) swap disk
+        swap_vdi = vdis.get('swap')
 
         instance_type = db.instance_type_get(ctx, instance.instance_type_id)
         swap_mb = instance_type['swap']
         generate_swap = swap_mb and FLAGS.xenapi_generate_swap
         if generate_swap:
-            VMHelper.generate_swap(self._session, instance,
-                                   vm_ref, userdevice, swap_mb)
-            userdevice += 1
+            vm_utils.generate_swap(self._session, instance, vm_ref,
+                                   DEVICE_SWAP, swap_mb)
 
+            if swap_vdi:
+                # We won't be using packaged swap VDI, so destroy it
+                vm_utils.destroy_vdi(self._session, swap_vdi['ref'])
+        elif swap_vdi:
+            # Attach packaged swap VDI to VM
+            vm_utils.create_vbd(self._session, vm_ref, swap_vdi['ref'],
+                                DEVICE_SWAP, bootable=False)
+
+        # Attach (optional) ephemeral disk
         ephemeral_gb = instance_type['ephemeral_gb']
         if ephemeral_gb:
-            VMHelper.generate_ephemeral(self._session, instance,
-                                        vm_ref, userdevice, ephemeral_gb)
-            userdevice += 1
-
-        # Attach any other disks
-        for vdi in vdis[1:]:
-            vdi_ref = self._session.call_xenapi('VDI.get_by_uuid',
-                    vdi['vdi_uuid'])
-
-            if generate_swap and vdi['vdi_type'] == 'swap':
-                # We won't be using it, so don't let it leak
-                VMHelper.destroy_vdi(self._session, vdi_ref)
-                continue
-
-            VMHelper.create_vbd(self._session, vm_ref, vdi_ref,
-                                userdevice, bootable=False)
-            userdevice += 1
+            vm_utils.generate_ephemeral(self._session, instance, vm_ref,
+                                        DEVICE_EPHEMERAL, ephemeral_gb)
 
     def _boot_new_instance(self, instance, vm_ref):
         """Boot a new instance and configure it."""
@@ -546,7 +517,7 @@ class VMOps(object):
             # Check if this is a JSON-encoded string and convert if needed.
             if isinstance(injected_files, basestring):
                 try:
-                    injected_files = json.loads(injected_files)
+                    injected_files = jsonutils.loads(injected_files)
                 except ValueError:
                     LOG.exception(_("Invalid value for injected_files: %r"),
                                   injected_files, instance=instance)
@@ -576,7 +547,7 @@ class VMOps(object):
                                       'weight', str(vcpu_weight))
 
     def _get_vm_opaque_ref(self, instance):
-        vm_ref = VMHelper.lookup(self._session, instance['name'])
+        vm_ref = vm_utils.lookup(self._session, instance['name'])
         if vm_ref is None:
             raise exception.NotFound(_('Could not find VM with name %s') %
                                      instance['name'])
@@ -625,7 +596,7 @@ class VMOps(object):
             _snapshot_info = self._create_snapshot(instance)
             template_vm_ref, template_vdi_uuids = _snapshot_info
             # call plugin to ship snapshot off to glance
-            VMHelper.upload_image(context,
+            vm_utils.upload_image(context,
                     self._session, instance, template_vdi_uuids, image_id)
         finally:
             if template_vm_ref:
@@ -644,7 +615,7 @@ class VMOps(object):
 
         label = "%s-snapshot" % instance.name
         try:
-            template_vm_ref, template_vdi_uuids = VMHelper.create_snapshot(
+            template_vm_ref, template_vdi_uuids = vm_utils.create_snapshot(
                     self._session, instance, vm_ref, label)
             return template_vm_ref, template_vdi_uuids
         except self.XenAPI.Failure, exc:
@@ -720,11 +691,11 @@ class VMOps(object):
                                            total_steps=RESIZE_TOTAL_STEPS)
 
             base_copy_uuid = template_vdi_uuids['image']
-            _vdi_info = VMHelper.get_vdi_for_vm_safely(self._session, vm_ref)
+            _vdi_info = vm_utils.get_vdi_for_vm_safely(self._session, vm_ref)
             vdi_ref, vm_vdi_rec = _vdi_info
             cow_uuid = vm_vdi_rec['uuid']
 
-            sr_path = VMHelper.get_sr_path(self._session)
+            sr_path = vm_utils.get_sr_path(self._session)
 
             if (instance['auto_disk_config'] and
                 instance['root_gb'] > instance_type['root_gb']):
@@ -744,7 +715,7 @@ class VMOps(object):
 
                 # 3. Copy VDI, resize partition and filesystem, forget VDI,
                 # truncate VHD
-                new_ref, new_uuid = VMHelper.resize_disk(self._session,
+                new_ref, new_uuid = vm_utils.resize_disk(self._session,
                                                          instance,
                                                          vdi_ref,
                                                          instance_type)
@@ -759,7 +730,7 @@ class VMOps(object):
                                                total_steps=RESIZE_TOTAL_STEPS)
 
                 # Clean up VDI now that it's been copied
-                VMHelper.destroy_vdi(self._session, new_ref)
+                vm_utils.destroy_vdi(self._session, new_ref)
 
                 vdis = {'base_copy': new_uuid}
             else:
@@ -796,7 +767,7 @@ class VMOps(object):
             # purposes), apply a suffix to name-label so the two VM records
             # extant until a confirm_resize don't collide.
             name_label = self._get_orig_vm_name_label(instance)
-            VMHelper.set_vm_name_label(self._session, vm_ref, name_label)
+            vm_utils.set_vm_name_label(self._session, vm_ref, name_label)
         finally:
             if template_vm_ref:
                 self._destroy(instance, template_vm_ref,
@@ -810,7 +781,7 @@ class VMOps(object):
         new_base_copy_uuid = str(uuid.uuid4())
 
         params = {'instance_uuid': instance['uuid'],
-                  'sr_path': VMHelper.get_sr_path(self._session),
+                  'sr_path': vm_utils.get_sr_path(self._session),
                   'old_base_copy_uuid': base_copy_uuid,
                   'new_base_copy_uuid': new_base_copy_uuid}
 
@@ -828,15 +799,17 @@ class VMOps(object):
                                   {'params': pickle.dumps(params)})
 
         # Now we rescan the SR so we find the VHDs
-        VMHelper.scan_default_sr(self._session)
+        vm_utils.scan_default_sr(self._session)
 
         # Set name-label so we can find if we need to clean up a failed
         # migration
-        VMHelper.set_vdi_name(self._session, new_uuid, instance.name, 'root')
+        vm_utils.set_vdi_name(self._session, new_uuid, instance.name, 'root')
 
-        return new_uuid
+        new_ref = self._session.call_xenapi('VDI.get_by_uuid', new_uuid)
 
-    def _resize_instance(self, instance, vdi_uuid):
+        return {'uuid': new_uuid, 'ref': new_ref}
+
+    def _resize_instance(self, instance, root_vdi):
         """Resize an instances root disk."""
 
         new_disk_size = instance.root_gb * 1024 * 1024 * 1024
@@ -844,9 +817,8 @@ class VMOps(object):
             return
 
         # Get current size of VDI
-        vdi_ref = self._session.call_xenapi('VDI.get_by_uuid', vdi_uuid)
         virtual_size = self._session.call_xenapi('VDI.get_virtual_size',
-                                                 vdi_ref)
+                                                 root_vdi['ref'])
         virtual_size = int(virtual_size)
 
         old_gb = virtual_size / (1024 * 1024 * 1024)
@@ -854,13 +826,14 @@ class VMOps(object):
 
         if virtual_size < new_disk_size:
             # Resize up. Simple VDI resize will do the trick
+            vdi_uuid = root_vdi['uuid']
             LOG.debug(_("Resizing up VDI %(vdi_uuid)s from %(old_gb)dGB to "
                         "%(new_gb)dGB"), locals(), instance=instance)
             if self._session.product_version[0] > 5:
                 resize_func_name = 'VDI.resize'
             else:
                 resize_func_name = 'VDI.resize_online'
-            self._session.call_xenapi(resize_func_name, vdi_ref,
+            self._session.call_xenapi(resize_func_name, root_vdi['ref'],
                     str(new_disk_size))
             LOG.debug(_("Resize complete"), instance=instance)
 
@@ -992,7 +965,7 @@ class VMOps(object):
     def _shutdown(self, instance, vm_ref, hard=True):
         """Shutdown an instance."""
         vm_rec = self._session.call_xenapi("VM.get_record", vm_ref)
-        state = VMHelper.compile_info(vm_rec)['state']
+        state = vm_utils.compile_info(vm_rec)['state']
         if state == power_state.SHUTDOWN:
             LOG.warn(_("VM already halted, skipping shutdown..."),
                      instance=instance)
@@ -1014,23 +987,18 @@ class VMOps(object):
 
         vbd_refs = self._session.call_xenapi("VM.get_VBDs", vm_ref)
 
-        if len(vbd_refs) == 0:
-            raise Exception(_("Unable to find VBD for VM"))
-        elif len(vbd_refs) == 1:
-            # If we only have one VBD, assume it's the root fs
-            vbd_ref = vbd_refs[0]
-        else:
-            # If we have more than one VBD, swap will be first by convention
-            # with the root fs coming second
-            vbd_ref = vbd_refs[1]
+        for vbd_uuid in vbd_refs:
+            vbd = self._session.call_xenapi("VBD.get_record", vbd_uuid)
+            if vbd["userdevice"] == DEVICE_ROOT:
+                return vbd["VDI"]
 
-        return self._session.call_xenapi("VBD.get_record", vbd_ref)["VDI"]
+        raise exception.NotFound(_("Unable to find root VBD/VDI for VM"))
 
     def _safe_destroy_vdis(self, vdi_refs):
         """Destroys the requested VDIs, logging any StorageError exceptions."""
         for vdi_ref in vdi_refs:
             try:
-                VMHelper.destroy_vdi(self._session, vdi_ref)
+                vm_utils.destroy_vdi(self._session, vdi_ref)
             except volume_utils.StorageError as exc:
                 LOG.error(exc)
 
@@ -1068,7 +1036,7 @@ class VMOps(object):
                reason=_("instance has a kernel or ramdisk but not both"))
 
         # 3. We have both kernel and ramdisk
-        (kernel, ramdisk) = VMHelper.lookup_kernel_ramdisk(self._session,
+        (kernel, ramdisk) = vm_utils.lookup_kernel_ramdisk(self._session,
                                                            vm_ref)
 
         self._destroy_kernel_ramdisk_plugin_call(kernel, ramdisk)
@@ -1088,12 +1056,12 @@ class VMOps(object):
         """Destroy a rescue instance."""
         # Shutdown Rescue VM
         vm_rec = self._session.call_xenapi("VM.get_record", rescue_vm_ref)
-        state = VMHelper.compile_info(vm_rec)['state']
+        state = vm_utils.compile_info(vm_rec)['state']
         if state != power_state.SHUTDOWN:
             self._session.call_xenapi("VM.hard_shutdown", rescue_vm_ref)
 
         # Destroy Rescue VDIs
-        vdi_refs = VMHelper.lookup_vm_vdis(self._session, rescue_vm_ref)
+        vdi_refs = vm_utils.lookup_vm_vdis(self._session, rescue_vm_ref)
         root_vdi_ref = self._find_root_vdi_ref(original_vm_ref)
         vdi_refs = [vdi_ref for vdi_ref in vdi_refs if vdi_ref != root_vdi_ref]
         self._safe_destroy_vdis(vdi_refs)
@@ -1113,9 +1081,9 @@ class VMOps(object):
         # We don't use _get_vm_opaque_ref because the instance may
         # truly not exist because of a failure during build. A valid
         # vm_ref is checked correctly where necessary.
-        vm_ref = VMHelper.lookup(self._session, instance['name'])
+        vm_ref = vm_utils.lookup(self._session, instance['name'])
 
-        rescue_vm_ref = VMHelper.lookup(self._session,
+        rescue_vm_ref = vm_utils.lookup(self._session,
                                         "%s-rescue" % instance.name)
         if rescue_vm_ref:
             self._destroy_rescue_instance(rescue_vm_ref, vm_ref)
@@ -1136,11 +1104,11 @@ class VMOps(object):
             LOG.warning(_("VM is not present, skipping destroy..."),
                         instance=instance)
             return
-        is_snapshot = VMHelper.is_snapshot(self._session, vm_ref)
+        is_snapshot = vm_utils.is_snapshot(self._session, vm_ref)
         self._shutdown(instance, vm_ref)
 
         # Destroy VDIs
-        vdi_refs = VMHelper.lookup_vm_vdis(self._session, vm_ref)
+        vdi_refs = vm_utils.lookup_vm_vdis(self._session, vm_ref)
         self._safe_destroy_vdis(vdi_refs)
 
         if destroy_kernel_ramdisk:
@@ -1182,7 +1150,7 @@ class VMOps(object):
             - spawn a rescue VM (the vm name-label will be instance-N-rescue).
 
         """
-        rescue_vm_ref = VMHelper.lookup(self._session,
+        rescue_vm_ref = vm_utils.lookup(self._session,
                                         "%s-rescue" % instance.name)
         if rescue_vm_ref:
             raise RuntimeError(_("Instance is already in Rescue Mode: %s")
@@ -1194,11 +1162,12 @@ class VMOps(object):
         instance._rescue = True
         self.spawn(context, instance, image_meta, network_info)
         # instance.name now has -rescue appended because of magic
-        rescue_vm_ref = VMHelper.lookup(self._session, instance.name)
+        rescue_vm_ref = vm_utils.lookup(self._session, instance.name)
         vdi_ref = self._find_root_vdi_ref(vm_ref)
 
-        rescue_vbd_ref = VMHelper.create_vbd(self._session, rescue_vm_ref,
-                                             vdi_ref, 1, bootable=False)
+        rescue_vbd_ref = vm_utils.create_vbd(self._session, rescue_vm_ref,
+                                             vdi_ref, DEVICE_RESCUE,
+                                             bootable=False)
         self._session.call_xenapi('VBD.plug', rescue_vbd_ref)
 
     def unrescue(self, instance):
@@ -1209,7 +1178,7 @@ class VMOps(object):
             - release the bootlock to allow the instance VM to start.
 
         """
-        rescue_vm_ref = VMHelper.lookup(self._session,
+        rescue_vm_ref = vm_utils.lookup(self._session,
                                         "%s-rescue" % instance.name)
         if not rescue_vm_ref:
             raise exception.InstanceNotInRescueMode(instance_id=instance.uuid)
@@ -1290,14 +1259,14 @@ class VMOps(object):
         for instance in self.list_instances():
             if instance.endswith("-rescue"):
                 rescue_vms.append(dict(name=instance,
-                                       vm_ref=VMHelper.lookup(self._session,
+                                       vm_ref=vm_utils.lookup(self._session,
                                                               instance)))
 
         for vm in rescue_vms:
             rescue_vm_ref = vm["vm_ref"]
 
             original_name = vm["name"].split("-rescue", 1)[0]
-            original_vm_ref = VMHelper.lookup(self._session, original_name)
+            original_vm_ref = vm_utils.lookup(self._session, original_name)
 
             self._destroy_rescue_instance(rescue_vm_ref, original_vm_ref)
 
@@ -1305,79 +1274,23 @@ class VMOps(object):
             self._session.call_xenapi("VM.start", original_vm_ref, False,
                                       False)
 
-    def poll_unconfirmed_resizes(self, resize_confirm_window):
-        """Poll for unconfirmed resizes.
-
-        Look for any unconfirmed resizes that are older than
-        `resize_confirm_window` and automatically confirm them.  Check
-        all migrations despite exceptions when trying to confirm and
-        yield to other greenthreads on each iteration.
-        """
-        ctxt = nova_context.get_admin_context()
-        migrations = db.migration_get_all_unconfirmed(ctxt,
-            resize_confirm_window)
-
-        if migrations:
-            LOG.info(_("Found %(migration_count)d unconfirmed migrations "
-                    "older than %(confirm_window)d seconds") %
-                     {'migration_count': len(migrations),
-                      'confirm_window': resize_confirm_window})
-
-        def _set_migration_to_error(migration_id, reason, **kwargs):
-            msg = _("Setting migration %(migration_id)s to error: "
-                   "%(reason)s") % locals()
-            LOG.warn(msg, **kwargs)
-            db.migration_update(ctxt, migration_id, {'status': 'error'})
-
-        for migration in migrations:
-            # NOTE(comstud): Yield to other greenthreads.  Putting this
-            # at the top so we make sure to do it on each iteration.
-            greenthread.sleep(0)
-            migration_id = migration['id']
-            instance_uuid = migration['instance_uuid']
-            LOG.info(_("Automatically confirming migration %(migration_id)s "
-                       "for instance %(instance_uuid)s"), locals())
-            try:
-                instance = db.instance_get_by_uuid(ctxt, instance_uuid)
-            except exception.InstanceNotFound:
-                reason = _("Instance %(instance_uuid)s not found")
-                _set_migration_to_error(migration_id, reason % locals())
-                continue
-            if instance['vm_state'] == vm_states.ERROR:
-                reason = _("In ERROR state")
-                _set_migration_to_error(migration_id, reason % locals(),
-                                        instance=instance)
-                continue
-            if instance['task_state'] != task_states.RESIZE_VERIFY:
-                task_state = instance['task_state']
-                reason = _("In %(task_state)s task_state, not RESIZE_VERIFY")
-                _set_migration_to_error(migration_id, reason % locals(),
-                                        instance=instance)
-                continue
-            try:
-                self.compute_api.confirm_resize(ctxt, instance)
-            except Exception, e:
-                msg = _("Error auto-confirming resize: %(e)s. "
-                        "Will retry later.")
-                LOG.error(msg % locals(), instance=instance)
-
     def get_info(self, instance):
         """Return data about VM instance."""
         vm_ref = self._get_vm_opaque_ref(instance)
         vm_rec = self._session.call_xenapi("VM.get_record", vm_ref)
-        return VMHelper.compile_info(vm_rec)
+        return vm_utils.compile_info(vm_rec)
 
     def get_diagnostics(self, instance):
         """Return data about VM diagnostics."""
         vm_ref = self._get_vm_opaque_ref(instance)
         vm_rec = self._session.call_xenapi("VM.get_record", vm_ref)
-        return VMHelper.compile_diagnostics(vm_rec)
+        return vm_utils.compile_diagnostics(vm_rec)
 
     def get_all_bw_usage(self, start_time, stop_time=None):
         """Return bandwidth usage info for each interface on each
            running VM"""
         try:
-            metrics = VMHelper.compile_metrics(start_time, stop_time)
+            metrics = vm_utils.compile_metrics(start_time, stop_time)
         except exception.CouldNotFetchMetrics:
             LOG.exception(_("Could not get bandwidth info."))
             return {}
@@ -1418,21 +1331,89 @@ class VMOps(object):
         return {'host': FLAGS.vncserver_proxyclient_address, 'port': 80,
                 'internal_access_path': path}
 
+    def _vif_xenstore_data(self, vif):
+        """convert a network info vif to injectable instance data"""
+
+        def get_ip(ip):
+            if not ip:
+                return None
+            return ip['address']
+
+        def fixed_ip_dict(ip, subnet):
+            if ip['version'] == 4:
+                netmask = str(subnet.as_netaddr().netmask)
+            else:
+                netmask = subnet.as_netaddr()._prefixlen
+
+            return {'ip': ip['address'],
+                    'enabled': '1',
+                    'netmask': netmask,
+                    'gateway': get_ip(subnet['gateway'])}
+
+        def convert_route(route):
+            return {'route': str(netaddr.IPNetwork(route['cidr']).network),
+                    'netmask': str(netaddr.IPNetwork(route['cidr']).netmask),
+                    'gateway': get_ip(route['gateway'])}
+
+        network = vif['network']
+        v4_subnets = [subnet for subnet in network['subnets']
+                             if subnet['version'] == 4]
+        v6_subnets = [subnet for subnet in network['subnets']
+                             if subnet['version'] == 6]
+
+        # NOTE(tr3buchet): routes and DNS come from all subnets
+        routes = [convert_route(route) for subnet in network['subnets']
+                                       for route in subnet['routes']]
+        dns = [get_ip(ip) for subnet in network['subnets']
+                          for ip in subnet['dns']]
+
+        info_dict = {'label': network['label'],
+                     'mac': vif['address']}
+
+        if v4_subnets:
+            # NOTE(tr3buchet): gateway and broadcast from first subnet
+            #                  primary IP will be from first subnet
+            #                  subnets are generally unordered :(
+            info_dict['gateway'] = get_ip(v4_subnets[0]['gateway'])
+            info_dict['broadcast'] = str(v4_subnets[0].as_netaddr().broadcast)
+            info_dict['ips'] = [fixed_ip_dict(ip, subnet)
+                                for subnet in v4_subnets
+                                for ip in subnet['ips']]
+        if v6_subnets:
+            # NOTE(tr3buchet): gateway from first subnet
+            #                  primary IP will be from first subnet
+            #                  subnets are generally unordered :(
+            info_dict['gateway_v6'] = get_ip(v6_subnets[0]['gateway'])
+            info_dict['ip6s'] = [fixed_ip_dict(ip, subnet)
+                                 for subnet in v6_subnets
+                                 for ip in subnet['ips']]
+        if routes:
+            info_dict['routes'] = routes
+
+        if dns:
+            info_dict['dns'] = dns
+
+        return info_dict
+
     def inject_network_info(self, instance, network_info, vm_ref=None):
         """
         Generate the network info and make calls to place it into the
         xenstore and the xenstore param list.
         vm_ref can be passed in because it will sometimes be different than
-        what VMHelper.lookup(session, instance.name) will find (ex: rescue)
+        what vm_utils.lookup(session, instance.name) will find (ex: rescue)
         """
         vm_ref = vm_ref or self._get_vm_opaque_ref(instance)
         LOG.debug(_("Injecting network info to xenstore"), instance=instance)
 
-        for (network, info) in network_info:
-            location = 'vm-data/networking/%s' % info['mac'].replace(':', '')
-            self._add_to_param_xenstore(vm_ref, location, json.dumps(info))
+        for vif in network_info:
+            xs_data = self._vif_xenstore_data(vif)
+            location = ('vm-data/networking/%s' %
+                        vif['address'].replace(':', ''))
+            self._add_to_param_xenstore(vm_ref,
+                                        location,
+                                        jsonutils.dumps(xs_data))
             try:
-                self._write_to_xenstore(instance, location, info,
+                self._write_to_xenstore(instance, location, xs_data,
                                         vm_ref=vm_ref)
             except KeyError:
                 # catch KeyError for domid if instance isn't running
@@ -1446,8 +1427,8 @@ class VMOps(object):
         # this function raises if vm_ref is not a vm_opaque_ref
         self._session.call_xenapi("VM.get_record", vm_ref)
 
-        for device, (network, info) in enumerate(network_info):
-            vif_rec = self.vif_driver.plug(instance, network, info,
+        for device, vif in enumerate(network_info):
+            vif_rec = self.vif_driver.plug(instance, vif,
                                            vm_ref=vm_ref, device=device)
             network_ref = vif_rec['network']
             LOG.debug(_('Creating VIF for network %(network_ref)s'),
@@ -1458,13 +1439,13 @@ class VMOps(object):
 
     def plug_vifs(self, instance, network_info):
         """Set up VIF networking on the host."""
-        for device, (network, mapping) in enumerate(network_info):
-            self.vif_driver.plug(instance, network, mapping, device=device)
+        for device, vif in enumerate(network_info):
+            self.vif_driver.plug(instance, vif, device=device)
 
     def unplug_vifs(self, instance, network_info):
         if network_info:
-            for (network, mapping) in network_info:
-                self.vif_driver.unplug(instance, network, mapping)
+            for vif in network_info:
+                self.vif_driver.unplug(instance, vif)
 
     def reset_network(self, instance, vm_ref=None):
         """Calls resetnetwork method in agent."""
@@ -1487,7 +1468,7 @@ class VMOps(object):
         """
         return self._make_plugin_call('xenstore.py', 'write_record', instance,
                                       vm_ref=vm_ref, path=path,
-                                      value=json.dumps(value))
+                                      value=jsonutils.dumps(value))
 
     def _make_agent_call(self, method, instance, args=None, vm_ref=None):
         """Abstracts out the interaction with the agent xenapi plugin."""
@@ -1499,7 +1480,7 @@ class VMOps(object):
         if isinstance(ret, dict):
             return ret
         try:
-            return json.loads(ret)
+            return jsonutils.loads(ret)
         except TypeError:
             LOG.error(_('The agent call to %(method)s returned an invalid'
                         ' response: %(ret)r. path=%(path)s; args=%(args)r'),

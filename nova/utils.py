@@ -25,8 +25,6 @@ import errno
 import functools
 import hashlib
 import inspect
-import itertools
-import json
 import os
 import pyclbr
 import random
@@ -41,14 +39,13 @@ import threading
 import time
 import types
 import uuid
-import warnings
 from xml.sax import saxutils
 
 from eventlet import corolocal
 from eventlet import event
+from eventlet.green import subprocess
 from eventlet import greenthread
 from eventlet import semaphore
-from eventlet.green import subprocess
 import iso8601
 import lockfile
 import netaddr
@@ -286,27 +283,6 @@ def novadir():
     return os.path.abspath(nova.__file__).split('nova/__init__.py')[0]
 
 
-def default_flagfile(filename='nova.conf', args=None):
-    if args is None:
-        args = sys.argv
-    for arg in args:
-        if arg.find('flagfile') != -1:
-            return arg[arg.index('flagfile') + len('flagfile') + 1:]
-    else:
-        if not os.path.isabs(filename):
-            # turn relative filename into an absolute path
-            script_dir = os.path.dirname(inspect.stack()[-1][1])
-            filename = os.path.abspath(os.path.join(script_dir, filename))
-        if not os.path.exists(filename):
-            filename = "./nova.conf"
-            if not os.path.exists(filename):
-                filename = '/etc/nova/nova.conf'
-        if os.path.exists(filename):
-            flagfile = '--flagfile=%s' % filename
-            args.insert(1, flagfile)
-            return filename
-
-
 def debug(arg):
     LOG.debug(_('debug in callback: %s'), arg)
     return arg
@@ -490,7 +466,7 @@ def utcnow_ts():
     return time.mktime(utcnow().timetuple())
 
 
-def set_time_override(override_time=datetime.datetime.utcnow()):
+def set_time_override(override_time=utcnow()):
     """Override utils.utcnow to return a constant time."""
     utcnow.override_time = override_time
 
@@ -526,7 +502,7 @@ def parse_strtime(timestr, fmt=PERFECT_TIME_FORMAT):
 def isotime(at=None):
     """Stringify time in ISO 8601 format"""
     if not at:
-        at = datetime.datetime.utcnow()
+        at = utcnow()
     str = at.strftime(ISO_TIME_FORMAT)
     tz = at.tzinfo.tzname(None) if at.tzinfo else 'UTC'
     str += ('Z' if tz == 'UTC' else tz)
@@ -675,104 +651,6 @@ def utf8(value):
         return value.encode('utf-8')
     assert isinstance(value, str)
     return value
-
-
-def to_primitive(value, convert_instances=False, level=0):
-    """Convert a complex object into primitives.
-
-    Handy for JSON serialization. We can optionally handle instances,
-    but since this is a recursive function, we could have cyclical
-    data structures.
-
-    To handle cyclical data structures we could track the actual objects
-    visited in a set, but not all objects are hashable. Instead we just
-    track the depth of the object inspections and don't go too deep.
-
-    Therefore, convert_instances=True is lossy ... be aware.
-
-    """
-    nasty = [inspect.ismodule, inspect.isclass, inspect.ismethod,
-             inspect.isfunction, inspect.isgeneratorfunction,
-             inspect.isgenerator, inspect.istraceback, inspect.isframe,
-             inspect.iscode, inspect.isbuiltin, inspect.isroutine,
-             inspect.isabstract]
-    for test in nasty:
-        if test(value):
-            return unicode(value)
-
-    # value of itertools.count doesn't get caught by inspects
-    # above and results in infinite loop when list(value) is called.
-    if type(value) == itertools.count:
-        return unicode(value)
-
-    # FIXME(vish): Workaround for LP bug 852095. Without this workaround,
-    #              tests that raise an exception in a mocked method that
-    #              has a @wrap_exception with a notifier will fail. If
-    #              we up the dependency to 0.5.4 (when it is released) we
-    #              can remove this workaround.
-    if getattr(value, '__module__', None) == 'mox':
-        return 'mock'
-
-    if level > 3:
-        return '?'
-
-    # The try block may not be necessary after the class check above,
-    # but just in case ...
-    try:
-        if isinstance(value, (list, tuple)):
-            o = []
-            for v in value:
-                o.append(to_primitive(v, convert_instances=convert_instances,
-                                      level=level))
-            return o
-        elif isinstance(value, dict):
-            o = {}
-            for k, v in value.iteritems():
-                o[k] = to_primitive(v, convert_instances=convert_instances,
-                                    level=level)
-            return o
-        elif isinstance(value, datetime.datetime):
-            return str(value)
-        elif hasattr(value, 'iteritems'):
-            return to_primitive(dict(value.iteritems()),
-                                convert_instances=convert_instances,
-                                level=level)
-        elif hasattr(value, '__iter__'):
-            return to_primitive(list(value), level)
-        elif convert_instances and hasattr(value, '__dict__'):
-            # Likely an instance of something. Watch for cycles.
-            # Ignore class member vars.
-            return to_primitive(value.__dict__,
-                                convert_instances=convert_instances,
-                                level=level + 1)
-        else:
-            return value
-    except TypeError, e:
-        # Class objects are tricky since they may define something like
-        # __iter__ defined but it isn't callable as list().
-        return unicode(value)
-
-
-def dumps(value):
-    try:
-        return json.dumps(value)
-    except TypeError:
-        pass
-    return json.dumps(to_primitive(value))
-
-
-def loads(s):
-    return json.loads(s)
-
-
-try:
-    import anyjson
-except ImportError:
-    pass
-else:
-    anyjson._modules.append(("nova.utils", "dumps", TypeError,
-                                           "loads", ValueError))
-    anyjson.force_implementation("nova.utils")
 
 
 class GreenLockFile(lockfile.FileLock):
@@ -1239,7 +1117,7 @@ def generate_glance_url():
 
 
 def generate_image_url(image_ref):
-    """Generate a image URL from an image_ref."""
+    """Generate an image URL from an image_ref."""
     return "%s/images/%s" % (generate_glance_url(), image_ref)
 
 
@@ -1359,173 +1237,6 @@ def temporary_mutation(obj, **kwargs):
                 del obj[attr]
             else:
                 setattr(obj, attr, old_value)
-
-
-def warn_deprecated_class(cls, msg):
-    """
-    Issues a warning to indicate that the given class is deprecated.
-    If a message is given, it is appended to the deprecation warning.
-    """
-
-    fullname = '%s.%s' % (cls.__module__, cls.__name__)
-    if msg:
-        fullmsg = _("Class %(fullname)s is deprecated: %(msg)s")
-    else:
-        fullmsg = _("Class %(fullname)s is deprecated")
-
-    # Issue the warning
-    warnings.warn(fullmsg % locals(), DeprecationWarning, stacklevel=3)
-
-
-def warn_deprecated_function(func, msg):
-    """
-    Issues a warning to indicate that the given function is
-    deprecated.  If a message is given, it is appended to the
-    deprecation warning.
-    """
-
-    name = func.__name__
-
-    # Find the function's definition
-    sourcefile = inspect.getsourcefile(func)
-
-    # Find the line number, if possible
-    if inspect.ismethod(func):
-        code = func.im_func.func_code
-    else:
-        code = func.func_code
-    lineno = getattr(code, 'co_firstlineno', None)
-
-    if lineno is None:
-        location = sourcefile
-    else:
-        location = "%s:%d" % (sourcefile, lineno)
-
-    # Build up the message
-    if msg:
-        fullmsg = _("Function %(name)s in %(location)s is deprecated: %(msg)s")
-    else:
-        fullmsg = _("Function %(name)s in %(location)s is deprecated")
-
-    # Issue the warning
-    warnings.warn(fullmsg % locals(), DeprecationWarning, stacklevel=3)
-
-
-def _stubout(klass, message):
-    """
-    Scans a class and generates wrapping stubs for __new__() and every
-    class and static method.  Returns a dictionary which can be passed
-    to type() to generate a wrapping class.
-    """
-
-    overrides = {}
-
-    def makestub_class(name, func):
-        """
-        Create a stub for wrapping class methods.
-        """
-
-        def stub(cls, *args, **kwargs):
-            warn_deprecated_class(klass, message)
-            return func(*args, **kwargs)
-
-        # Overwrite the stub's name
-        stub.__name__ = name
-        stub.func_name = name
-
-        return classmethod(stub)
-
-    def makestub_static(name, func):
-        """
-        Create a stub for wrapping static methods.
-        """
-
-        def stub(*args, **kwargs):
-            warn_deprecated_class(klass, message)
-            return func(*args, **kwargs)
-
-        # Overwrite the stub's name
-        stub.__name__ = name
-        stub.func_name = name
-
-        return staticmethod(stub)
-
-    for name, kind, _klass, _obj in inspect.classify_class_attrs(klass):
-        # We're only interested in __new__(), class methods, and
-        # static methods...
-        if (name != '__new__' and
-            kind not in ('class method', 'static method')):
-            continue
-
-        # Get the function...
-        func = getattr(klass, name)
-
-        # Override it in the class
-        if kind == 'class method':
-            stub = makestub_class(name, func)
-        elif kind == 'static method' or name == '__new__':
-            stub = makestub_static(name, func)
-
-        # Save it in the overrides dictionary...
-        overrides[name] = stub
-
-    # Apply the overrides
-    for name, stub in overrides.items():
-        setattr(klass, name, stub)
-
-
-def deprecated(message=''):
-    """
-    Marks a function, class, or method as being deprecated.  For
-    functions and methods, emits a warning each time the function or
-    method is called.  For classes, generates a new subclass which
-    will emit a warning each time the class is instantiated, or each
-    time any class or static method is called.
-
-    If a message is passed to the decorator, that message will be
-    appended to the emitted warning.  This may be used to suggest an
-    alternate way of achieving the desired effect, or to explain why
-    the function, class, or method is deprecated.
-    """
-
-    def decorator(f_or_c):
-        # Make sure we can deprecate it...
-        if not callable(f_or_c) or isinstance(f_or_c, types.ClassType):
-            warnings.warn("Cannot mark object %r as deprecated" % f_or_c,
-                          DeprecationWarning, stacklevel=2)
-            return f_or_c
-
-        # If we're deprecating a class, create a subclass of it and
-        # stub out all the class and static methods
-        if inspect.isclass(f_or_c):
-            klass = f_or_c
-            _stubout(klass, message)
-            return klass
-
-        # OK, it's a function; use a traditional wrapper...
-        func = f_or_c
-
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            warn_deprecated_function(func, message)
-
-            return func(*args, **kwargs)
-
-        return wrapper
-    return decorator
-
-
-def _showwarning(message, category, filename, lineno, file=None, line=None):
-    """
-    Redirect warnings into logging.
-    """
-
-    fmtmsg = warnings.formatwarning(message, category, filename, lineno, line)
-    LOG.warning(fmtmsg)
-
-
-# Install our warnings handler
-warnings.showwarning = _showwarning
 
 
 def service_is_up(service):

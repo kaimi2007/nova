@@ -15,18 +15,19 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import functools
 import itertools
+import logging
 import time
 import uuid
-import json
 
 import eventlet
 import greenlet
 import qpid.messaging
 import qpid.messaging.exceptions
 
-from nova import log as logging
 from nova.openstack.common import cfg
+from nova.openstack.common import jsonutils
 from nova.rpc import amqp as rpc_amqp
 from nova.rpc import common as rpc_common
 
@@ -77,6 +78,8 @@ qpid_opts = [
                 help='Disable Nagle algorithm'),
     ]
 
+cfg.CONF.register_opts(qpid_opts)
+
 
 class ConsumerBase(object):
     """Consumer base class."""
@@ -121,7 +124,7 @@ class ConsumerBase(object):
         addr_opts["node"]["x-declare"].update(node_opts)
         addr_opts["link"]["x-declare"].update(link_opts)
 
-        self.address = "%s ; %s" % (node_name, json.dumps(addr_opts))
+        self.address = "%s ; %s" % (node_name, jsonutils.dumps(addr_opts))
 
         self.reconnect(session)
 
@@ -134,7 +137,12 @@ class ConsumerBase(object):
     def consume(self):
         """Fetch the message and pass it to the callback object"""
         message = self.receiver.fetch()
-        self.callback(message.content)
+        try:
+            self.callback(message.content)
+        except Exception:
+            LOG.exception(_("Failed to process message... skipping it."))
+        finally:
+            self.session.acknowledge(message)
 
     def get_receiver(self):
         return self.receiver
@@ -161,17 +169,19 @@ class DirectConsumer(ConsumerBase):
 class TopicConsumer(ConsumerBase):
     """Consumer class for 'topic'"""
 
-    def __init__(self, conf, session, topic, callback):
+    def __init__(self, conf, session, topic, callback, name=None):
         """Init a 'topic' queue.
 
-        'session' is the amqp session to use
-        'topic' is the topic to listen on
-        'callback' is the callback to call when messages are received
+        :param session: the amqp session to use
+        :param topic: is the topic to listen on
+        :paramtype topic: str
+        :param callback: the callback to call when messages are received
+        :param name: optional queue name, defaults to topic
         """
 
         super(TopicConsumer, self).__init__(session, callback,
                         "%s/%s" % (conf.control_exchange, topic), {},
-                        topic, {})
+                        name or topic, {})
 
 
 class FanoutConsumer(ConsumerBase):
@@ -217,7 +227,7 @@ class Publisher(object):
         if node_opts:
             addr_opts["node"]["x-declare"].update(node_opts)
 
-        self.address = "%s ; %s" % (node_name, json.dumps(addr_opts))
+        self.address = "%s ; %s" % (node_name, jsonutils.dumps(addr_opts))
 
         self.reconnect(session)
 
@@ -448,9 +458,12 @@ class Connection(object):
         """
         self.declare_consumer(DirectConsumer, topic, callback)
 
-    def declare_topic_consumer(self, topic, callback=None):
+    def declare_topic_consumer(self, topic, callback=None, queue_name=None):
         """Create a 'topic' consumer."""
-        self.declare_consumer(TopicConsumer, topic, callback)
+        self.declare_consumer(functools.partial(TopicConsumer,
+                                                name=queue_name,
+                                                ),
+                              topic, callback)
 
     def declare_fanout_consumer(self, topic, callback):
         """Create a 'fanout' consumer"""
@@ -495,12 +508,24 @@ class Connection(object):
     def create_consumer(self, topic, proxy, fanout=False):
         """Create a consumer that calls a method in a proxy object"""
         proxy_cb = rpc_amqp.ProxyCallback(self.conf, proxy,
-                rpc_amqp.get_connection_pool(self, Connection))
+                rpc_amqp.get_connection_pool(self.conf, Connection))
 
         if fanout:
             consumer = FanoutConsumer(self.conf, self.session, topic, proxy_cb)
         else:
             consumer = TopicConsumer(self.conf, self.session, topic, proxy_cb)
+
+        self._register_consumer(consumer)
+
+        return consumer
+
+    def create_worker(self, topic, proxy, pool_name):
+        """Create a worker that calls a method in a proxy object"""
+        proxy_cb = rpc_amqp.ProxyCallback(self.conf, proxy,
+                rpc_amqp.get_connection_pool(self.conf, Connection))
+
+        consumer = TopicConsumer(self.conf, self.session, topic, proxy_cb,
+                                 name=pool_name)
 
         self._register_consumer(consumer)
 
@@ -557,7 +582,3 @@ def notify(conf, context, topic, msg):
 
 def cleanup():
     return rpc_amqp.cleanup(Connection.pool)
-
-
-def register_opts(conf):
-    conf.register_opts(qpid_opts)

@@ -16,10 +16,8 @@
 #    under the License.
 #    @author: Dan Wendlandt Nicira Networks
 
-import copy
-
-from nova import utils
 from nova.network.quantum import client
+from nova import utils
 
 #TODO(danwent): would be nice to have these functions raise QuantumIOErrors
 # to make sure such errors are caught and reported properly

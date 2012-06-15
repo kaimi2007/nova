@@ -18,12 +18,12 @@
 
 import unittest
 
+from nova.auth import fakeldap
+from nova.auth import manager
 from nova import exception
 from nova import flags
 from nova import log as logging
 from nova import test
-from nova.auth import manager
-from nova.auth import fakeldap
 
 FLAGS = flags.FLAGS
 LOG = logging.getLogger(__name__)
@@ -91,7 +91,7 @@ class _AuthManagerBaseTestCase(test.TestCase):
     def setUp(self):
         super(_AuthManagerBaseTestCase, self).setUp()
         self.flags(auth_driver=self.auth_driver,
-                connection_type='fake')
+                compute_driver='nova.virt.fake.FakeDriver')
         self.manager = manager.AuthManager(new=True)
         self.manager.mc.cache = {}
 

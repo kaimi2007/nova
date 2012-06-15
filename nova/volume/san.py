@@ -23,7 +23,6 @@ controller on the SAN hardware.  We expect to access it over SSH or some API.
 
 import base64
 import httplib
-import json
 import os
 import paramiko
 import random
@@ -37,6 +36,7 @@ from nova import exception
 from nova import flags
 from nova import log as logging
 from nova.openstack.common import cfg
+from nova.openstack.common import jsonutils
 from nova import utils
 import nova.volume.driver
 
@@ -45,7 +45,7 @@ LOG = logging.getLogger(__name__)
 
 san_opts = [
     cfg.BoolOpt('san_thin_provision',
-                default='true',
+                default=True,
                 help='Use thin provisioning for SAN volumes?'),
     cfg.StrOpt('san_ip',
                default='',
@@ -66,7 +66,7 @@ san_opts = [
                default=22,
                help='SSH port to use with SAN'),
     cfg.BoolOpt('san_is_local',
-                default='false',
+                default=False,
                 help='Execute commands locally instead of over SSH; '
                      'use if the volume service is running on the SAN device'),
     cfg.StrOpt('san_zfs_volume_base',
@@ -361,7 +361,7 @@ class SolarisISCSIDriver(SanISCSIDriver):
         iscsi_name = self._build_iscsi_target_name(volume)
         target_group_name = 'tg-%s' % volume['name']
 
-        # Create a iSCSI target, mapped to just this volume
+        # Create an iSCSI target, mapped to just this volume
         if force_create or not self._target_group_exists(target_group_name):
             self._execute('/usr/sbin/stmfadm', 'create-tg', target_group_name)
 
@@ -673,7 +673,7 @@ class SolidFireSanISCSIDriver(SanISCSIDriver):
         if params is not None:
             command['params'] = params
 
-        payload = json.dumps(command, ensure_ascii=False)
+        payload = jsonutils.dumps(command, ensure_ascii=False)
         payload.encode('utf-8')
         # we use json-rpc, webserver needs to see json-rpc in header
         header = {'Content-Type': 'application/json-rpc; charset=utf-8'}
@@ -698,11 +698,12 @@ class SolidFireSanISCSIDriver(SanISCSIDriver):
         else:
             data = response.read()
             try:
-                data = json.loads(data)
+                data = jsonutils.loads(data)
 
             except (TypeError, ValueError), exc:
                 connection.close()
-                msg = _("Call to json.loads() raised an exception: %s") % exc
+                msg = _("Call to jsonutils.loads() "
+                        "raised an exception: %s") % exc
                 raise exception.SfJsonEncodeFailure(msg)
 
             connection.close()

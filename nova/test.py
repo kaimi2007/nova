@@ -24,10 +24,8 @@ inline callbacks.
 """
 
 import functools
-import os
-import shutil
-import uuid
 import unittest
+import uuid
 
 import mox
 import nose.plugins.skip
@@ -37,9 +35,10 @@ from nova import flags
 import nova.image.fake
 from nova import log as logging
 from nova.openstack.common import cfg
-from nova import utils
 from nova import service
 from nova import tests
+from nova.tests import fake_flags
+from nova import utils
 from nova.virt import fake
 
 
@@ -125,6 +124,10 @@ class TestCase(unittest.TestCase):
     def setUp(self):
         """Run before each test method to initialize test environment."""
         super(TestCase, self).setUp()
+
+        fake_flags.set_defaults(FLAGS)
+        flags.parse_args([], default_config_files=[])
+
         # NOTE(vish): We need a better method for creating fixtures for tests
         #             now that we have some required db setup for the system
         #             to work properly.
@@ -137,7 +140,6 @@ class TestCase(unittest.TestCase):
         self.stubs = stubout.StubOutForTesting()
         self.injected = []
         self._services = []
-        self._overridden_opts = []
 
     def tearDown(self):
         """Runs after each test method to tear down test environment."""
@@ -148,15 +150,11 @@ class TestCase(unittest.TestCase):
             self.mox.VerifyAll()
             super(TestCase, self).tearDown()
         finally:
-            if FLAGS.connection_type == 'fake':
-                if hasattr(fake.FakeConnection, '_instance'):
-                    del fake.FakeConnection._instance
-
             if FLAGS.image_service == 'nova.image.fake.FakeImageService':
                 nova.image.fake.FakeImageService_reset()
 
             # Reset any overridden flags
-            self.reset_flags()
+            FLAGS.reset()
 
             # Stop any timers
             for x in self.injected:
@@ -182,17 +180,6 @@ class TestCase(unittest.TestCase):
         """Override flag variables for a test."""
         for k, v in kw.iteritems():
             FLAGS.set_override(k, v)
-            self._overridden_opts.append(k)
-
-    def reset_flags(self):
-        """Resets all flag variables for the test.
-
-        Runs after each test.
-
-        """
-        for k in self._overridden_opts:
-            FLAGS.set_override(k, None)
-        self._overridden_opts = []
 
     def start_service(self, name, host=None, **kwargs):
         host = host and host or uuid.uuid4().hex
@@ -302,3 +289,30 @@ class TestCase(unittest.TestCase):
             self.assertFalse(a in b, *args, **kwargs)
         else:
             f(a, b, *args, **kwargs)
+
+    def assertNotRaises(self, exc_class, func, *args, **kwargs):
+        """Assert that a particular exception is not raised.
+
+        If exc_class is None, then we assert that *no* error is raised.
+
+        Otherwise, we assert that only a particular error wasn't raised;
+        if any different exceptions were raised, we just silently capture
+        them and return.
+        """
+        exc_msg = kwargs.pop('exc_msg', '')
+
+        if exc_class is None:
+            # Ensure no errors were raised
+            try:
+                return func(*args, **kwargs)
+            except Exception:
+                raise
+                raise AssertionError(exc_msg)
+        else:
+            # Ensure a specific error wasn't raised
+            try:
+                return func(*args, **kwargs)
+            except exc_class:
+                raise AssertionError(exc_msg)
+            except Exception:
+                pass  # Any other errors are fine

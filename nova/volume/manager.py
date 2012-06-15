@@ -46,13 +46,14 @@ from nova import manager
 from nova.openstack.common import cfg
 from nova.openstack.common import excutils
 from nova.openstack.common import importutils
-from nova import rpc
+from nova import quota
 from nova import utils
-from nova.volume import volume_types
 from nova.volume import utils as volume_utils
 
 
 LOG = logging.getLogger(__name__)
+
+QUOTAS = quota.QUOTAS
 
 volume_manager_opts = [
     cfg.StrOpt('storage_availability_zone',
@@ -103,7 +104,8 @@ class VolumeManager(manager.SchedulerDependentManager):
             else:
                 LOG.info(_("volume %s: skipping export"), volume['name'])
 
-    def create_volume(self, context, volume_id, snapshot_id=None):
+    def create_volume(self, context, volume_id, snapshot_id=None,
+                      reservations=None):
         """Creates and exports the volume."""
         context = context.elevated()
         volume_ref = self.db.volume_get(context, volume_id)
@@ -136,13 +138,19 @@ class VolumeManager(manager.SchedulerDependentManager):
             model_update = self.driver.create_export(context, volume_ref)
             if model_update:
                 self.db.volume_update(context, volume_ref['id'], model_update)
+
+            # Commit the reservation
+            if reservations:
+                QUOTAS.commit(context, reservations)
         except Exception:
             with excutils.save_and_reraise_exception():
+                if reservations:
+                    QUOTAS.rollback(context, reservations)
                 self.db.volume_update(context,
                                       volume_ref['id'], {'status': 'error'})
 
         now = utils.utcnow()
-        self.db.volume_update(context,
+        volume_ref = self.db.volume_update(context,
                               volume_ref['id'], {'status': 'available',
                                                  'launched_at': now})
         LOG.debug(_("volume %s: created successfully"), volume_ref['name'])
@@ -179,9 +187,22 @@ class VolumeManager(manager.SchedulerDependentManager):
                                       volume_ref['id'],
                                       {'status': 'error_deleting'})
 
-        self.db.volume_destroy(context, volume_id)
+        # Get reservations
+        try:
+            reservations = QUOTAS.reserve(context, volumes=-1,
+                                          gigabytes=-volume_ref['size'])
+        except Exception:
+            reservations = None
+            LOG.exception(_("Failed to update usages deleting volume"))
+
+        volume_ref = self.db.volume_destroy(context, volume_id)
         LOG.debug(_("volume %s: deleted successfully"), volume_ref['name'])
         self._notify_about_volume_usage(context, volume_ref, "delete.end")
+
+        # Commit the reservations
+        if reservations:
+            QUOTAS.commit(context, reservations)
+
         return True
 
     def create_snapshot(self, context, volume_id, snapshot_id):

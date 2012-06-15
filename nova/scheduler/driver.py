@@ -23,15 +23,17 @@ Scheduler base class that all Schedulers should inherit from
 
 from nova.compute import api as compute_api
 from nova.compute import power_state
+from nova.compute import rpcapi as compute_rpcapi
 from nova.compute import vm_states
 from nova import db
 from nova import exception
 from nova import flags
 from nova import log as logging
+from nova import notifications
 from nova.openstack.common import cfg
 from nova.openstack.common import importutils
+from nova.openstack.common import jsonutils
 from nova import rpc
-from nova.rpc import common as rpc_common
 from nova import utils
 
 
@@ -60,8 +62,8 @@ def cast_to_volume_host(context, host, method, update_db=True, **kwargs):
             db.volume_update(context, volume_id,
                     {'host': host, 'scheduled_at': now})
     rpc.cast(context,
-            db.queue_get_for(context, 'volume', host),
-            {"method": method, "args": kwargs})
+             rpc.queue_get_for(context, 'volume', host),
+             {"method": method, "args": kwargs})
     LOG.debug(_("Casted '%(method)s' to volume '%(host)s'") % locals())
 
 
@@ -77,8 +79,8 @@ def cast_to_compute_host(context, host, method, update_db=True, **kwargs):
             db.instance_update(context, instance_uuid,
                     {'host': host, 'scheduled_at': now})
     rpc.cast(context,
-            db.queue_get_for(context, 'compute', host),
-            {"method": method, "args": kwargs})
+             rpc.queue_get_for(context, 'compute', host),
+             {"method": method, "args": kwargs})
     LOG.debug(_("Casted '%(method)s' to compute '%(host)s'") % locals())
 
 
@@ -86,8 +88,8 @@ def cast_to_network_host(context, host, method, update_db=False, **kwargs):
     """Cast request to a network host queue"""
 
     rpc.cast(context,
-            db.queue_get_for(context, 'network', host),
-            {"method": method, "args": kwargs})
+             rpc.queue_get_for(context, 'network', host),
+             {"method": method, "args": kwargs})
     LOG.debug(_("Casted '%(method)s' to network '%(host)s'") % locals())
 
 
@@ -104,8 +106,8 @@ def cast_to_host(context, topic, host, method, update_db=True, **kwargs):
         func(context, host, method, update_db=update_db, **kwargs)
     else:
         rpc.cast(context,
-            db.queue_get_for(context, topic, host),
-                {"method": method, "args": kwargs})
+                 rpc.queue_get_for(context, topic, host),
+                 {"method": method, "args": kwargs})
         LOG.debug(_("Casted '%(method)s' to %(topic)s '%(host)s'")
                 % locals())
 
@@ -135,6 +137,7 @@ class Scheduler(object):
         self.host_manager = importutils.import_object(
                 FLAGS.scheduler_host_manager)
         self.compute_api = compute_api.API()
+        self.compute_rpcapi = compute_rpcapi.ComputeAPI()
 
     def get_host_list(self):
         """Get a list of hosts from the HostManager."""
@@ -158,7 +161,7 @@ class Scheduler(object):
                 for service in services
                 if utils.service_is_up(service)]
 
-    def create_instance_db_entry(self, context, request_spec):
+    def create_instance_db_entry(self, context, request_spec, reservations):
         """Create instance DB entry based on request_spec"""
         base_options = request_spec['instance_properties']
         if base_options.get('uuid'):
@@ -171,7 +174,7 @@ class Scheduler(object):
 
         instance = self.compute_api.create_db_entry_for_new_instance(
                 context, instance_type, image, base_options,
-                security_group, block_device_mapping)
+                security_group, block_device_mapping, reservations)
         # NOTE(comstud): This needs to be set for the generic exception
         # checking in scheduler manager, so that it'll set this instance
         # to ERROR properly.
@@ -225,7 +228,12 @@ class Scheduler(object):
 
         # Changing instance_state.
         values = {"vm_state": vm_states.MIGRATING}
-        db.instance_update(context, instance_id, values)
+
+        # update instance state and notify
+        (old_ref, new_instance_ref) = db.instance_update_and_get_original(
+                context, instance_id, values)
+        notifications.send_update(context, old_ref, new_instance_ref,
+                service="scheduler")
 
         src = instance_ref['host']
         cast_to_compute_host(context, src, 'live_migration',
@@ -243,9 +251,7 @@ class Scheduler(object):
         """
 
         # Checking instance is running.
-        if instance_ref['power_state'] != power_state.RUNNING and not (
-            FLAGS.libvirt_type == 'xen' and
-            instance_ref['power_state'] == power_state.BLOCKED):
+        if instance_ref['power_state'] != power_state.RUNNING:
             raise exception.InstanceNotRunning(
                     instance_id=instance_ref['uuid'])
 
@@ -348,10 +354,8 @@ class Scheduler(object):
 
         # Checking cpuinfo.
         try:
-            rpc.call(context,
-                     db.queue_get_for(context, FLAGS.compute_topic, dest),
-                     {"method": 'compare_cpu',
-                      "args": {'cpu_info': oservice_ref['cpu_info']}})
+            self.compute_rpcapi.compare_cpu(context, oservice_ref['cpu_info'],
+                                            dest)
 
         except exception.InvalidCPUInfo:
             src = instance_ref['host']
@@ -437,12 +441,8 @@ class Scheduler(object):
         available = available_gb * (1024 ** 3)
 
         # Getting necessary disk size
-        topic = db.queue_get_for(context, FLAGS.compute_topic,
-                                          instance_ref['host'])
-        ret = rpc.call(context, topic,
-                       {"method": 'get_instance_disk_info',
-                        "args": {'instance_name': instance_ref['name']}})
-        disk_infos = utils.loads(ret)
+        ret = self.compute_rpcapi.get_instance_disk_info(context, instance_ref)
+        disk_infos = jsonutils.loads(ret)
 
         necessary = 0
         if disk_over_commit:
@@ -486,21 +486,17 @@ class Scheduler(object):
         """
 
         src = instance_ref['host']
-        dst_t = db.queue_get_for(context, FLAGS.compute_topic, dest)
-        src_t = db.queue_get_for(context, FLAGS.compute_topic, src)
 
-        filename = rpc.call(context, dst_t,
-                            {"method": 'create_shared_storage_test_file'})
+        filename = self.compute_rpcapi.create_shared_storage_test_file(context,
+                dest)
 
         try:
             # make sure existence at src host.
-            ret = rpc.call(context, src_t,
-                        {"method": 'check_shared_storage_test_file',
-                        "args": {'filename': filename}})
+            ret = self.compute_rpcapi.check_shared_storage_test_file(context,
+                    filename, src)
 
         finally:
-            rpc.cast(context, dst_t,
-                    {"method": 'cleanup_shared_storage_test_file',
-                    "args": {'filename': filename}})
+            self.compute_rpcapi.cleanup_shared_storage_test_file(context,
+                    filename, dest)
 
         return ret

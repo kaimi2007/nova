@@ -17,15 +17,15 @@
 
 """Tests For miscellaneous util methods used with volume."""
 
+from nova import context
 from nova import db
 from nova import flags
-from nova import context
-from nova import test
-from nova import log as logging
 import nova.image.fake
-from nova.volume import utils as volume_utils
+from nova import log as logging
 from nova.notifier import test_notifier
 from nova.openstack.common import importutils
+from nova import test
+from nova.volume import utils as volume_utils
 
 
 LOG = logging.getLogger(__name__)
@@ -36,7 +36,7 @@ class UsageInfoTestCase(test.TestCase):
 
     def setUp(self):
         super(UsageInfoTestCase, self).setUp()
-        self.flags(connection_type='fake',
+        self.flags(compute_driver='nova.virt.fake.FakeDriver',
                    stub_network=True,
                    host='fake')
         self.stubs.Set(nova.flags.FLAGS, 'notification_driver',

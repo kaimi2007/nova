@@ -25,7 +25,6 @@ from nova import compute
 from nova import exception
 from nova import flags
 from nova import log as logging
-from nova.scheduler import api as scheduler_api
 
 
 FLAGS = flags.FLAGS
@@ -274,12 +273,8 @@ class AdminActionsController(wsgi.Controller):
 
         try:
             instance = self.compute_api.get(context, id)
-            scheduler_api.live_migration(context,
-                    block_migration,
-                    disk_over_commit,
-                    instance["id"],
-                    host,
-                    topic=FLAGS.compute_topic)
+            self.compute_api.live_migrate(context, instance, block_migration,
+                                          disk_over_commit, host)
         except Exception:
             msg = _("Live migration of instance %(id)s to host %(host)s"
                     " failed") % locals()

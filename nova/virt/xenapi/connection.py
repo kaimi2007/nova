@@ -18,12 +18,6 @@
 """
 A connection to XenServer or Xen Cloud Platform.
 
-The concurrency model for this class is as follows:
-
-All XenAPI calls are on a green thread (using eventlet's "tpool"
-thread pool). They are remote calls, and so may hang for the usual
-reasons.
-
 **Related Flags**
 
 :xenapi_connection_url:  URL for connection to XenServer/Xen Cloud Platform.
@@ -48,9 +42,7 @@ import time
 import urlparse
 import xmlrpclib
 
-from eventlet import greenthread
 from eventlet import queue
-from eventlet import tpool
 from eventlet import timeout
 
 from nova import context
@@ -62,8 +54,8 @@ from nova.openstack.common import cfg
 from nova.virt import driver
 from nova.virt.xenapi import host
 from nova.virt.xenapi import pool
-from nova.virt.xenapi import vmops
 from nova.virt.xenapi import vm_utils
+from nova.virt.xenapi import vmops
 from nova.virt.xenapi import volumeops
 
 
@@ -135,26 +127,22 @@ FLAGS = flags.FLAGS
 FLAGS.register_opts(xenapi_opts)
 
 
-def get_connection(_read_only):
-    """Note that XenAPI doesn't have a read-only connection mode, so
-    the read_only parameter is ignored."""
-    url = FLAGS.xenapi_connection_url
-    username = FLAGS.xenapi_connection_username
-    password = FLAGS.xenapi_connection_password
-    if not url or password is None:
-        raise Exception(_('Must specify xenapi_connection_url, '
-                          'xenapi_connection_username (optionally), and '
-                          'xenapi_connection_password to use '
-                          'connection_type=xenapi'))
-    return XenAPIConnection(url, username, password)
-
-
-class XenAPIConnection(driver.ComputeDriver):
+class XenAPIDriver(driver.ComputeDriver):
     """A connection to XenServer or Xen Cloud Platform"""
 
-    def __init__(self, url, user, pw):
-        super(XenAPIConnection, self).__init__()
-        self._session = XenAPISession(url, user, pw)
+    def __init__(self, read_only=False):
+        super(XenAPIDriver, self).__init__()
+
+        url = FLAGS.xenapi_connection_url
+        username = FLAGS.xenapi_connection_username
+        password = FLAGS.xenapi_connection_password
+        if not url or password is None:
+            raise Exception(_('Must specify xenapi_connection_url, '
+                              'xenapi_connection_username (optionally), and '
+                              'xenapi_connection_password to use '
+                              'connection_type=xenapi'))
+
+        self._session = XenAPISession(url, username, password)
         self._volumeops = volumeops.VolumeOps(self._session)
         self._host_state = None
         self._host = host.Host(self._session)
@@ -276,10 +264,6 @@ class XenAPIConnection(driver.ComputeDriver):
         """Poll for rescued instances"""
         self._vmops.poll_rescued_instances(timeout)
 
-    def poll_unconfirmed_resizes(self, resize_confirm_window):
-        """Poll for unconfirmed resizes"""
-        self._vmops.poll_unconfirmed_resizes(resize_confirm_window)
-
     def reset_network(self, instance):
         """reset networking for specified instance"""
         self._vmops.reset_network(instance)
@@ -378,9 +362,9 @@ class XenAPIConnection(driver.ComputeDriver):
 
     def get_console_pool_info(self, console_type):
         xs_url = urlparse.urlparse(FLAGS.xenapi_connection_url)
-        return  {'address': xs_url.netloc,
-                 'username': FLAGS.xenapi_connection_username,
-                 'password': FLAGS.xenapi_connection_password}
+        return {'address': xs_url.netloc,
+                'username': FLAGS.xenapi_connection_username,
+                'password': FLAGS.xenapi_connection_password}
 
     def update_available_resource(self, ctxt, host):
         """Updates compute manager resource info on ComputeNode table.
@@ -504,6 +488,13 @@ class XenAPIConnection(driver.ComputeDriver):
         return self._pool.remove_from_aggregate(context,
                                                 aggregate, host, **kwargs)
 
+    def legacy_nwinfo(self):
+        """
+        Indicate if the driver requires the legacy network_info format.
+        """
+        # TODO(tr3buchet): remove this function once all virts return false
+        return False
+
 
 class XenAPISession(object):
     """The session to invoke XenAPI SDK calls"""
@@ -593,8 +584,7 @@ class XenAPISession(object):
     def call_xenapi(self, method, *args):
         """Call the specified XenAPI method on a background thread."""
         with self._get_session() as session:
-            f = session.xenapi_request
-            return tpool.execute(f, method, args)
+            return session.xenapi_request(method, args)
 
     def call_plugin(self, plugin, fn, args):
         """Call host.call_plugin on a background thread."""
@@ -609,7 +599,7 @@ class XenAPISession(object):
         args['host_uuid'] = self.host_uuid
 
         with self._get_session() as session:
-            return tpool.execute(self._unwrap_plugin_exceptions,
+            return self._unwrap_plugin_exceptions(
                                  session.xenapi.host.call_plugin,
                                  host, plugin, fn, args)
 
@@ -628,6 +618,7 @@ class XenAPISession(object):
                 exc.details[2] == 'Failure'):
                 params = None
                 try:
+                    # FIXME(comstud): eval is evil.
                     params = eval(exc.details[3])
                 except Exception:
                     raise exc
@@ -637,3 +628,26 @@ class XenAPISession(object):
         except xmlrpclib.ProtocolError, exc:
             LOG.debug(_("Got exception: %s"), exc)
             raise
+
+    def get_rec(self, record_type, ref):
+        try:
+            return self.call_xenapi('%s.get_record' % record_type, ref)
+        except self.XenAPI.Failure, e:
+            if e.details[0] != 'HANDLE_INVALID':
+                raise
+
+        return None
+
+    def get_all_refs_and_recs(self, record_type):
+        """Retrieve all refs and recs for a Xen record type.
+
+        Handles race-conditions where the record may be deleted between
+        the `get_all` call and the `get_record` call.
+        """
+
+        for ref in self.call_xenapi('%s.get_all' % record_type):
+            rec = self.get_rec(record_type, ref)
+            # Check to make sure the record still exists. It may have
+            # been deleted between the get_all call and get_record call
+            if rec:
+                yield ref, rec

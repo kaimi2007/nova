@@ -17,10 +17,8 @@
 from sqlalchemy import Boolean, BigInteger, Column, DateTime, Float, ForeignKey
 from sqlalchemy import Index, Integer, MetaData, String, Table, Text
 from migrate import ForeignKeyConstraint
-from nova import log as logging
 from nova import flags
-
-from sets import Set
+from nova import log as logging
 
 from nova import db
 from nova import context

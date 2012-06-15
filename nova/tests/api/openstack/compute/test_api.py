@@ -15,17 +15,16 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import json
-
 from lxml import etree
 import webob
-import webob.exc
 import webob.dec
+import webob.exc
 
-import nova.context
-from nova import test
 from nova.api import openstack as openstack_api
 from nova.api.openstack import wsgi
+import nova.context
+from nova.openstack.common import jsonutils
+from nova import test
 from nova.tests.api.openstack import fakes
 
 
@@ -63,7 +62,7 @@ class APITest(test.TestCase):
         self.assertEqual(res.status_int, 200)
         self.assertEqual(res.content_type, ctype)
 
-        body = json.loads(res.body)
+        body = jsonutils.loads(res.body)
 
     def test_vendor_content_type_xml(self):
         ctype = 'application/vnd.openstack.compute+xml'

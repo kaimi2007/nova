@@ -19,8 +19,8 @@ import os
 import socket
 from xml.dom import minidom
 
-from webob import exc
 import webob
+from webob import exc
 
 from nova.api.openstack import common
 from nova.api.openstack.compute import ips
@@ -676,7 +676,7 @@ class Controller(wsgi.Controller):
 
         try:
             _get_inst_type = instance_types.get_instance_type_by_flavor_id
-            inst_type = _get_inst_type(flavor_id)
+            inst_type = _get_inst_type(flavor_id, read_deleted="no")
 
             (instances, resv_id) = self.compute_api.create(context,
                             inst_type,
@@ -703,6 +703,8 @@ class Controller(wsgi.Controller):
             raise exc.HTTPRequestEntityTooLarge(explanation=unicode(error),
                                                 headers={'Retry-After': 0})
         except exception.InstanceTypeMemoryTooSmall as error:
+            raise exc.HTTPBadRequest(explanation=unicode(error))
+        except exception.InstanceTypeNotFound as error:
             raise exc.HTTPBadRequest(explanation=unicode(error))
         except exception.InstanceTypeDiskTooSmall as error:
             raise exc.HTTPBadRequest(explanation=unicode(error))

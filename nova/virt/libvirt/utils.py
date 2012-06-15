@@ -20,7 +20,6 @@
 #    under the License.
 
 import hashlib
-import json
 import os
 import random
 import re
@@ -28,8 +27,9 @@ import re
 from nova import exception
 from nova import flags
 from nova import log as logging
-from nova import utils
 from nova.openstack.common import cfg
+from nova.openstack.common import jsonutils
+from nova import utils
 from nova.virt import images
 
 
@@ -90,6 +90,61 @@ def create_cow_image(backing_file, path):
              'backing_file=%s' % backing_file, path)
 
 
+def create_lvm_image(vg, lv, size, sparse=False):
+    """Create LVM image.
+
+    Creates a LVM image with given size.
+
+    :param vg: existing volume group which should hold this image
+    :param lv: name for this image (logical volume)
+    :size: size of image in bytes
+    :sparse: create sparse logical volume
+    """
+    free_space = volume_group_free_space(vg)
+
+    def check_size(size):
+        if size > free_space:
+            raise RuntimeError(_('Insufficient Space on Volume Group %(vg)s.'
+                                 ' Only %(free_space)db available,'
+                                 ' but %(size)db required'
+                                 ' by volume %(lv)s.') % locals())
+
+    if sparse:
+        preallocated_space = 64 * 1024 * 1024
+        check_size(preallocated_space)
+        if free_space < size:
+            LOG.warning(_('Volume group %(vg)s will not be able'
+                          ' to hold sparse volume %(lv)s.'
+                          ' Virtual volume size is %(size)db,'
+                          ' but free space on volume group is'
+                          ' only %(free_space)db.') % locals())
+
+        cmd = ('lvcreate', '-L', '%db' % preallocated_space,
+                '--virtualsize', '%db' % size, '-n', lv, vg)
+    else:
+        check_size(size)
+        cmd = ('lvcreate', '-L', '%db' % size, '-n', lv, vg)
+    execute(*cmd, run_as_root=True, attempts=3)
+
+
+def volume_group_free_space(vg):
+    """Return available space on volume group in bytes.
+
+    :param vg: volume group name
+    """
+    out, err = execute('vgs', '--noheadings', '--nosuffix',
+                       '--units', 'b', '-o', 'vg_free', vg,
+                       run_as_root=True)
+    return int(out.strip())
+
+
+def remove_logical_volumes(*paths):
+    """Remove one or more logical volume."""
+    if paths:
+        lvremove = ('lvremove', '-f') + paths
+        execute(*lvremove, attempts=3, run_as_root=True)
+
+
 def get_disk_size(path):
     """Get the (virtual) size of a disk image
 
@@ -110,10 +165,18 @@ def get_disk_backing_file(path):
     :returns: a path to the image's backing store
     """
     out, err = execute('qemu-img', 'info', path)
-    backing_file = [i.split('actual path:')[1].strip()[:-1]
-        for i in out.split('\n') if 0 <= i.find('backing file')]
+    backing_file = None
+
+    for line in out.split('\n'):
+        if line.startswith('backing file: '):
+            if 'actual path: ' in line:
+                backing_file = line.split('actual path: ')[1][:-1]
+            else:
+                backing_file = line.split('backing file: ')[1]
+            break
     if backing_file:
-        backing_file = os.path.basename(backing_file[0])
+        backing_file = os.path.basename(backing_file)
+
     return backing_file
 
 
@@ -142,6 +205,9 @@ def mkfs(fs, path, label=None):
         execute('mkswap', path)
     else:
         args = ['mkfs', '-t', fs]
+        #add -F to force no interactive excute on non-block device.
+        if fs in ['ext3', 'ext4']:
+            args.extend(['-F'])
         if label:
             args.extend(['-n', label])
         args.append(path)
@@ -364,7 +430,7 @@ def read_stored_info(base_path, field=None):
         LOG.info(_('Read: %s'), serialized)
 
         try:
-            d = json.loads(serialized)
+            d = jsonutils.loads(serialized)
 
         except ValueError, e:
             LOG.error(_('Error reading image info file %(filename)s: '
@@ -389,7 +455,7 @@ def write_stored_info(target, field=None, value=None):
 
     d = read_stored_info(info_file)
     d[field] = value
-    serialized = json.dumps(d)
+    serialized = jsonutils.dumps(d)
 
     LOG.info(_('Writing image info file: %s'), info_file)
     LOG.info(_('Wrote: %s'), serialized)

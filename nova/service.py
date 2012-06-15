@@ -27,6 +27,7 @@ import signal
 import eventlet
 import greenlet
 
+from nova.common import eventlet_backdoor
 from nova import context
 from nova import db
 from nova import exception
@@ -80,7 +81,7 @@ service_opts = [
                help='IP address for OpenStack Volume API to listen'),
     cfg.IntOpt('osapi_volume_listen_port',
                default=8776,
-               help='port for os volume api to listen'),
+               help='port for os volume api to listen')
     ]
 
 FLAGS = flags.FLAGS
@@ -178,7 +179,6 @@ class Service(object):
         LOG.audit(_('Starting %(topic)s node (version %(vcs_string)s)'),
                   {'topic': self.topic, 'vcs_string': vcs_string})
         utils.cleanup_file_locks()
-        rpc.register_opts(FLAGS)
         self.manager.init_host()
         self.model_disconnected = False
         ctxt = context.get_admin_context()
@@ -197,13 +197,15 @@ class Service(object):
         LOG.debug(_("Creating Consumer connection for Service %s") %
                   self.topic)
 
+        rpc_dispatcher = self.manager.create_rpc_dispatcher()
+
         # Share this same connection for these Consumers
-        self.conn.create_consumer(self.topic, self, fanout=False)
+        self.conn.create_consumer(self.topic, rpc_dispatcher, fanout=False)
 
         node_topic = '%s.%s' % (self.topic, self.host)
-        self.conn.create_consumer(node_topic, self, fanout=False)
+        self.conn.create_consumer(node_topic, rpc_dispatcher, fanout=False)
 
-        self.conn.create_consumer(self.topic, self, fanout=True)
+        self.conn.create_consumer(self.topic, rpc_dispatcher, fanout=True)
 
         # Consume from all consumers in a thread
         self.conn.consume_in_thread()
@@ -395,7 +397,6 @@ class WSGIService(object):
 
         """
         utils.cleanup_file_locks()
-        rpc.register_opts(FLAGS)
         if self.manager:
             self.manager.init_host()
         self.server.start()
@@ -431,10 +432,11 @@ def serve(*servers):
     for server in servers:
         _launcher.launch_server(server)
 
+    eventlet_backdoor.initialize_if_enabled()
+
 
 def wait():
     LOG.debug(_('Full set of FLAGS:'))
-    rpc.register_opts(FLAGS)
     for flag in FLAGS:
         flag_get = FLAGS.get(flag, None)
         # hide flag contents from log if contains a password

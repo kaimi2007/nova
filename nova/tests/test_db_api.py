@@ -20,11 +20,11 @@
 
 import datetime
 
-from nova import test
 from nova import context
 from nova import db
 from nova import exception
 from nova import flags
+from nova import test
 from nova import utils
 
 FLAGS = flags.FLAGS
@@ -70,7 +70,7 @@ class DbApiTestCase(test.TestCase):
         inst1 = db.instance_create(self.context, args1)
         args2 = {'reservation_id': 'b', 'image_ref': 1, 'host': 'host1'}
         inst2 = db.instance_create(self.context, args2)
-        db.instance_destroy(self.context.elevated(), inst1['id'])
+        db.instance_destroy(self.context.elevated(), inst1['uuid'])
         result = db.instance_get_all_by_filters(self.context.elevated(), {})
         self.assertEqual(2, len(result))
         self.assertIn(inst1.id, [result[0].id, result[1].id])
@@ -96,7 +96,7 @@ class DbApiTestCase(test.TestCase):
         db.migration_update(ctxt, migration.id, {"status": "CONFIRMED"})
 
         # Ensure the new migration is not returned.
-        updated_at = datetime.datetime.utcnow()
+        updated_at = utils.utcnow()
         values = {"status": "finished", "updated_at": updated_at}
         migration = db.migration_create(ctxt, values)
         results = db.migration_get_all_unconfirmed(ctxt, 10)
@@ -120,7 +120,7 @@ class DbApiTestCase(test.TestCase):
         db.instance_update(ctxt, instance.id, {"task_state": None})
 
         # Ensure the newly rebooted instance is not returned.
-        updated_at = datetime.datetime.utcnow()
+        updated_at = utils.utcnow()
         values = {"task_state": "rebooting", "updated_at": updated_at}
         instance = db.instance_create(ctxt, values)
         results = db.instance_get_all_hung_in_rebooting(ctxt, 10)
@@ -151,6 +151,8 @@ class DbApiTestCase(test.TestCase):
                           db.network_delete_safe, ctxt, network['id'])
         db.fixed_ip_update(ctxt, address2, {'allocated': False})
         network = db.network_delete_safe(ctxt, network['id'])
+        self.assertRaises(exception.FixedIpNotFoundForAddress,
+                          db.fixed_ip_get_by_address, ctxt, address1)
         ctxt = ctxt.elevated(read_deleted='yes')
         fixed_ip = db.fixed_ip_get_by_address(ctxt, address1)
         self.assertTrue(fixed_ip['deleted'])
@@ -179,7 +181,7 @@ class DbApiTestCase(test.TestCase):
 
         # Retrieve the user-provided metadata to ensure it was successfully
         # updated
-        instance_meta = db.instance_metadata_get(ctxt, instance.id)
+        instance_meta = db.instance_metadata_get(ctxt, instance.uuid)
         self.assertEqual('bar', instance_meta['host'])
 
         # Retrieve the system metadata to ensure it was successfully updated
@@ -202,12 +204,24 @@ class DbApiTestCase(test.TestCase):
 
         # Retrieve the user-provided metadata to ensure it was successfully
         # updated
-        instance_meta = db.instance_metadata_get(ctxt, instance.id)
+        instance_meta = db.instance_metadata_get(ctxt, instance.uuid)
         self.assertEqual('bar', instance_meta['host'])
 
         # Retrieve the system metadata to ensure it was successfully updated
         system_meta = db.instance_system_metadata_get(ctxt, instance.uuid)
         self.assertEqual('baz', system_meta['original_image_ref'])
+
+    def test_instance_update_with_and_get_original(self):
+        ctxt = context.get_admin_context()
+
+        # Create an instance with some metadata
+        values = {'vm_state': 'building'}
+        instance = db.instance_create(ctxt, values)
+
+        (old_ref, new_ref) = db.instance_update_and_get_original(ctxt,
+                instance['id'], {'vm_state': 'needscoffee'})
+        self.assertEquals("building", old_ref["vm_state"])
+        self.assertEquals("needscoffee", new_ref["vm_state"])
 
     def test_instance_fault_create(self):
         """Ensure we can create an instance fault"""
@@ -826,3 +840,40 @@ class TestIpAllocation(test.TestCase):
         fixed_ip = db.fixed_ip_get_by_address(self.ctxt, address)
         self.assertEqual(fixed_ip.instance_id, self.instance.id)
         self.assertEqual(fixed_ip.network_id, self.network.id)
+
+
+class InstanceDestroyConstraints(test.TestCase):
+
+    def test_destroy_with_equal_any_constraint_met(self):
+        ctx = context.get_admin_context()
+        instance = db.instance_create(ctx, {'task_state': 'deleting'})
+        constraint = db.constraint(task_state=db.equal_any('deleting'))
+        db.instance_destroy(ctx, instance['uuid'], constraint)
+        self.assertRaises(exception.InstanceNotFound, db.instance_get_by_uuid,
+                          ctx, instance['uuid'])
+
+    def test_destroy_with_equal_any_constraint_not_met(self):
+        ctx = context.get_admin_context()
+        instance = db.instance_create(ctx, {'vm_state': 'resize'})
+        constraint = db.constraint(vm_state=db.equal_any('active', 'error'))
+        self.assertRaises(exception.ConstraintNotMet, db.instance_destroy,
+                          ctx, instance['uuid'], constraint)
+        instance = db.instance_get_by_uuid(ctx, instance['uuid'])
+        self.assertFalse(instance['deleted'])
+
+    def test_destroy_with_not_equal_constraint_met(self):
+        ctx = context.get_admin_context()
+        instance = db.instance_create(ctx, {'task_state': 'deleting'})
+        constraint = db.constraint(task_state=db.not_equal('error', 'resize'))
+        db.instance_destroy(ctx, instance['uuid'], constraint)
+        self.assertRaises(exception.InstanceNotFound, db.instance_get_by_uuid,
+                          ctx, instance['uuid'])
+
+    def test_destroy_with_not_equal_constraint_not_met(self):
+        ctx = context.get_admin_context()
+        instance = db.instance_create(ctx, {'vm_state': 'active'})
+        constraint = db.constraint(vm_state=db.not_equal('active', 'error'))
+        self.assertRaises(exception.ConstraintNotMet, db.instance_destroy,
+                          ctx, instance['uuid'], constraint)
+        instance = db.instance_get_by_uuid(ctx, instance['uuid'])
+        self.assertFalse(instance['deleted'])

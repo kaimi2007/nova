@@ -14,6 +14,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import functools
 import itertools
 import socket
 import ssl
@@ -24,9 +25,9 @@ import uuid
 import eventlet
 import greenlet
 import kombu
+import kombu.connection
 import kombu.entity
 import kombu.messaging
-import kombu.connection
 
 from nova.openstack.common import cfg
 from nova.rpc import amqp as rpc_amqp
@@ -46,7 +47,42 @@ kombu_opts = [
                default='',
                help=('SSL certification authority file '
                     '(valid only if SSL enabled)')),
+    cfg.StrOpt('rabbit_host',
+               default='localhost',
+               help='the RabbitMQ host'),
+    cfg.IntOpt('rabbit_port',
+               default=5672,
+               help='the RabbitMQ port'),
+    cfg.BoolOpt('rabbit_use_ssl',
+                default=False,
+                help='connect over SSL for RabbitMQ'),
+    cfg.StrOpt('rabbit_userid',
+               default='guest',
+               help='the RabbitMQ userid'),
+    cfg.StrOpt('rabbit_password',
+               default='guest',
+               help='the RabbitMQ password'),
+    cfg.StrOpt('rabbit_virtual_host',
+               default='/',
+               help='the RabbitMQ virtual host'),
+    cfg.IntOpt('rabbit_retry_interval',
+               default=1,
+               help='how frequently to retry connecting with RabbitMQ'),
+    cfg.IntOpt('rabbit_retry_backoff',
+               default=2,
+               help='how long to backoff for between retries when connecting '
+                    'to RabbitMQ'),
+    cfg.IntOpt('rabbit_max_retries',
+               default=0,
+               help='maximum retries with trying to connect to RabbitMQ '
+                    '(the default of 0 implies an infinite retry count)'),
+    cfg.BoolOpt('rabbit_durable_queues',
+                default=False,
+                help='use durable queues in RabbitMQ'),
+
     ]
+
+cfg.CONF.register_opts(kombu_opts)
 
 LOG = rpc_common.LOG
 
@@ -103,9 +139,10 @@ class ConsumerBase(object):
             message = self.channel.message_to_python(raw_message)
             try:
                 callback(message.payload)
-                message.ack()
             except Exception:
                 LOG.exception(_("Failed to process message... skipping it."))
+            finally:
+                message.ack()
 
         self.queue.consume(*args, callback=_callback, **options)
 
@@ -156,15 +193,19 @@ class DirectConsumer(ConsumerBase):
 class TopicConsumer(ConsumerBase):
     """Consumer class for 'topic'"""
 
-    def __init__(self, conf, channel, topic, callback, tag, **kwargs):
+    def __init__(self, conf, channel, topic, callback, tag, name=None,
+                 **kwargs):
         """Init a 'topic' queue.
 
-        'channel' is the amqp channel to use
-        'topic' is the topic to listen on
-        'callback' is the callback to call when messages are received
-        'tag' is a unique ID for the consumer on the channel
+        :param channel: the amqp channel to use
+        :param topic: the topic to listen on
+        :paramtype topic: str
+        :param callback: the callback to call when messages are received
+        :param tag: a unique ID for the consumer on the channel
+        :param name: optional queue name, defaults to topic
+        :paramtype name: str
 
-        Other kombu options may be passed
+        Other kombu options may be passed as keyword arguments
         """
         # Default options
         options = {'durable': conf.rabbit_durable_queues,
@@ -180,7 +221,7 @@ class TopicConsumer(ConsumerBase):
                 channel,
                 callback,
                 tag,
-                name=topic,
+                name=name or topic,
                 exchange=exchange,
                 routing_key=topic,
                 **options)
@@ -479,7 +520,7 @@ class Connection(object):
                 sleep_time = min(sleep_time, self.interval_max)
 
             log_info['sleep_time'] = sleep_time
-            LOG.exception(_('AMQP server on %(hostname)s:%(port)d is'
+            LOG.warn(_('AMQP server on %(hostname)s:%(port)d is'
                     ' unreachable: %(err_str)s. Trying again in '
                     '%(sleep_time)d seconds.') % log_info)
             time.sleep(sleep_time)
@@ -602,9 +643,12 @@ class Connection(object):
         """
         self.declare_consumer(DirectConsumer, topic, callback)
 
-    def declare_topic_consumer(self, topic, callback=None):
+    def declare_topic_consumer(self, topic, callback=None, queue_name=None):
         """Create a 'topic' consumer."""
-        self.declare_consumer(TopicConsumer, topic, callback)
+        self.declare_consumer(functools.partial(TopicConsumer,
+                                                name=queue_name,
+                                                ),
+                              topic, callback)
 
     def declare_fanout_consumer(self, topic, callback):
         """Create a 'fanout' consumer"""
@@ -649,12 +693,18 @@ class Connection(object):
     def create_consumer(self, topic, proxy, fanout=False):
         """Create a consumer that calls a method in a proxy object"""
         proxy_cb = rpc_amqp.ProxyCallback(self.conf, proxy,
-                rpc_amqp.get_connection_pool(self, Connection))
+                rpc_amqp.get_connection_pool(self.conf, Connection))
 
         if fanout:
             self.declare_fanout_consumer(topic, proxy_cb)
         else:
             self.declare_topic_consumer(topic, proxy_cb)
+
+    def create_worker(self, topic, proxy, pool_name):
+        """Create a worker that calls a method in a proxy object"""
+        proxy_cb = rpc_amqp.ProxyCallback(self.conf, proxy,
+                rpc_amqp.get_connection_pool(self.conf, Connection))
+        self.declare_topic_consumer(topic, proxy_cb, pool_name)
 
 
 def create_connection(conf, new=True):
@@ -707,7 +757,3 @@ def notify(conf, context, topic, msg):
 
 def cleanup():
     return rpc_amqp.cleanup(Connection.pool)
-
-
-def register_opts(conf):
-    conf.register_opts(kombu_opts)

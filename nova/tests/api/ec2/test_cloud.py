@@ -28,6 +28,7 @@ import tempfile
 from nova.api.ec2 import cloud
 from nova.api.ec2 import ec2utils
 from nova.api.ec2 import inst_state
+from nova.compute import api as compute_api
 from nova.compute import power_state
 from nova.compute import utils as compute_utils
 from nova.compute import vm_states
@@ -89,7 +90,7 @@ def get_instances_with_cached_ips(orig_func, *args, **kwargs):
 class CloudTestCase(test.TestCase):
     def setUp(self):
         super(CloudTestCase, self).setUp()
-        self.flags(connection_type='fake',
+        self.flags(compute_driver='nova.virt.fake.FakeDriver',
                    stub_network=True)
 
         def dumb(*args, **kwargs):
@@ -144,7 +145,9 @@ class CloudTestCase(test.TestCase):
 
     def _create_key(self, name):
         # NOTE(vish): create depends on pool, so just call helper directly
-        return cloud._gen_key(self.context, self.context.user_id, name)
+        keypair_api = compute_api.KeypairAPI()
+        return keypair_api.create_key_pair(self.context, self.context.user_id,
+                                           name)
 
     def test_describe_regions(self):
         """Makes sure describe regions runs without raising an exception"""
@@ -241,7 +244,7 @@ class CloudTestCase(test.TestCase):
                                   public_ip=address)
         self.network.deallocate_fixed_ip(self.context, fixed_ips[0]['address'],
                                          inst['host'])
-        db.instance_destroy(self.context, inst['id'])
+        db.instance_destroy(self.context, inst['uuid'])
         db.floating_ip_destroy(self.context, address)
 
     def test_describe_security_groups(self):
@@ -292,7 +295,7 @@ class CloudTestCase(test.TestCase):
 
     def test_security_group_quota_limit(self):
         self.flags(quota_security_groups=10)
-        for i in range(1, 10):
+        for i in range(1, FLAGS.quota_security_groups + 1):
             name = 'test name %i' % i
             descript = 'test description %i' % i
             create = self.cloud.create_security_group
@@ -581,7 +584,7 @@ class CloudTestCase(test.TestCase):
                           self.cloud.delete_security_group,
                           self.context, 'testgrp')
 
-        db.instance_destroy(self.context, inst.id)
+        db.instance_destroy(self.context, inst['uuid'])
 
         self.cloud.delete_security_group(self.context, 'testgrp')
 
@@ -620,7 +623,7 @@ class CloudTestCase(test.TestCase):
         self.assertEqual(result['volumeSet'][0]['availabilityZone'],
                          availabilityZone)
 
-        db.volume_destroy(self.context, ec2utils.ec2_id_to_id(volume_id))
+        db.volume_destroy(self.context, ec2utils.ec2_vol_id_to_uuid(volume_id))
 
     def test_create_volume_from_snapshot(self):
         """Makes sure create_volume works when we specify a snapshot."""
@@ -637,7 +640,7 @@ class CloudTestCase(test.TestCase):
         self.assertEqual(len(result['volumeSet']), 2)
         self.assertEqual(result['volumeSet'][1]['volumeId'], volume_id)
 
-        db.volume_destroy(self.context, ec2utils.ec2_id_to_id(volume_id))
+        db.volume_destroy(self.context, ec2utils.ec2_vol_id_to_uuid(volume_id))
         db.snapshot_destroy(self.context, snap['id'])
         db.volume_destroy(self.context, vol['id'])
 
@@ -756,8 +759,8 @@ class CloudTestCase(test.TestCase):
         self.assertEqual(instance['privateIpAddress'], '192.168.0.3')
         self.assertEqual(instance['dnsNameV6'],
                 'fe80:b33f::a8bb:ccff:fedd:eeff')
-        db.instance_destroy(self.context, inst1['id'])
-        db.instance_destroy(self.context, inst2['id'])
+        db.instance_destroy(self.context, inst1['uuid'])
+        db.instance_destroy(self.context, inst2['uuid'])
         db.service_destroy(self.context, comp1['id'])
         db.service_destroy(self.context, comp2['id'])
 
@@ -811,9 +814,9 @@ class CloudTestCase(test.TestCase):
         self.assertEqual(result[1]['launchTime'], inst3_kwargs['created_at'])
         self.assertEqual(result[2]['launchTime'], inst1_kwargs['created_at'])
 
-        db.instance_destroy(self.context, inst1['id'])
-        db.instance_destroy(self.context, inst2['id'])
-        db.instance_destroy(self.context, inst3['id'])
+        db.instance_destroy(self.context, inst1['uuid'])
+        db.instance_destroy(self.context, inst2['uuid'])
+        db.instance_destroy(self.context, inst3['uuid'])
         db.service_destroy(self.context, comp1['id'])
         db.service_destroy(self.context, comp2['id'])
 
@@ -839,7 +842,7 @@ class CloudTestCase(test.TestCase):
             self.assertEqual(code, expected_code)
             self.assertEqual(name, expected_name)
 
-            db.instance_destroy(self.context, inst['id'])
+            db.instance_destroy(self.context, inst['uuid'])
 
         test_instance_state(inst_state.RUNNING_CODE, inst_state.RUNNING,
                             power_state.RUNNING, vm_states.ACTIVE)
@@ -876,7 +879,7 @@ class CloudTestCase(test.TestCase):
         self.assertEqual(instance['privateDnsName'], 'server-1234')
         self.assertEqual(instance['privateIpAddress'], '192.168.0.3')
         self.assertNotIn('dnsNameV6', instance)
-        db.instance_destroy(self.context, inst1['id'])
+        db.instance_destroy(self.context, inst1['uuid'])
         db.service_destroy(self.context, comp1['id'])
 
     def test_describe_instances_deleted(self):
@@ -893,7 +896,7 @@ class CloudTestCase(test.TestCase):
                  'host': 'host1',
                  'vm_state': 'active'}
         inst2 = db.instance_create(self.context, args2)
-        db.instance_destroy(self.context, inst1.id)
+        db.instance_destroy(self.context, inst1['uuid'])
         result = self.cloud.describe_instances(self.context)
         self.assertEqual(len(result['reservationSet']), 1)
         result1 = result['reservationSet'][0]['instancesSet']
@@ -997,8 +1000,8 @@ class CloudTestCase(test.TestCase):
             for bdm in db.block_device_mapping_get_all_by_instance(
                 self.context, uuid):
                 db.block_device_mapping_destroy(self.context, bdm['id'])
-        db.instance_destroy(self.context, inst2['id'])
-        db.instance_destroy(self.context, inst1['id'])
+        db.instance_destroy(self.context, inst2['uuid'])
+        db.instance_destroy(self.context, inst1['uuid'])
 
     # NOTE(jdg) Modified expected volume_id's to string
     _expected_instance_bdm1 = {
@@ -1127,7 +1130,7 @@ class CloudTestCase(test.TestCase):
         result3 = describe_images(self.context, ['ami-00000001',
                                                  'ami-00000002'])
         self.assertEqual(2, len(result3['imagesSet']))
-        # provide an non-existing image_id
+        # provide a non-existing image_id
         self.stubs.UnsetAll()
         self.stubs.Set(fake._FakeImageService, 'show', fake_show_none)
         self.stubs.Set(fake._FakeImageService, 'show_by_name', fake_show_none)
@@ -1521,6 +1524,11 @@ class CloudTestCase(test.TestCase):
         keys = result["keySet"]
         self.assertTrue(filter(lambda k: k['keyName'] == 'test1', keys))
         self.assertTrue(filter(lambda k: k['keyName'] == 'test2', keys))
+
+    def test_describe_bad_key_pairs(self):
+        self.assertRaises(exception.EC2APIError,
+            self.cloud.describe_key_pairs, self.context,
+            key_name=['DoesNotExist'])
 
     def test_import_key_pair(self):
         pubkey_path = os.path.join(os.path.dirname(__file__), 'public_key')
@@ -1960,9 +1968,10 @@ class CloudTestCase(test.TestCase):
         self.assertTrue(result)
 
         vol = db.volume_get(self.context, vol1['id'])
-        self._assert_volume_detached(vol)
+        self._assert_volume_attached(vol, instance_uuid, '/dev/vdb')
+
         vol = db.volume_get(self.context, vol2['id'])
-        self._assert_volume_detached(vol)
+        self._assert_volume_attached(vol, instance_uuid, '/dev/vdc')
 
         self.cloud.start_instances(self.context, [ec2_instance_id])
         vols = db.volume_get_all_by_instance_uuid(self.context, instance_uuid)
@@ -2031,9 +2040,8 @@ class CloudTestCase(test.TestCase):
         result = self.cloud.stop_instances(self.context, [ec2_instance_id])
         self.assertTrue(result)
 
-        for vol_id in (vol1['id'], vol2['id']):
-            vol = db.volume_get(self.context, vol_id)
-            self._assert_volume_detached(vol)
+        vol = db.volume_get(self.context, vol2['id'])
+        self._assert_volume_attached(vol, instance_uuid, '/dev/vdc')
 
         self.cloud.start_instances(self.context, [ec2_instance_id])
         vols = db.volume_get_all_by_instance_uuid(self.context, instance_uuid)
@@ -2080,7 +2088,7 @@ class CloudTestCase(test.TestCase):
                                             'snapshot_id': snapshot2_id,
                                             'delete_on_termination': True}]}
         ec2_instance_id = self._run_instance(**kwargs)
-        instance_id = ec2utils.ec2_id_to_id(ec2_instance_id)
+        instance_id = ec2utils.ec2_vol_id_to_uuid(ec2_instance_id)
         instance_uuid = ec2utils.ec2_instance_id_to_uuid(self.context,
                                                          ec2_instance_id)
 
@@ -2118,8 +2126,6 @@ class CloudTestCase(test.TestCase):
 
         for snapshot_id in (ec2_snapshot1_id, ec2_snapshot2_id):
             self.cloud.delete_snapshot(self.context, snapshot_id)
-
-        db.volume_destroy(self.context, vol['id'])
 
     def test_create_image(self):
         """Make sure that CreateImage works"""

@@ -19,13 +19,13 @@
 
 import socket
 
+from nova.compute import rpcapi as compute_rpcapi
 from nova import exception
 from nova import flags
 from nova import log as logging
+from nova import manager
 from nova.openstack.common import cfg
 from nova.openstack.common import importutils
-from nova import manager
-from nova import rpc
 from nova import utils
 
 
@@ -53,12 +53,15 @@ class ConsoleProxyManager(manager.Manager):
 
     """
 
+    RPC_API_VERSION = '1.0'
+
     def __init__(self, console_driver=None, *args, **kwargs):
         if not console_driver:
             console_driver = FLAGS.console_driver
         self.driver = importutils.import_object(console_driver)
         super(ConsoleProxyManager, self).__init__(*args, **kwargs)
         self.driver.host = self.host
+        self.compute_rpcapi = compute_rpcapi.ComputeAPI()
 
     def init_host(self):
         self.driver.init_host()
@@ -72,8 +75,8 @@ class ConsoleProxyManager(manager.Manager):
         pool = self.get_pool_for_instance_host(context, host)
         try:
             console = self.db.console_get_by_pool_instance(context,
-                                                      pool['id'],
-                                                      instance_id)
+                                                           pool['id'],
+                                                           instance['uuid'])
         except exception.NotFound:
             LOG.debug(_('Adding console'), instance=instance)
             if not password:
@@ -81,13 +84,14 @@ class ConsoleProxyManager(manager.Manager):
             if not port:
                 port = self.driver.get_port(context)
             console_data = {'instance_name': name,
-                            'instance_id': instance_id,
+                            'instance_uuid': instance['uuid'],
                             'password': password,
                             'pool_id': pool['id']}
             if port:
                 console_data['port'] = port
             console = self.db.console_create(context, console_data)
             self.driver.setup_console(context, console)
+
         return console['id']
 
     @exception.wrap_exception()
@@ -119,12 +123,8 @@ class ConsoleProxyManager(manager.Manager):
                              'username': 'test',
                              'password': '1234pass'}
             else:
-                pool_info = rpc.call(context,
-                                 self.db.queue_get_for(context,
-                                                   FLAGS.compute_topic,
-                                                   instance_host),
-                       {'method': 'get_console_pool_info',
-                        'args': {'console_type': console_type}})
+                pool_info = compute_rpcapi.get_console_pool_info(context,
+                        console_type, instance_host)
             pool_info['password'] = self.driver.fix_pool_password(
                                                     pool_info['password'])
             pool_info['host'] = self.host

@@ -17,8 +17,8 @@
 
 import webob
 
-from nova.api.openstack.compute.views import flavors as flavors_view
 from nova.api.openstack import common
+from nova.api.openstack.compute.views import flavors as flavors_view
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova.compute import instance_types
@@ -94,6 +94,11 @@ class Controller(wsgi.Controller):
     def _get_flavors(self, req):
         """Helper function that returns a list of flavor dicts."""
         filters = {}
+
+        context = req.environ['nova.context']
+        if not context.is_admin:
+            filters['disabled'] = False
+
         if 'minRam' in req.params:
             try:
                 filters['min_memory_mb'] = int(req.params['minRam'])

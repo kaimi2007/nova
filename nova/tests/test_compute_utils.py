@@ -17,18 +17,18 @@
 
 """Tests For miscellaneous util methods used with compute."""
 
+from nova.compute import instance_types
+from nova.compute import utils as compute_utils
+from nova import context
 from nova import db
 from nova import flags
-from nova import context
-from nova import test
-from nova import log as logging
-from nova import utils
 import nova.image.fake
-from nova.compute import utils as compute_utils
-from nova.compute import instance_types
+from nova import log as logging
 from nova.notifier import test_notifier
 from nova.openstack.common import importutils
+from nova import test
 from nova.tests import fake_network
+from nova import utils
 
 
 LOG = logging.getLogger(__name__)
@@ -48,7 +48,7 @@ class UsageInfoTestCase(test.TestCase):
         self.stubs.Set(nova.network.API, 'get_instance_nw_info',
                        fake_get_nw_info)
 
-        self.flags(connection_type='fake',
+        self.flags(compute_driver='nova.virt.fake.FakeDriver',
                    stub_network=True,
                    notification_driver='nova.notifier.test_notifier',
                    network_manager='nova.network.manager.FlatManager')

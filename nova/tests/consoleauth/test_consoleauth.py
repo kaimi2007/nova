@@ -24,12 +24,9 @@ import time
 
 from nova.consoleauth import manager
 from nova import context
-from nova import db
 from nova import flags
 from nova import log as logging
-from nova.openstack.common import importutils
 from nova import test
-from nova import utils
 
 
 FLAGS = flags.FLAGS
@@ -41,7 +38,7 @@ class ConsoleauthTestCase(test.TestCase):
 
     def setUp(self):
         super(ConsoleauthTestCase, self).setUp()
-        self.manager = importutils.import_object(FLAGS.consoleauth_manager)
+        self.manager = manager.ConsoleAuthManager()
         self.context = context.get_admin_context()
 
     def test_tokens_expire(self):

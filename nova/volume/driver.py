@@ -36,10 +36,10 @@ volume_opts = [
     cfg.StrOpt('volume_group',
                default='nova-volumes',
                help='Name for the VG that will contain exported volumes'),
-    cfg.StrOpt('num_shell_tries',
+    cfg.IntOpt('num_shell_tries',
                default=3,
                help='number of times to attempt to run flakey shell commands'),
-    cfg.StrOpt('num_iscsi_scan_tries',
+    cfg.IntOpt('num_iscsi_scan_tries',
                default=3,
                help='number of times to rescan iSCSI target to find volume'),
     cfg.IntOpt('iscsi_num_targets',
@@ -273,7 +273,7 @@ class ISCSIDriver(VolumeDriver):
                                                            volume['id'])
         except exception.NotFound:
             LOG.info(_("Skipping ensure_export. No iscsi_target "
-                       "provisioned for volume: %d"), volume['id'])
+                       "provisioned for volume: %s"), volume['id'])
             return
 
         iscsi_name = "%s%s" % (FLAGS.iscsi_target_prefix, volume['name'])
@@ -321,7 +321,7 @@ class ISCSIDriver(VolumeDriver):
                                                            volume['id'])
         except exception.NotFound:
             LOG.info(_("Skipping remove_export. No iscsi_target "
-                       "provisioned for volume: %d"), volume['id'])
+                       "provisioned for volume: %s"), volume['id'])
             return
 
         try:
@@ -330,7 +330,7 @@ class ISCSIDriver(VolumeDriver):
             self.tgtadm.show_target(iscsi_target)
         except Exception as e:
             LOG.info(_("Skipping remove_export. No iscsi_target "
-                       "is presently exported for volume: %d"), volume['id'])
+                       "is presently exported for volume: %s"), volume['id'])
             return
 
         self.tgtadm.delete_logicalunit(iscsi_target, 0)

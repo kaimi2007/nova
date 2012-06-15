@@ -282,10 +282,6 @@ class InvalidCidr(Invalid):
     message = _("Invalid cidr %(cidr)s.")
 
 
-class InvalidRPCConnectionReuse(Invalid):
-    message = _("Invalid reuse of an RPC connection.")
-
-
 class InvalidUnicodeParameter(Invalid):
     message = _("Invalid Parameter: "
                 "Unicode is not supported by the current database.")
@@ -423,13 +419,18 @@ class InvalidUUID(Invalid):
     message = _("Expected a uuid but received %(uuid).")
 
 
+class ConstraintNotMet(NovaException):
+    message = _("Constraint not met.")
+    code = 412
+
+
 class NotFound(NovaException):
     message = _("Resource could not be found.")
     code = 404
 
 
-class FlagNotSet(NotFound):
-    message = _("Required flag %(flag)s not set.")
+class VirtDriverNotFound(NotFound):
+    message = _("Could not find driver for connection_type %(name)s")
 
 
 class VolumeNotFound(NotFound):
@@ -693,8 +694,21 @@ class AccessKeyNotFound(NotFound):
     message = _("Access Key %(access_key)s could not be found.")
 
 
+class InvalidReservationExpiration(Invalid):
+    message = _("Invalid reservation expiration %(expire)s.")
+
+
+class InvalidQuotaValue(Invalid):
+    message = _("Change would make usage less than 0 for the following "
+                "resources: %(unders)s")
+
+
 class QuotaNotFound(NotFound):
     message = _("Quota could not be found")
+
+
+class QuotaResourceUnknown(QuotaNotFound):
+    message = _("Unknown quota resources %(unknown)s.")
 
 
 class ProjectQuotaNotFound(QuotaNotFound):
@@ -703,6 +717,18 @@ class ProjectQuotaNotFound(QuotaNotFound):
 
 class QuotaClassNotFound(QuotaNotFound):
     message = _("Quota class %(class_name)s could not be found.")
+
+
+class QuotaUsageNotFound(QuotaNotFound):
+    message = _("Quota usage for project %(project_id)s could not be found.")
+
+
+class ReservationNotFound(QuotaNotFound):
+    message = _("Quota reservation %(uuid)s could not be found.")
+
+
+class OverQuota(NovaException):
+    message = _("Quota exceeded for resources: %(overs)s")
 
 
 class SecurityGroupNotFound(NotFound):
@@ -752,11 +778,11 @@ class ConsoleNotFound(NotFound):
 
 
 class ConsoleNotFoundForInstance(ConsoleNotFound):
-    message = _("Console for instance %(instance_id)s could not be found.")
+    message = _("Console for instance %(instance_uuid)s could not be found.")
 
 
 class ConsoleNotFoundInPoolForInstance(ConsoleNotFound):
-    message = _("Console for instance %(instance_id)s "
+    message = _("Console for instance %(instance_uuid)s "
                 "in pool %(pool_id)s could not be found.")
 
 
@@ -781,10 +807,6 @@ class FlavorNotFound(NotFound):
     message = _("Flavor %(flavor_id)s could not be found.")
 
 
-class CellNotFound(NotFound):
-    message = _("Cell %(cell_id)s could not be found.")
-
-
 class SchedulerHostFilterNotFound(NotFound):
     message = _("Scheduler Host Filter %(filter_name)s could not be found.")
 
@@ -799,7 +821,7 @@ class SchedulerWeightFlagNotFound(NotFound):
 
 
 class InstanceMetadataNotFound(NotFound):
-    message = _("Instance %(instance_id)s has no metadata with "
+    message = _("Instance %(instance_uuid)s has no metadata with "
                 "key %(metadata_key)s.")
 
 
@@ -920,11 +942,13 @@ class MalformedRequestBody(NovaException):
     message = _("Malformed message body: %(reason)s")
 
 
-class ConfigNotFound(NotFound):
+# NOTE(johannes): NotFound should only be used when a 404 error is
+# appropriate to be returned
+class ConfigNotFound(NovaException):
     message = _("Could not find config at %(path)s")
 
 
-class PasteAppNotFound(NotFound):
+class PasteAppNotFound(NovaException):
     message = _("Could not load paste app '%(name)s' from %(path)s")
 
 
@@ -969,12 +993,16 @@ class QuotaError(NovaException):
 
 
 class TooManyInstances(QuotaError):
-    message = _("Quota exceeded: already used %(used)d of %(allowed)d"
-                " instances")
+    message = _("Quota exceeded for %(overs)s: Requested %(req)s,"
+                " but already used %(used)d of %(allowed)d instances")
 
 
 class VolumeSizeTooLarge(QuotaError):
     message = _("Maximum volume size exceeded")
+
+
+class FloatingIpLimitExceeded(QuotaError):
+    message = _("Maximum number of floating ips exceeded")
 
 
 class MetadataLimitExceeded(QuotaError):
@@ -991,6 +1019,10 @@ class OnsetFilePathLimitExceeded(QuotaError):
 
 class OnsetFileContentLimitExceeded(QuotaError):
     message = _("Personality file content too long")
+
+
+class KeypairLimitExceeded(QuotaError):
+    message = _("Maximum number of key pairs exceeded")
 
 
 class AggregateError(NovaException):
@@ -1061,7 +1093,7 @@ class InvalidInstanceIDMalformed(Invalid):
 
 
 class CouldNotFetchImage(NovaException):
-    message = _("Could not fetch image %(image)s")
+    message = _("Could not fetch image %(image_id)s")
 
 
 def get_context_from_function_and_args(function, args, kwargs):

@@ -16,14 +16,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import webob.exc
-
 from nova.api.ec2 import cloud
-from nova.api.ec2 import ec2utils
-from nova.api.ec2 import inst_state
-from nova.compute import power_state
 from nova.compute import utils as compute_utils
-from nova.compute import vm_states
 from nova import context
 from nova import db
 from nova import exception
@@ -34,14 +28,14 @@ from nova.openstack.common import importutils
 from nova import rpc
 from nova import test
 
-LOG = logging.getLogger('nova.tests.ec2_validate')
+LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
 
 
 class EC2ValidateTestCase(test.TestCase):
     def setUp(self):
         super(EC2ValidateTestCase, self).setUp()
-        self.flags(connection_type='fake',
+        self.flags(compute_driver='nova.virt.fake.FakeDriver',
                    stub_network=True)
 
         def dumb(*args, **kwargs):

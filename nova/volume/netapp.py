@@ -23,8 +23,8 @@ ONTAP 7-mode storage systems with installed iSCSI licenses.
 
 """
 
-import time
 import string
+import time
 
 import suds
 from suds import client
@@ -36,7 +36,7 @@ from nova import log as logging
 from nova.openstack.common import cfg
 from nova.volume import driver
 
-LOG = logging.getLogger("nova.volume.driver")
+LOG = logging.getLogger(__name__)
 
 netapp_opts = [
     cfg.StrOpt('netapp_wsdl_url',

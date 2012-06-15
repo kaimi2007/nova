@@ -247,7 +247,7 @@ class Instance(BASE, NovaBase):
     display_name = Column(String(255))
     display_description = Column(String(255))
 
-    # To remember on which host a instance booted.
+    # To remember on which host an instance booted.
     # An instance may have moved to another host by live migraiton.
     launched_on = Column(Text)
     locked = Column(Boolean)
@@ -277,9 +277,6 @@ class Instance(BASE, NovaBase):
 
     # EC2 disable_api_termination
     disable_terminate = Column(Boolean(), default=False, nullable=False)
-
-    # OpenStack compute cell name
-    cell_name = Column(String(255))
 
 
 class InstanceInfoCache(BASE, NovaBase):
@@ -313,14 +310,14 @@ class InstanceTypes(BASE, NovaBase):
     swap = Column(Integer, nullable=False, default=0)
     rxtx_factor = Column(Float, nullable=False, default=1)
     vcpu_weight = Column(Integer, nullable=True)
+    disabled = Column(Boolean, default=False)
 
     instances = relationship(Instance,
                            backref=backref('instance_type', uselist=False),
                            foreign_keys=id,
                            primaryjoin='and_('
                                'Instance.instance_type_id == '
-                               'InstanceTypes.id, '
-                               'InstanceTypes.deleted == False)')
+                               'InstanceTypes.id)')
 
 
 class Volume(BASE, NovaBase):
@@ -343,7 +340,7 @@ class Volume(BASE, NovaBase):
     availability_zone = Column(String(255))  # TODO(vish): foreign key?
     instance_uuid = Column(String(36))
     mountpoint = Column(String(255))
-    attach_time = Column(String(255))  # TODO(vish): datetime
+    attach_time = Column(DateTime)
     status = Column(String(255))  # TODO(vish): enum?
     attach_status = Column(String(255))  # TODO(vish): enum
 
@@ -439,6 +436,49 @@ class QuotaClass(BASE, NovaBase):
     hard_limit = Column(Integer, nullable=True)
 
 
+class QuotaUsage(BASE, NovaBase):
+    """Represents the current usage for a given resource."""
+
+    __tablename__ = 'quota_usages'
+    id = Column(Integer, primary_key=True)
+
+    project_id = Column(String(255), index=True)
+    resource = Column(String(255))
+
+    in_use = Column(Integer)
+    reserved = Column(Integer)
+
+    @property
+    def total(self):
+        return self.in_use + self.reserved
+
+    until_refresh = Column(Integer, nullable=True)
+
+
+class Reservation(BASE, NovaBase):
+    """Represents a resource reservation for quotas."""
+
+    __tablename__ = 'reservations'
+    id = Column(Integer, primary_key=True)
+    uuid = Column(String(36), nullable=False)
+
+    usage_id = Column(Integer, ForeignKey('quota_usages.id'), nullable=False)
+    # NOTE(dprince): Force innerjoin below for lockmode update on PostgreSQL
+    usage = relationship(QuotaUsage,
+                         backref=backref('reservations'),
+                         foreign_keys=usage_id,
+                         innerjoin=True,
+                         primaryjoin='and_('
+                              'Reservation.usage_id == QuotaUsage.id,'
+                              'Reservation.deleted == False)')
+
+    project_id = Column(String(255), index=True)
+    resource = Column(String(255))
+
+    delta = Column(Integer)
+    expire = Column(DateTime, nullable=False)
+
+
 class Snapshot(BASE, NovaBase):
     """Represents a block storage device that can be attached to a vm."""
     __tablename__ = 'snapshots'
@@ -490,15 +530,9 @@ class BlockDeviceMapping(BASE, NovaBase):
     # for ephemeral device
     virtual_name = Column(String(255), nullable=True)
 
-    # for snapshot or volume
-    snapshot_id = Column(String(36), ForeignKey('snapshots.id'))
-    # outer join
-    snapshot = relationship(Snapshot,
-                            foreign_keys=snapshot_id)
+    snapshot_id = Column(String(36))
 
-    volume_id = Column(String(36), ForeignKey('volumes.id'), nullable=True)
-    volume = relationship(Volume,
-                          foreign_keys=volume_id)
+    volume_id = Column(String(36), nullable=True)
     volume_size = Column(Integer, nullable=True)
 
     # for no device to suppress devices.
@@ -527,7 +561,7 @@ class SecurityGroupInstanceAssociation(BASE, NovaBase):
     __tablename__ = 'security_group_instance_association'
     id = Column(Integer, primary_key=True)
     security_group_id = Column(Integer, ForeignKey('security_groups.id'))
-    instance_id = Column(Integer, ForeignKey('instances.id'))
+    instance_uuid = Column(String(36), ForeignKey('instances.uuid'))
 
 
 class SecurityGroup(BASE, NovaBase):
@@ -548,7 +582,7 @@ class SecurityGroup(BASE, NovaBase):
         'SecurityGroupInstanceAssociation.deleted == False,'
         'SecurityGroup.deleted == False)',
                              secondaryjoin='and_('
-        'SecurityGroupInstanceAssociation.instance_id == Instance.id,'
+        'SecurityGroupInstanceAssociation.instance_uuid == Instance.uuid,'
         # (anthony) the condition below shouldn't be necessary now that the
         # association is being marked as deleted.  However, removing this
         # may cause existing deployments to choke, so I'm leaving it
@@ -682,7 +716,7 @@ class FixedIp(BASE, NovaBase):
     virtual_interface_id = Column(Integer, nullable=True)
     instance_id = Column(Integer, nullable=True)
     # associated means that a fixed_ip has its instance_id column set
-    # allocated means that a fixed_ip has a its virtual_interface_id column set
+    # allocated means that a fixed_ip has its virtual_interface_id column set
     allocated = Column(Boolean, default=False)
     # leased means dhcp bridge has leased the ip
     leased = Column(Boolean, default=False)
@@ -809,7 +843,7 @@ class Console(BASE, NovaBase):
     __tablename__ = 'consoles'
     id = Column(Integer, primary_key=True)
     instance_name = Column(String(255))
-    instance_id = Column(Integer)
+    instance_uuid = Column(String(36))
     password = Column(String(255))
     port = Column(Integer, nullable=True)
     pool_id = Column(Integer, ForeignKey('console_pools.id'))
@@ -822,11 +856,13 @@ class InstanceMetadata(BASE, NovaBase):
     id = Column(Integer, primary_key=True)
     key = Column(String(255))
     value = Column(String(255))
-    instance_id = Column(Integer, ForeignKey('instances.id'), nullable=False)
+    instance_uuid = Column(String(36), ForeignKey('instances.uuid'),
+                           nullable=False)
     instance = relationship(Instance, backref="metadata",
-                            foreign_keys=instance_id,
+                            foreign_keys=instance_uuid,
                             primaryjoin='and_('
-                                'InstanceMetadata.instance_id == Instance.id,'
+                                'InstanceMetadata.instance_uuid == '
+                                     'Instance.uuid,'
                                 'InstanceMetadata.deleted == False)')
 
 
@@ -860,22 +896,6 @@ class InstanceTypeExtraSpecs(BASE, NovaBase):
                  primaryjoin='and_('
                  'InstanceTypeExtraSpecs.instance_type_id == InstanceTypes.id,'
                  'InstanceTypeExtraSpecs.deleted == False)')
-
-
-class Cell(BASE, NovaBase):
-    """Represents parent and child cells of this cell."""
-    __tablename__ = 'cells'
-    id = Column(Integer, primary_key=True)
-    name = Column(String(255))
-    api_url = Column(String(255))
-    username = Column(String(255))
-    password = Column(String(255))
-    weight_offset = Column(Float(), default=0.0)
-    weight_scale = Column(Float(), default=1.0)
-    is_parent = Column(Boolean())
-    rpc_host = Column(String(255))
-    rpc_port = Column(Integer())
-    rpc_virtual_host = Column(String(255))
 
 
 class AggregateHost(BASE, NovaBase):
@@ -1015,51 +1035,3 @@ class InstanceFault(BASE, NovaBase):
     code = Column(Integer(), nullable=False)
     message = Column(String(255))
     details = Column(Text)
-
-
-def register_models():
-    """Register Models and create metadata.
-
-    Called from nova.db.sqlalchemy.__init__ as part of loading the driver,
-    it will never need to be called explicitly elsewhere unless the
-    connection is lost and needs to be reestablished.
-    """
-    from sqlalchemy import create_engine
-    models = (AgentBuild,
-              Aggregate,
-              AggregateHost,
-              AggregateMetadata,
-              AuthToken,
-              Certificate,
-              Cell,
-              Console,
-              ConsolePool,
-              FixedIp,
-              FloatingIp,
-              Instance,
-              InstanceFault,
-              InstanceMetadata,
-              InstanceTypeExtraSpecs,
-              InstanceTypes,
-              IscsiTarget,
-              Migration,
-              Network,
-              Project,
-              SecurityGroup,
-              SecurityGroupIngressRule,
-              SecurityGroupInstanceAssociation,
-              Service,
-              SMBackendConf,
-              SMFlavors,
-              SMVolume,
-              User,
-              Volume,
-              VolumeMetadata,
-              VolumeTypeExtraSpecs,
-              VolumeTypes,
-              VolumeIdMapping,
-              SnapshotIdMapping,
-              )
-    engine = create_engine(FLAGS.sql_connection, echo=False)
-    for model in models:
-        model.metadata.create_all(engine)

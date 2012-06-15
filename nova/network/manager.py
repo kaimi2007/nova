@@ -64,14 +64,18 @@ from nova.network import api as network_api
 from nova.network import model as network_model
 from nova.notifier import api as notifier
 from nova.openstack.common import cfg
+from nova.openstack.common import excutils
 from nova.openstack.common import importutils
+from nova.openstack.common import jsonutils
 import nova.policy
 from nova import quota
-from nova import utils
 from nova import rpc
+from nova import utils
 
 
 LOG = logging.getLogger(__name__)
+
+QUOTAS = quota.QUOTAS
 
 network_opts = [
     cfg.StrOpt('flat_network_bridge',
@@ -194,12 +198,10 @@ class RPCAllocateFixedIP(object):
                 host = rpc.call(context, FLAGS.network_topic,
                                 {'method': 'set_network_host',
                                  'args': {'network_ref':
-                                 utils.to_primitive(network)}})
+                                 jsonutils.to_primitive(network)}})
             if host != self.host:
                 # need to call allocate_fixed_ip to correct network host
-                topic = self.db.queue_get_for(context,
-                                              FLAGS.network_topic,
-                                              host)
+                topic = rpc.queue_get_for(context, FLAGS.network_topic, host)
                 args = {}
                 args['instance_id'] = instance_id
                 args['network_id'] = network['id']
@@ -237,7 +239,7 @@ class RPCAllocateFixedIP(object):
             host = network['host']
         if host != self.host:
             # need to call deallocate_fixed_ip on correct network host
-            topic = self.db.queue_get_for(context, FLAGS.network_topic, host)
+            topic = rpc.queue_get_for(context, FLAGS.network_topic, host)
             args = {'address': address,
                     'host': host}
             rpc.cast(context, topic,
@@ -397,21 +399,34 @@ class FloatingIP(object):
     def allocate_floating_ip(self, context, project_id, pool=None):
         """Gets a floating ip from the pool."""
         # NOTE(tr3buchet): all network hosts in zone now use the same pool
-        LOG.debug("QUOTA: %s" % quota.allowed_floating_ips(context, 1))
-        if quota.allowed_floating_ips(context, 1) < 1:
-            LOG.warn(_('Quota exceeded for %s, tried to allocate address'),
-                     context.project_id)
-            raise exception.QuotaError(code='AddressLimitExceeded')
         pool = pool or FLAGS.default_floating_pool
 
-        floating_ip = self.db.floating_ip_allocate_address(context,
-                                                    project_id,
-                                                    pool)
-        payload = dict(project_id=project_id, floating_ip=floating_ip)
-        notifier.notify(context,
-                        notifier.publisher_id("network"),
-                        'network.floating_ip.allocate',
-                        notifier.INFO, payload)
+        # Check the quota; can't put this in the API because we get
+        # called into from other places
+        try:
+            reservations = QUOTAS.reserve(context, floating_ips=1)
+        except exception.OverQuota:
+            pid = context.project_id
+            LOG.warn(_("Quota exceeded for %(pid)s, tried to allocate "
+                       "floating IP") % locals())
+            raise exception.FloatingIpLimitExceeded()
+
+        try:
+            floating_ip = self.db.floating_ip_allocate_address(context,
+                                                               project_id,
+                                                               pool)
+            payload = dict(project_id=project_id, floating_ip=floating_ip)
+            notifier.notify(context,
+                            notifier.publisher_id("network"),
+                            'network.floating_ip.allocate',
+                            notifier.INFO, payload)
+
+            # Commit the reservations
+            QUOTAS.commit(context, reservations)
+        except Exception:
+            with excutils.save_and_reraise_exception():
+                QUOTAS.rollback(context, reservations)
+
         return floating_ip
 
     @wrap_check_policy
@@ -442,7 +457,19 @@ class FloatingIP(object):
                         'network.floating_ip.deallocate',
                         notifier.INFO, payload=payload)
 
+        # Get reservations...
+        try:
+            reservations = QUOTAS.reserve(context, floating_ips=-1)
+        except Exception:
+            reservations = None
+            LOG.exception(_("Failed to update usages deallocating "
+                            "floating IP"))
+
         self.db.floating_ip_deallocate(context, address)
+
+        # Commit the reservations
+        if reservations:
+            QUOTAS.commit(context, reservations)
 
     @wrap_check_policy
     def associate_floating_ip(self, context, floating_address, fixed_address,
@@ -484,7 +511,7 @@ class FloatingIP(object):
         else:
             # send to correct host
             rpc.cast(context,
-                     self.db.queue_get_for(context, FLAGS.network_topic, host),
+                     rpc.queue_get_for(context, FLAGS.network_topic, host),
                      {'method': '_associate_floating_ip',
                       'args': {'floating_address': floating_address,
                                'fixed_address': fixed_address,
@@ -554,7 +581,7 @@ class FloatingIP(object):
         else:
             # send to correct host
             rpc.cast(context,
-                     self.db.queue_get_for(context, FLAGS.network_topic, host),
+                     rpc.queue_get_for(context, FLAGS.network_topic, host),
                      {'method': '_disassociate_floating_ip',
                       'args': {'address': address,
                                'interface': interface}})
@@ -737,8 +764,9 @@ class NetworkManager(manager.SchedulerDependentManager):
         temp = importutils.import_object(FLAGS.floating_ip_dns_manager)
         self.floating_dns_manager = temp
         self.network_api = network_api.API()
-        self.compute_api = compute_api.API()
-        self.sgh = importutils.import_object(FLAGS.security_group_handler)
+        self.security_group_api = compute_api.SecurityGroupAPI()
+        self.compute_api = compute_api.API(
+                                   security_group_api=self.security_group_api)
 
         # NOTE(tr3buchet: unless manager subclassing NetworkManager has
         #                 already imported ipam, import nova ipam here
@@ -816,10 +844,10 @@ class NetworkManager(manager.SchedulerDependentManager):
         instance_ref = self.db.instance_get(admin_context, instance_id)
         groups = instance_ref['security_groups']
         group_ids = [group['id'] for group in groups]
-        self.compute_api.trigger_security_group_members_refresh(admin_context,
-                                                                group_ids)
-        self.sgh.trigger_security_group_members_refresh(admin_context,
+        self.security_group_api.trigger_members_refresh(admin_context,
                                                         group_ids)
+        self.security_group_api.trigger_handler('security_group_members',
+                                                admin_context, group_ids)
 
     def get_floating_ips_by_fixed_address(self, context, fixed_address):
         # NOTE(jkoelker) This is just a stub function. Managers supporting
@@ -984,7 +1012,7 @@ class NetworkManager(manager.SchedulerDependentManager):
         nw_info = self.build_network_info_model(context, vifs, networks,
                                                          rxtx_factor, host)
         self.db.instance_info_cache_update(context, instance_uuid,
-                                          {'network_info': nw_info.as_cache()})
+                                          {'network_info': nw_info.json()})
         return nw_info
 
     def build_network_info_model(self, context, vifs, networks,
@@ -1148,8 +1176,11 @@ class NetworkManager(manager.SchedulerDependentManager):
     @wrap_check_policy
     def add_fixed_ip_to_instance(self, context, instance_id, host, network_id):
         """Adds a fixed ip to an instance from specified network."""
-        networks = [self._get_network_by_id(context, network_id)]
-        self._allocate_fixed_ips(context, instance_id, host, networks)
+        if utils.is_uuid_like(network_id):
+            network = self.get_network(context, network_id)
+        else:
+            network = self._get_network_by_id(context, network_id)
+        self._allocate_fixed_ips(context, instance_id, host, [network])
 
     @wrap_check_policy
     def remove_fixed_ip_from_instance(self, context, instance_id, host,
@@ -1513,8 +1544,7 @@ class NetworkManager(manager.SchedulerDependentManager):
                 call_func(context, network)
             else:
                 # i'm not the right host, run call on correct host
-                topic = self.db.queue_get_for(context, FLAGS.network_topic,
-                                              host)
+                topic = rpc.queue_get_for(context, FLAGS.network_topic, host)
                 args = {'network_id': network['id'], 'teardown': teardown}
                 # NOTE(tr3buchet): the call is just to wait for completion
                 green_pool.spawn_n(rpc.call, context, topic,

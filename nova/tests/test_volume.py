@@ -25,17 +25,19 @@ import cStringIO
 import mox
 
 from nova import context
-from nova import exception
 from nova import db
+from nova import exception
 from nova import flags
 from nova import log as logging
 from nova.notifier import test_notifier
 from nova.openstack.common import importutils
 import nova.policy
+from nova import quota
 from nova import rpc
 from nova import test
 import nova.volume.api
 
+QUOTAS = quota.QUOTAS
 FLAGS = flags.FLAGS
 LOG = logging.getLogger(__name__)
 
@@ -46,7 +48,7 @@ class VolumeTestCase(test.TestCase):
     def setUp(self):
         super(VolumeTestCase, self).setUp()
         self.compute = importutils.import_object(FLAGS.compute_manager)
-        self.flags(connection_type='fake')
+        self.flags(compute_driver='nova.virt.fake.FakeDriver')
         self.stubs.Set(nova.flags.FLAGS, 'notification_driver',
                 'nova.notifier.test_notifier')
         self.volume = importutils.import_object(FLAGS.volume_manager)
@@ -57,7 +59,7 @@ class VolumeTestCase(test.TestCase):
         test_notifier.NOTIFICATIONS = []
 
     def tearDown(self):
-        db.instance_destroy(self.context, self.instance_id)
+        db.instance_destroy(self.context, self.instance_uuid)
         super(VolumeTestCase, self).tearDown()
 
     @staticmethod
@@ -90,6 +92,20 @@ class VolumeTestCase(test.TestCase):
 
     def test_create_delete_volume(self):
         """Test volume can be created and deleted."""
+        # Need to stub out reserve, commit, and rollback
+        def fake_reserve(context, expire=None, **deltas):
+            return ["RESERVATION"]
+
+        def fake_commit(context, reservations):
+            pass
+
+        def fake_rollback(context, reservations):
+            pass
+
+        self.stubs.Set(QUOTAS, "reserve", fake_reserve)
+        self.stubs.Set(QUOTAS, "commit", fake_commit)
+        self.stubs.Set(QUOTAS, "rollback", fake_rollback)
+
         volume = self._create_volume()
         volume_id = volume['id']
         self.assertEquals(len(test_notifier.NOTIFICATIONS), 0)
@@ -112,8 +128,8 @@ class VolumeTestCase(test.TestCase):
         self.volume.create_volume(self.context, volume_id)
 
         self.mox.StubOutWithMock(self.volume.driver, 'delete_volume')
-        self.volume.driver.delete_volume(mox.IgnoreArg()) \
-                                              .AndRaise(exception.VolumeIsBusy)
+        self.volume.driver.delete_volume(mox.IgnoreArg()).AndRaise(
+                exception.VolumeIsBusy)
         self.mox.ReplayAll()
         res = self.volume.delete_volume(self.context, volume_id)
         self.assertEqual(True, res)
@@ -223,7 +239,7 @@ class VolumeTestCase(test.TestCase):
                           db.volume_get,
                           self.context,
                           volume_id)
-        db.instance_destroy(self.context, instance_id)
+        db.instance_destroy(self.context, instance_uuid)
 
     def test_concurrent_volumes_get_different_targets(self):
         """Ensure multiple concurrent volumes get different targets."""
@@ -358,8 +374,8 @@ class VolumeTestCase(test.TestCase):
         self.volume.create_snapshot(self.context, volume_id, snapshot_id)
 
         self.mox.StubOutWithMock(self.volume.driver, 'delete_snapshot')
-        self.volume.driver.delete_snapshot(mox.IgnoreArg()) \
-                                            .AndRaise(exception.SnapshotIsBusy)
+        self.volume.driver.delete_snapshot(mox.IgnoreArg()).AndRaise(
+                exception.SnapshotIsBusy)
         self.mox.ReplayAll()
         self.volume.delete_snapshot(self.context, snapshot_id)
         snapshot_ref = db.snapshot_get(self.context, snapshot_id)
@@ -379,6 +395,8 @@ class VolumeTestCase(test.TestCase):
         self.assertEquals(len(test_notifier.NOTIFICATIONS), 2)
         msg = test_notifier.NOTIFICATIONS[0]
         self.assertEquals(msg['event_type'], 'volume.create.start')
+        payload = msg['payload']
+        self.assertEquals(payload['status'], 'creating')
         msg = test_notifier.NOTIFICATIONS[1]
         self.assertEquals(msg['priority'], 'INFO')
         self.assertEquals(msg['event_type'], 'volume.create.end')
@@ -386,7 +404,7 @@ class VolumeTestCase(test.TestCase):
         self.assertEquals(payload['tenant_id'], volume['project_id'])
         self.assertEquals(payload['user_id'], volume['user_id'])
         self.assertEquals(payload['volume_id'], volume['id'])
-        self.assertEquals(payload['status'], 'creating')
+        self.assertEquals(payload['status'], 'available')
         self.assertEquals(payload['size'], volume['size'])
         self.assertTrue('display_name' in payload)
         self.assertTrue('snapshot_id' in payload)
