@@ -36,15 +36,27 @@ class ComputeFilter(filters.BaseHostFilter):
         # Now, it can do various operations:
         #   =, s==, s!=, s>=, s>, s<=, s<, <in>, <or>, ==, !=, >=, <=
         op_methods = {'=': lambda x, y: (float(x) >= float(y)),
+                      '=+': lambda x, y: (float(x) >= float(y)),
+                      '=-': lambda x, y: (float(x) >= float(y)),
                       '<in>': lambda x, y: (x.find(y) != -1),
                       '==': lambda x, y: (float(x) == float(y)),
+                      '==+': lambda x, y: (float(x) == float(y)),
+                      '==-': lambda x, y: (float(x) == float(y)),
                       '!=': lambda x, y: (float(x) != float(y)),
-                      's==': lambda x, y: operator.eq,
-                      's!=': lambda x, y: operator.ne,
-                      's<': lambda x, y: operator.lt,
-                      's<=': lambda x, y: operator.le,
-                      's>': lambda x, y: operator.gt,
-                      's>=': lambda x, y: operator.ge}
+                      '!=+': lambda x, y: (float(x) != float(y)),
+                      '!=-': lambda x, y: (float(x) != float(y)),
+                      '>=': lambda x, y: (float(x) >= float(y)),
+                      '>=+': lambda x, y: (float(x) >= float(y)),
+                      '>=-': lambda x, y: (float(x) >= float(y)),
+                      '<=': lambda x, y: (float(x) <= float(y)),
+                      '<=+': lambda x, y: (float(x) <= float(y)),
+                      '<=-': lambda x, y: (float(x) <= float(y)),
+                      's==': lambda x, y: operator.eq(x, y),
+                      's!=': lambda x, y: operator.ne(x, y),
+                      's<': lambda x, y: operator.lt(x, y),
+                      's<=': lambda x, y: operator.le(x, y),
+                      's>': lambda x, y: operator.gt(x, y),
+                      's>=': lambda x, y: operator.ge(x, y)}
 
         cap_extra_specs = capabilities.get('instance_type_extra_specs', None)
         for key, req in instance_type['extra_specs'].iteritems():
@@ -57,13 +69,13 @@ class ComputeFilter(filters.BaseHostFilter):
                         return False
             else:
                 words = req.split()
-                if len(words) == 1: 
+                if len(words) == 1:
                     if cap != req:
                         return False
                 else:
-                    op = words[0] 
-                    method = op_methods.get(op) 
-                    new_req = words[1] 
+                    op = words[0]
+                    method = op_methods.get(op)
+                    new_req = words[1]
                     for i in range(2, len(words)):
                         new_req += words[i]
 
@@ -76,9 +88,10 @@ class ComputeFilter(filters.BaseHostFilter):
                         if found == 0:
                             return False
                     elif method:
-                        return method(cap, new_req)
+                        if method(cap, new_req) == False:
+                            return False
                     else:
-                        if float(cap) != float(req):
+                        if cap != req:
                             return False
         return True
 
