@@ -67,9 +67,10 @@ from nova.openstack.common import cfg
 from nova.openstack.common import excutils
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
+from nova.openstack.common import rpc
+from nova.openstack.common import timeutils
 import nova.policy
 from nova import quota
-from nova import rpc
 from nova import utils
 
 
@@ -510,7 +511,7 @@ class FloatingIP(object):
                                         fixed_address, interface)
         else:
             # send to correct host
-            rpc.cast(context,
+            rpc.call(context,
                      rpc.queue_get_for(context, FLAGS.network_topic, host),
                      {'method': '_associate_floating_ip',
                       'args': {'floating_address': floating_address,
@@ -580,7 +581,7 @@ class FloatingIP(object):
             self._disassociate_floating_ip(context, address, interface)
         else:
             # send to correct host
-            rpc.cast(context,
+            rpc.call(context,
                      rpc.queue_get_for(context, FLAGS.network_topic, host),
                      {'method': '_disassociate_floating_ip',
                       'args': {'address': address,
@@ -819,7 +820,7 @@ class NetworkManager(manager.SchedulerDependentManager):
     @manager.periodic_task
     def _disassociate_stale_fixed_ips(self, context):
         if self.timeout_fixed_ips:
-            now = utils.utcnow()
+            now = timeutils.utcnow()
             timeout = FLAGS.fixed_ip_disassociate_timeout
             time = now - datetime.timedelta(seconds=timeout)
             num = self.db.fixed_ip_disassociate_all_by_timeout(context,
@@ -1008,11 +1009,8 @@ class NetworkManager(manager.SchedulerDependentManager):
                 network = self._get_network_by_id(context, vif['network_id'])
                 networks[vif['uuid']] = network
 
-        # update instance network cache and return network_info
         nw_info = self.build_network_info_model(context, vifs, networks,
                                                          rxtx_factor, host)
-        self.db.instance_info_cache_update(context, instance_uuid,
-                                          {'network_info': nw_info.json()})
         return nw_info
 
     def build_network_info_model(self, context, vifs, networks,
@@ -1303,7 +1301,7 @@ class NetworkManager(manager.SchedulerDependentManager):
         if fixed_ip['instance_id'] is None:
             msg = _('IP %s leased that is not associated') % address
             raise exception.NovaException(msg)
-        now = utils.utcnow()
+        now = timeutils.utcnow()
         self.db.fixed_ip_update(context,
                                 fixed_ip['address'],
                                 {'leased': True,
@@ -1612,6 +1610,17 @@ class NetworkManager(manager.SchedulerDependentManager):
         """Returns the vifs associated with an instance"""
         vifs = self.db.virtual_interface_get_by_instance(context, instance_id)
         return [dict(vif.iteritems()) for vif in vifs]
+
+    def get_instance_id_by_floating_address(self, context, address):
+        """Returns the instance id a floating ip's fixed ip is allocated to"""
+        floating_ip = self.db.floating_ip_get_by_address(context, address)
+        if floating_ip['fixed_ip_id'] is None:
+            return None
+
+        fixed_ip = self.db.fixed_ip_get(context, floating_ip['fixed_ip_id'])
+
+        # NOTE(tr3buchet): this can be None
+        return fixed_ip['instance_id']
 
     @wrap_check_policy
     def get_network(self, context, network_uuid):

@@ -244,6 +244,8 @@ LIBVIRT_POWER_STATE = {
     VIR_DOMAIN_PMSUSPENDED: power_state.SUSPENDED,
 }
 
+MIN_LIBVIRT_VERSION = (0, 9, 7)
+
 
 def _late_load_cheetah():
     global Template
@@ -320,7 +322,25 @@ class LibvirtDriver(driver.ComputeDriver):
             self._host_state = HostState(self.read_only)
         return self._host_state
 
+    def has_min_version(self, ver):
+        libvirt_version = self._conn.getLibVersion()
+
+        def _munge_version(ver):
+            return ver[0] * 1000000 + ver[1] * 1000 + ver[2]
+
+        if libvirt_version < _munge_version(ver):
+            return False
+
+        return True
+
     def init_host(self, host):
+        if not self.has_min_version(MIN_LIBVIRT_VERSION):
+            major = MIN_LIBVIRT_VERSION[0]
+            minor = MIN_LIBVIRT_VERSION[1]
+            micro = MIN_LIBVIRT_VERSION[2]
+            LOG.error(_('Nova requires libvirt version '
+                        '%(major)i.%(minor)i.%(micro)i or greater.') %
+                        locals())
         if FLAGS.connection_type == 'gpu':
             global gpus_available
             gpus_available = range(FLAGS.xpus)
@@ -576,7 +596,7 @@ class LibvirtDriver(driver.ComputeDriver):
                 raise utils.LoopingCallDone(True)
 
         timer = utils.LoopingCall(_wait_for_destroy)
-        return timer.start(interval=0.5)
+        return timer.start(interval=0.5).wait()
 
     def destroy(self, instance, network_info, block_device_info=None):
         self._destroy(instance)
@@ -1137,7 +1157,7 @@ class LibvirtDriver(driver.ComputeDriver):
                          instance=instance)
                 self._create_domain(domain=dom)
                 timer = utils.LoopingCall(self._wait_for_running, instance)
-                return timer.start(interval=0.5)
+                return timer.start(interval=0.5).wait()
             greenthread.sleep(1)
         return False
 
@@ -1172,7 +1192,7 @@ class LibvirtDriver(driver.ComputeDriver):
                 raise utils.LoopingCallDone
 
         timer = utils.LoopingCall(_wait_for_reboot)
-        return timer.start(interval=0.5)
+        return timer.start(interval=0.5).wait()
 
     @exception.wrap_exception()
     def pause(self, instance):
@@ -1197,7 +1217,7 @@ class LibvirtDriver(driver.ComputeDriver):
         dom = self._lookup_by_name(instance['name'])
         self._create_domain(domain=dom)
         timer = utils.LoopingCall(self._wait_for_running, instance)
-        return timer.start(interval=0.5)
+        return timer.start(interval=0.5).wait()
 
     @exception.wrap_exception()
     def suspend(self, instance):
@@ -1317,7 +1337,7 @@ class LibvirtDriver(driver.ComputeDriver):
                 raise utils.LoopingCallDone
 
         timer = utils.LoopingCall(_wait_for_boot)
-        return timer.start(interval=0.5)
+        return timer.start(interval=0.5).wait()
 
     def _flush_libvirt_console(self, pty):
         out, err = utils.execute('dd',
@@ -1774,7 +1794,7 @@ class LibvirtDriver(driver.ComputeDriver):
             # for nova.api.ec2.cloud.CloudController.get_metadata()
             root_device = self.default_root_device
             db.instance_update(
-                nova_context.get_admin_context(), instance['id'],
+                nova_context.get_admin_context(), instance['uuid'],
                 {'root_device_name': '/dev/' + self.default_root_device})
 
         if FLAGS.libvirt_type == "lxc":
@@ -1908,7 +1928,7 @@ class LibvirtDriver(driver.ComputeDriver):
                 if ephemeral_device is not None:
                     swap_device = self.default_third_device
                     db.instance_update(
-                        nova_context.get_admin_context(), instance['id'],
+                        nova_context.get_admin_context(), instance['uuid'],
                         {'default_ephemeral_device':
                              '/dev/' + self.default_second_device})
                 else:
@@ -1940,7 +1960,7 @@ class LibvirtDriver(driver.ComputeDriver):
                     diskswap.target_bus = ephemeral_disk_bus
                     guest.add_device(diskswap)
                     db.instance_update(
-                        nova_context.get_admin_context(), instance['id'],
+                        nova_context.get_admin_context(), instance['uuid'],
                         {'default_swap_device': '/dev/' + swap_device})
 
                 for vol in block_device_mapping:
@@ -2340,8 +2360,12 @@ class LibvirtDriver(driver.ComputeDriver):
         for nodes in feature_nodes:
             features.append(nodes.get('name'))
 
+        arch_nodes = xml.findall('.//guest/arch')
+        guest_cpu_arches = list(node.get('name') for node in arch_nodes)
+
         cpu_info['topology'] = topology
         cpu_info['features'] = features
+        cpu_info['permitted_instance_types'] = guest_cpu_arches
         return jsonutils.dumps(cpu_info)
 
     def block_stats(self, instance_name, disk):
@@ -2581,7 +2605,7 @@ class LibvirtDriver(driver.ComputeDriver):
                 post_method(ctxt, instance_ref, dest, block_migration)
 
         timer.f = wait_for_live_migration
-        return timer.start(interval=0.5)
+        return timer.start(interval=0.5).wait()
 
     def pre_live_migration(self, block_device_info):
         """Preparation live migration.
@@ -2922,7 +2946,7 @@ class LibvirtDriver(driver.ComputeDriver):
                                     block_device_info=None)
         self._create_domain_and_network(xml, instance, network_info)
         timer = utils.LoopingCall(self._wait_for_running, instance)
-        return timer.start(interval=0.5)
+        return timer.start(interval=0.5).wait()
 
     @exception.wrap_exception()
     def finish_revert_migration(self, instance, network_info):
@@ -2938,7 +2962,7 @@ class LibvirtDriver(driver.ComputeDriver):
         self._create_domain_and_network(xml, instance, network_info)
 
         timer = utils.LoopingCall(self._wait_for_running, instance)
-        return timer.start(interval=0.5)
+        return timer.start(interval=0.5).wait()
 
     def confirm_migration(self, migration, instance, network_info):
         """Confirms a resize, destroying the source VM"""

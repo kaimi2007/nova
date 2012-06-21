@@ -34,6 +34,7 @@ from nova.db.sqlalchemy.session import get_session
 from nova import exception
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import timeutils
 from nova import utils
 from sqlalchemy import and_
 from sqlalchemy.exc import IntegrityError
@@ -1163,7 +1164,7 @@ def fixed_ip_disassociate_all_by_timeout(context, host, time):
                      filter(models.FixedIp.id.in_(fixed_ip_ids)).\
                      update({'instance_id': None,
                              'leased': False,
-                             'updated_at': utils.utcnow()},
+                             'updated_at': timeutils.utcnow()},
                              synchronize_session='fetch')
     return result
 
@@ -1453,29 +1454,29 @@ def instance_destroy(context, instance_uuid, constraint=None):
         if constraint is not None:
             query = constraint.apply(models.Instance, query)
         count = query.update({'deleted': True,
-                              'deleted_at': utils.utcnow(),
+                              'deleted_at': timeutils.utcnow(),
                               'updated_at': literal_column('updated_at')})
         if count == 0:
             raise exception.ConstraintNotMet()
         session.query(models.SecurityGroupInstanceAssociation).\
                 filter_by(instance_uuid=instance_ref['uuid']).\
                 update({'deleted': True,
-                        'deleted_at': utils.utcnow(),
+                        'deleted_at': timeutils.utcnow(),
                         'updated_at': literal_column('updated_at')})
         session.query(models.InstanceMetadata).\
                 filter_by(instance_uuid=instance_ref['uuid']).\
                 update({'deleted': True,
-                        'deleted_at': utils.utcnow(),
+                        'deleted_at': timeutils.utcnow(),
                         'updated_at': literal_column('updated_at')})
         session.query(models.InstanceSystemMetadata).\
                 filter_by(instance_uuid=instance_ref['uuid']).\
                 update({'deleted': True,
-                        'deleted_at': utils.utcnow(),
+                        'deleted_at': timeutils.utcnow(),
                         'updated_at': literal_column('updated_at')})
         session.query(models.BlockDeviceMapping).\
                 filter_by(instance_uuid=instance_ref['uuid']).\
                 update({'deleted': True,
-                        'deleted_at': utils.utcnow(),
+                        'deleted_at': timeutils.utcnow(),
                         'updated_at': literal_column('updated_at')})
 
         instance_info_cache_delete(context, instance_ref['uuid'],
@@ -1570,7 +1571,7 @@ def instance_get_all_by_filters(context, filters, sort_key, sort_dir):
     filters = filters.copy()
 
     if 'changes-since' in filters:
-        changes_since = utils.normalize_time(filters['changes-since'])
+        changes_since = timeutils.normalize_time(filters['changes-since'])
         query_prefix = query_prefix.\
                             filter(models.Instance.updated_at > changes_since)
 
@@ -1723,7 +1724,8 @@ def instance_get_floating_address(context, instance_id):
 
 @require_admin_context
 def instance_get_all_hung_in_rebooting(context, reboot_window, session=None):
-    reboot_window = utils.utcnow() - datetime.timedelta(seconds=reboot_window)
+    reboot_window = (timeutils.utcnow() -
+                     datetime.timedelta(seconds=reboot_window))
 
     if not session:
         session = get_session()
@@ -1736,7 +1738,7 @@ def instance_get_all_hung_in_rebooting(context, reboot_window, session=None):
 
 
 @require_context
-def instance_test_and_set(context, instance_id, attr, ok_states,
+def instance_test_and_set(context, instance_uuid, attr, ok_states,
                           new_state, session=None):
     """Atomically check if an instance is in a valid state, and if it is, set
     the instance into a new state.
@@ -1748,10 +1750,10 @@ def instance_test_and_set(context, instance_id, attr, ok_states,
         query = model_query(context, models.Instance, session=session,
                             project_only=True)
 
-        if utils.is_uuid_like(instance_id):
-            query = query.filter_by(uuid=instance_id)
+        if utils.is_uuid_like(instance_uuid):
+            query = query.filter_by(uuid=instance_uuid)
         else:
-            query = query.filter_by(id=instance_id)
+            raise exception.InvalidUUID(instance_uuid)
 
         # NOTE(vish): if with_lockmode isn't supported, as in sqlite,
         #             then this has concurrency issues
@@ -1770,38 +1772,37 @@ def instance_test_and_set(context, instance_id, attr, ok_states,
 
 
 @require_context
-def instance_update(context, instance_id, values):
-
-    instance_ref = _instance_update(context, instance_id, values)[1]
+def instance_update(context, instance_uuid, values):
+    instance_ref = _instance_update(context, instance_uuid, values)[1]
     return instance_ref
 
 
 @require_context
-def instance_update_and_get_original(context, instance_id, values):
+def instance_update_and_get_original(context, instance_uuid, values):
     """Set the given properties on an instance and update it. Return
     a shallow copy of the original instance reference, as well as the
     updated one.
 
     :param context: = request context object
-    :param instance_id: = instance id or uuid
+    :param instance_uuid: = instance uuid
     :param values: = dict containing column values
 
     :returns: a tuple of the form (old_instance_ref, new_instance_ref)
 
     Raises NotFound if instance does not exist.
     """
-    return _instance_update(context, instance_id, values,
-            copy_old_instance=True)
+    return _instance_update(context, instance_uuid, values,
+                            copy_old_instance=True)
 
 
-def _instance_update(context, instance_id, values, copy_old_instance=False):
+def _instance_update(context, instance_uuid, values, copy_old_instance=False):
     session = get_session()
 
-    if utils.is_uuid_like(instance_id):
-        instance_ref = instance_get_by_uuid(context, instance_id,
+    if utils.is_uuid_like(instance_uuid):
+        instance_ref = instance_get_by_uuid(context, instance_uuid,
                                             session=session)
     else:
-        instance_ref = instance_get(context, instance_id, session=session)
+        raise exception.InvalidUUID(instance_uuid)
 
     if copy_old_instance:
         old_instance_ref = copy.copy(instance_ref)
@@ -1849,7 +1850,7 @@ def instance_remove_security_group(context, instance_uuid, security_group_id):
                 filter_by(instance_uuid=instance_ref['uuid']).\
                 filter_by(security_group_id=security_group_id).\
                 update({'deleted': True,
-                        'deleted_at': utils.utcnow(),
+                        'deleted_at': timeutils.utcnow(),
                         'updated_at': literal_column('updated_at')})
 
 
@@ -1932,7 +1933,7 @@ def instance_info_cache_delete(context, instance_uuid, session=None):
     :param session: = optional session object
     """
     values = {'deleted': True,
-              'deleted_at': utils.utcnow()}
+              'deleted_at': timeutils.utcnow()}
     instance_info_cache_update(context, instance_uuid, values, session)
 
 
@@ -1964,7 +1965,7 @@ def key_pair_destroy_all_by_user(context, user_id):
         session.query(models.KeyPair).\
                 filter_by(user_id=user_id).\
                 update({'deleted': True,
-                        'deleted_at': utils.utcnow(),
+                        'deleted_at': timeutils.utcnow(),
                         'updated_at': literal_column('updated_at')})
 
 
@@ -2102,7 +2103,7 @@ def network_delete_safe(context, network_id):
                 filter_by(deleted=False).\
                 update({'deleted': True,
                         'updated_at': literal_column('updated_at'),
-                        'deleted_at': utils.utcnow()})
+                        'deleted_at': timeutils.utcnow()})
         session.delete(network_ref)
 
 
@@ -2710,7 +2711,7 @@ def quota_reserve(context, resources, quotas, deltas, expire,
                 if usages[resource].until_refresh <= 0:
                     refresh = True
             elif max_age and (usages[resource].updated_at -
-                              utils.utcnow()).seconds >= max_age:
+                              timeutils.utcnow()).seconds >= max_age:
                 refresh = True
 
             # OK, refresh the usage
@@ -2882,9 +2883,10 @@ def quota_destroy_all_by_project(context, project_id):
 def reservation_expire(context):
     session = get_session()
     with session.begin():
+        current_time = timeutils.utcnow()
         results = model_query(context, models.Reservation, session=session,
                               read_deleted="no").\
-                          filter(models.Reservation.expire < utils.utcnow()).\
+                          filter(models.Reservation.expire < current_time).\
                           all()
 
         if results:
@@ -2933,7 +2935,7 @@ def volume_attached(context, volume_id, instance_uuid, mountpoint):
         volume_ref['mountpoint'] = mountpoint
         volume_ref['attach_status'] = 'attached'
         volume_ref['instance_uuid'] = instance_uuid
-        volume_ref['attach_time'] = utils.utcnow()
+        volume_ref['attach_time'] = timeutils.utcnow()
         volume_ref.save(session=session)
 
 
@@ -2976,7 +2978,7 @@ def volume_destroy(context, volume_id):
         session.query(models.Volume).\
                 filter_by(id=volume_id).\
                 update({'deleted': True,
-                        'deleted_at': utils.utcnow(),
+                        'deleted_at': timeutils.utcnow(),
                         'updated_at': literal_column('updated_at')})
         session.query(models.IscsiTarget).\
                 filter_by(volume_id=volume_id).\
@@ -2984,7 +2986,7 @@ def volume_destroy(context, volume_id):
         session.query(models.VolumeMetadata).\
                 filter_by(volume_id=volume_id).\
                 update({'deleted': True,
-                        'deleted_at': utils.utcnow(),
+                        'deleted_at': timeutils.utcnow(),
                         'updated_at': literal_column('updated_at')})
     return volume_ref
 
@@ -3199,7 +3201,7 @@ def volume_metadata_delete(context, volume_id, key):
     _volume_metadata_get_query(context, volume_id).\
         filter_by(key=key).\
         update({'deleted': True,
-                'deleted_at': utils.utcnow(),
+                'deleted_at': timeutils.utcnow(),
                 'updated_at': literal_column('updated_at')})
 
 
@@ -3276,7 +3278,7 @@ def snapshot_destroy(context, snapshot_id):
         session.query(models.Snapshot).\
                 filter_by(id=snapshot_id).\
                 update({'deleted': True,
-                        'deleted_at': utils.utcnow(),
+                        'deleted_at': timeutils.utcnow(),
                         'updated_at': literal_column('updated_at')})
 
 
@@ -3375,7 +3377,7 @@ def block_device_mapping_update_or_create(context, values):
                 filter(models.BlockDeviceMapping.device_name !=
                        values['device_name']).\
                 update({'deleted': True,
-                        'deleted_at': utils.utcnow(),
+                        'deleted_at': timeutils.utcnow(),
                         'updated_at': literal_column('updated_at')})
 
 
@@ -3393,7 +3395,7 @@ def block_device_mapping_destroy(context, bdm_id):
         session.query(models.BlockDeviceMapping).\
                 filter_by(id=bdm_id).\
                 update({'deleted': True,
-                        'deleted_at': utils.utcnow(),
+                        'deleted_at': timeutils.utcnow(),
                         'updated_at': literal_column('updated_at')})
 
 
@@ -3406,7 +3408,7 @@ def block_device_mapping_destroy_by_instance_and_volume(context, instance_uuid,
             filter_by(instance_uuid=instance_uuid).\
             filter_by(volume_id=volume_id).\
             update({'deleted': True,
-                    'deleted_at': utils.utcnow(),
+                    'deleted_at': timeutils.utcnow(),
                     'updated_at': literal_column('updated_at')})
 
 
@@ -3517,17 +3519,17 @@ def security_group_destroy(context, security_group_id):
         session.query(models.SecurityGroup).\
                 filter_by(id=security_group_id).\
                 update({'deleted': True,
-                        'deleted_at': utils.utcnow(),
+                        'deleted_at': timeutils.utcnow(),
                         'updated_at': literal_column('updated_at')})
         session.query(models.SecurityGroupInstanceAssociation).\
                 filter_by(security_group_id=security_group_id).\
                 update({'deleted': True,
-                        'deleted_at': utils.utcnow(),
+                        'deleted_at': timeutils.utcnow(),
                         'updated_at': literal_column('updated_at')})
         session.query(models.SecurityGroupIngressRule).\
                 filter_by(group_id=security_group_id).\
                 update({'deleted': True,
-                        'deleted_at': utils.utcnow(),
+                        'deleted_at': timeutils.utcnow(),
                         'updated_at': literal_column('updated_at')})
 
 
@@ -3628,7 +3630,7 @@ def provider_fw_rule_destroy(context, rule_id):
         session.query(models.ProviderFirewallRule).\
                 filter_by(id=rule_id).\
                 update({'deleted': True,
-                        'deleted_at': utils.utcnow(),
+                        'deleted_at': timeutils.utcnow(),
                         'updated_at': literal_column('updated_at')})
 
 
@@ -3902,7 +3904,7 @@ def migration_get_by_instance_and_status(context, instance_uuid, status):
 
 @require_admin_context
 def migration_get_all_unconfirmed(context, confirm_window, session=None):
-    confirm_window = (utils.utcnow() -
+    confirm_window = (timeutils.utcnow() -
                       datetime.timedelta(seconds=confirm_window))
 
     return model_query(context, models.Migration, session=session,
@@ -4153,12 +4155,12 @@ def instance_type_destroy(context, name):
         session.query(models.InstanceTypes).\
                 filter_by(id=instance_type_id).\
                 update({'deleted': True,
-                        'deleted_at': utils.utcnow(),
+                        'deleted_at': timeutils.utcnow(),
                         'updated_at': literal_column('updated_at')})
         session.query(models.InstanceTypeExtraSpecs).\
                 filter_by(instance_type_id=instance_type_id).\
                 update({'deleted': True,
-                        'deleted_at': utils.utcnow(),
+                        'deleted_at': timeutils.utcnow(),
                         'updated_at': literal_column('updated_at')})
 
 
@@ -4189,7 +4191,7 @@ def instance_metadata_delete(context, instance_uuid, key):
     _instance_metadata_get_query(context, instance_uuid).\
         filter_by(key=key).\
         update({'deleted': True,
-                'deleted_at': utils.utcnow(),
+                'deleted_at': timeutils.utcnow(),
                 'updated_at': literal_column('updated_at')})
 
 
@@ -4271,7 +4273,7 @@ def instance_system_metadata_delete(context, instance_uuid, key):
     _instance_system_metadata_get_query(context, instance_uuid).\
         filter_by(key=key).\
         update({'deleted': True,
-                'deleted_at': utils.utcnow(),
+                'deleted_at': timeutils.utcnow(),
                 'updated_at': literal_column('updated_at')})
 
 
@@ -4362,7 +4364,7 @@ def agent_build_destroy(context, agent_build_id):
                     read_deleted="yes").\
                 filter_by(id=agent_build_id).\
                 update({'deleted': True,
-                        'deleted_at': utils.utcnow(),
+                        'deleted_at': timeutils.utcnow(),
                         'updated_at': literal_column('updated_at')})
 
 
@@ -4412,7 +4414,7 @@ def bw_usage_update(context,
             bwusage.uuid = uuid
             bwusage.mac = mac
 
-        bwusage.last_refreshed = utils.utcnow()
+        bwusage.last_refreshed = timeutils.utcnow()
         bwusage.bw_in = bw_in
         bwusage.bw_out = bw_out
         bwusage.save(session=session)
@@ -4447,7 +4449,7 @@ def instance_type_extra_specs_delete(context, instance_type_id, key):
                             context, instance_type_id).\
         filter_by(key=key).\
         update({'deleted': True,
-                'deleted_at': utils.utcnow(),
+                'deleted_at': timeutils.utcnow(),
                 'updated_at': literal_column('updated_at')})
 
 
@@ -4576,12 +4578,12 @@ def volume_type_destroy(context, name):
         session.query(models.VolumeTypes).\
                 filter_by(id=volume_type_id).\
                 update({'deleted': True,
-                        'deleted_at': utils.utcnow(),
+                        'deleted_at': timeutils.utcnow(),
                         'updated_at': literal_column('updated_at')})
         session.query(models.VolumeTypeExtraSpecs).\
                 filter_by(volume_type_id=volume_type_id).\
                 update({'deleted': True,
-                        'deleted_at': utils.utcnow(),
+                        'deleted_at': timeutils.utcnow(),
                         'updated_at': literal_column('updated_at')})
 
 
@@ -4628,7 +4630,7 @@ def volume_type_extra_specs_delete(context, volume_type_id, key):
     _volume_type_extra_specs_query(context, volume_type_id).\
         filter_by(key=key).\
         update({'deleted': True,
-                'deleted_at': utils.utcnow(),
+                'deleted_at': timeutils.utcnow(),
                 'updated_at': literal_column('updated_at')})
 
 
@@ -4709,9 +4711,21 @@ def s3_image_create(context, image_uuid):
 
 @require_admin_context
 def sm_backend_conf_create(context, values):
-    backend_conf = models.SMBackendConf()
-    backend_conf.update(values)
-    backend_conf.save()
+    session = get_session()
+    with session.begin():
+        config_params = values['config_params']
+        backend_conf = model_query(context, models.SMBackendConf,
+                                   session=session,
+                                   read_deleted="yes").\
+                                   filter_by(config_params=config_params).\
+                                   first()
+
+        if backend_conf:
+            raise exception.Duplicate(_('Backend exists'))
+        else:
+            backend_conf = models.SMBackendConf()
+            backend_conf.update(values)
+            backend_conf.save(session=session)
     return backend_conf
 
 
@@ -4762,9 +4776,13 @@ def sm_backend_conf_get(context, sm_backend_id):
 @require_admin_context
 def sm_backend_conf_get_by_sr(context, sr_uuid):
     session = get_session()
-    return model_query(context, models.SMBackendConf, read_deleted="yes").\
-                    filter_by(sr_uuid=sr_uuid).\
-                    first()
+    result = model_query(context, models.SMBackendConf, read_deleted="yes").\
+                         filter_by(sr_uuid=sr_uuid).\
+                         first()
+    if not result:
+        raise exception.NotFound(_("No backend config with sr uuid "
+                                   "%(sr_uuid)s") % locals())
+    return result
 
 
 @require_admin_context
@@ -4776,42 +4794,61 @@ def sm_backend_conf_get_all(context):
 ####################
 
 
-def _sm_flavor_get_query(context, sm_flavor_label, session=None):
+def _sm_flavor_get_query(context, sm_flavor_id, session=None):
     return model_query(context, models.SMFlavors, session=session,
                        read_deleted="yes").\
-                        filter_by(label=sm_flavor_label)
+                        filter_by(id=sm_flavor_id)
 
 
 @require_admin_context
 def sm_flavor_create(context, values):
-    sm_flavor = models.SMFlavors()
-    sm_flavor.update(values)
-    sm_flavor.save()
-    return sm_flavor
-
-
-@require_admin_context
-def sm_flavor_update(context, sm_flavor_label, values):
-    sm_flavor = sm_flavor_get(context, sm_flavor_label)
-    sm_flavor.update(values)
-    sm_flavor.save()
-    return sm_flavor
-
-
-@require_admin_context
-def sm_flavor_delete(context, sm_flavor_label):
     session = get_session()
     with session.begin():
-        _sm_flavor_get_query(context, sm_flavor_label).delete()
+        sm_flavor = model_query(context, models.SMFlavors,
+                                   session=session,
+                                   read_deleted="yes").\
+                           filter_by(label=values['label']).\
+                           first()
+        if not sm_flavor:
+            sm_flavor = models.SMFlavors()
+            sm_flavor.update(values)
+            sm_flavor.save(session=session)
+        else:
+            raise exception.Duplicate(_('Flavor exists'))
+    return sm_flavor
 
 
 @require_admin_context
-def sm_flavor_get(context, sm_flavor_label):
-    result = _sm_flavor_get_query(context, sm_flavor_label).first()
+def sm_flavor_update(context, sm_flavor_id, values):
+    session = get_session()
+    with session.begin():
+        sm_flavor = model_query(context, models.SMFlavors,
+                                   session=session,
+                                   read_deleted="yes").\
+                           filter_by(id=sm_flavor_id).\
+                           first()
+        if not sm_flavor:
+            raise exception.NotFound(
+                    _('%(sm_flavor_id) flavor not found') % locals())
+        sm_flavor.update(values)
+        sm_flavor.save(session=session)
+    return sm_flavor
+
+
+@require_admin_context
+def sm_flavor_delete(context, sm_flavor_id):
+    session = get_session()
+    with session.begin():
+        _sm_flavor_get_query(context, sm_flavor_id).delete()
+
+
+@require_admin_context
+def sm_flavor_get(context, sm_flavor_id):
+    result = _sm_flavor_get_query(context, sm_flavor_id).first()
 
     if not result:
         raise exception.NotFound(
-                _("No sm_flavor called %(sm_flavor)s") % locals())
+                _("No sm_flavor called %(sm_flavor_id)s") % locals())
 
     return result
 
@@ -4819,6 +4856,17 @@ def sm_flavor_get(context, sm_flavor_label):
 @require_admin_context
 def sm_flavor_get_all(context):
     return model_query(context, models.SMFlavors, read_deleted="yes").all()
+
+
+@require_admin_context
+def sm_flavor_get_by_label(context, sm_flavor_label):
+    result = model_query(context, models.SMFlavors,
+                         read_deleted="yes").\
+                         filter_by(label=sm_flavor_label).first()
+    if not result:
+        raise exception.NotFound(
+                _("No sm_flavor called %(sm_flavor_label)s") % locals())
+    return result
 
 
 ###############################
@@ -4957,7 +5005,7 @@ def aggregate_delete(context, aggregate_id):
                                  aggregate_id)
     if query.first():
         query.update({'deleted': True,
-                      'deleted_at': utils.utcnow(),
+                      'deleted_at': timeutils.utcnow(),
                       'operational_state': aggregate_states.DISMISSED,
                       'updated_at': literal_column('updated_at')})
     else:
@@ -4989,7 +5037,7 @@ def aggregate_metadata_delete(context, aggregate_id, key):
                                  filter_by(key=key)
     if query.first():
         query.update({'deleted': True,
-                      'deleted_at': utils.utcnow(),
+                      'deleted_at': timeutils.utcnow(),
                       'updated_at': literal_column('updated_at')})
     else:
         raise exception.AggregateMetadataNotFound(aggregate_id=aggregate_id,
@@ -5065,7 +5113,7 @@ def aggregate_host_delete(context, aggregate_id, host):
                                  aggregate_id).filter_by(host=host)
     if query.first():
         query.update({'deleted': True,
-                      'deleted_at': utils.utcnow(),
+                      'deleted_at': timeutils.utcnow(),
                       'updated_at': literal_column('updated_at')})
     else:
         raise exception.AggregateHostNotFound(aggregate_id=aggregate_id,

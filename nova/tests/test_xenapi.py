@@ -31,13 +31,13 @@ from nova import exception
 from nova import flags
 from nova import log as logging
 from nova.openstack.common import importutils
+from nova.openstack.common import timeutils
 from nova import test
 from nova.tests.db import fakes as db_fakes
 from nova.tests import fake_network
 from nova.tests import fake_utils
 from nova.tests.glance import stubs as glance_stubs
 from nova.tests.xenapi import stubs
-from nova import utils
 from nova.virt.xenapi import connection as xenapi_conn
 from nova.virt.xenapi import fake as xenapi_fake
 from nova.virt.xenapi import vm_utils
@@ -109,7 +109,7 @@ class XenAPIVolumeTestCase(test.TestCase):
                   'os_type': 'linux',
                   'architecture': 'x86-64'}
 
-    def _create_volume(self, size='0'):
+    def _create_volume(self, size=0):
         """Create a volume object."""
         vol = {}
         vol['size'] = size
@@ -1267,7 +1267,7 @@ class XenAPIGenerateLocal(test.TestCase):
     def test_generate_swap(self):
         """Test swap disk generation."""
         instance = db.instance_create(self.context, self.instance_values)
-        instance = db.instance_update(self.context, instance['id'],
+        instance = db.instance_update(self.context, instance['uuid'],
                                       {'instance_type_id': 5})
 
         def fake_generate_swap(*args, **kwargs):
@@ -1279,7 +1279,7 @@ class XenAPIGenerateLocal(test.TestCase):
     def test_generate_ephemeral(self):
         """Test ephemeral disk generation."""
         instance = db.instance_create(self.context, self.instance_values)
-        instance = db.instance_update(self.context, instance['id'],
+        instance = db.instance_update(self.context, instance['uuid'],
                                       {'instance_type_id': 4})
 
         def fake_generate_ephemeral(*args):
@@ -1316,7 +1316,8 @@ class XenAPIBWUsageTestCase(test.TestCase):
                 self.name = "instance-0001"
                 self.uuid = "1-2-3-4-5"
 
-        result = self.conn.get_all_bw_usage([testinstance()], utils.utcnow())
+        result = self.conn.get_all_bw_usage([testinstance()],
+                                            timeutils.utcnow())
         self.assertEqual(result, [])
 
 

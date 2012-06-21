@@ -39,6 +39,7 @@ from nova import log as logging
 from nova.openstack.common import cfg
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
+from nova.openstack.common import timeutils
 from nova import utils
 from nova.virt import driver
 from nova.virt.xenapi import firewall
@@ -121,8 +122,6 @@ def make_step_decorator(context, instance):
     the current-step-count would be 1 giving a progress of ``1 / 2 *
     100`` or 50%.
     """
-    instance_uuid = instance['uuid']
-
     step_info = dict(total=0, current=0)
 
     def bump_progress():
@@ -131,7 +130,7 @@ def make_step_decorator(context, instance):
                          step_info['total'] * 100)
         LOG.debug(_("Updating progress to %(progress)d"), locals(),
                   instance=instance)
-        db.instance_update(context, instance_uuid, {'progress': progress})
+        db.instance_update(context, instance['uuid'], {'progress': progress})
 
     def step_decorator(f):
         step_info['total'] += 1
@@ -384,7 +383,7 @@ class VMOps(object):
         if instance.vm_mode != vm_mode:
             # Update database with normalized (or determined) value
             db.instance_update(nova_context.get_admin_context(),
-                               instance['id'], {'vm_mode': vm_mode})
+                               instance['uuid'], {'vm_mode': vm_mode})
 
         vm_ref = vm_utils.create_vm(
             self._session, instance, kernel_file, ramdisk_file,
@@ -654,10 +653,9 @@ class VMOps(object):
         # better approximation would use the percentage of the VM image that
         # has been streamed to the destination host.
         progress = round(float(step) / total_steps * 100)
-        instance_uuid = instance['uuid']
         LOG.debug(_("Updating progress to %(progress)d"), locals(),
                   instance=instance)
-        db.instance_update(context, instance_uuid, {'progress': progress})
+        db.instance_update(context, instance['uuid'], {'progress': progress})
 
     def migrate_disk_and_power_off(self, context, instance, dest,
                                    instance_type):
@@ -1205,10 +1203,10 @@ class VMOps(object):
         task_refs = self._session.call_xenapi("task.get_by_name_label", task)
         for task_ref in task_refs:
             task_rec = self._session.call_xenapi("task.get_record", task_ref)
-            task_created = utils.parse_strtime(task_rec["created"].value,
-                    "%Y%m%dT%H:%M:%SZ")
+            task_created = timeutils.parse_strtime(task_rec["created"].value,
+                                                   "%Y%m%dT%H:%M:%SZ")
 
-            if utils.is_older_than(task_created, timeout):
+            if timeutils.is_older_than(task_created, timeout):
                 self._session.call_xenapi("task.cancel", task_ref)
 
     def poll_rebooting_instances(self, timeout):
@@ -1245,15 +1243,15 @@ class VMOps(object):
         last_ran = self.poll_rescue_last_ran
         if not last_ran:
             # We need a base time to start tracking.
-            self.poll_rescue_last_ran = utils.utcnow()
+            self.poll_rescue_last_ran = timeutils.utcnow()
             return
 
-        if not utils.is_older_than(last_ran, timeout):
+        if not timeutils.is_older_than(last_ran, timeout):
             # Do not run. Let's bail.
             return
 
         # Update the time tracker and proceed.
-        self.poll_rescue_last_ran = utils.utcnow()
+        self.poll_rescue_last_ran = timeutils.utcnow()
 
         rescue_vms = []
         for instance in self.list_instances():

@@ -36,6 +36,7 @@ from eventlet import greenthread
 
 from nova.compute import instance_types
 from nova.compute import power_state
+from nova import db
 from nova import exception
 from nova import flags
 from nova.image import glance
@@ -313,10 +314,18 @@ def destroy_vdi(session, vdi_ref):
                 _('Unable to destroy VDI %s') % vdi_ref)
 
 
-def create_vdi(session, sr_ref, instance, disk_type, virtual_size,
+def create_vdi(session, sr_ref, info, disk_type, virtual_size,
                read_only=False):
     """Create a VDI record and returns its reference."""
-    name_label = instance['name']
+    # create_vdi may be called simply while creating a volume
+    # hence information about instance may or may not be present
+    otherconf = {}
+    if not isinstance(info, basestring):
+        name_label = info['display_name']
+        otherconf = {'nova_instance_uuid': info['uuid'],
+                     'nova_disk_type': disk_type}
+    else:
+        name_label = info
     vdi_ref = session.call_xenapi("VDI.create",
          {'name_label': name_label,
           'name_description': disk_type,
@@ -326,8 +335,7 @@ def create_vdi(session, sr_ref, instance, disk_type, virtual_size,
           'sharable': False,
           'read_only': read_only,
           'xenstore_data': {},
-          'other_config': {'nova_instance_uuid': instance['uuid'],
-                           'nova_disk_type': disk_type},
+          'other_config': otherconf,
           'sm_config': {},
           'tags': []})
     LOG.debug(_('Created VDI %(vdi_ref)s (%(name_label)s,'
@@ -677,12 +685,33 @@ def create_image(context, session, instance, image_id, image_type):
 
     Returns: A list of dictionaries that describe VDIs
     """
-    if FLAGS.cache_images and image_type != ImageType.DISK_ISO:
+    cache_images = FLAGS.cache_images.lower()
+
+    # Deterimine if the image is cacheable
+    if image_type == ImageType.DISK_ISO:
+        cache = False
+    elif cache_images == 'all':
+        cache = True
+    elif cache_images == 'some':
+        # FIXME(sirp): This should be eager loaded like instance metadata
+        sys_meta = db.instance_system_metadata_get(context,
+                instance['uuid'])
+        try:
+            cache = utils.bool_from_str(sys_meta['image_cache_in_nova'])
+        except KeyError:
+            cache = False
+    elif cache_images == 'none':
+        cache = False
+    else:
+        LOG.warning(_("Unrecognized cache_images value '%s', defaulting to"
+                      " True"), FLAGS.cache_images)
+        cache = True
+
+    # Fetch (and cache) the image
+    if cache:
         vdis = _create_cached_image(
                 context, session, instance, image_id, image_type)
     else:
-        # If caching is disabled, we do not have to keep a copy of the
-        # image. Fetch the image from glance.
         vdis = fetch_image(
                 context, session, instance, image_id, image_type)
 

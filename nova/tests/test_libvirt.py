@@ -1298,7 +1298,7 @@ class LibvirtConnTestCase(test.TestCase):
                          'power_state': power_state.RUNNING,
                          'vm_state': vm_states.ACTIVE}
         instance_ref = db.instance_create(self.context, self.test_instance)
-        instance_ref = db.instance_update(self.context, instance_ref['id'],
+        instance_ref = db.instance_update(self.context, instance_ref['uuid'],
                                           instance_dict)
         vol_dict = {'status': 'migrating', 'size': 1}
         volume_ref = db.volume_create(self.context, vol_dict)
@@ -1645,9 +1645,11 @@ class LibvirtConnTestCase(test.TestCase):
 
     @test.skip_if(missing_libvirt(), "Test requires libvirt")
     def test_immediate_delete(self):
+        def fake_lookup_by_name(instance_name):
+            raise exception.InstanceNotFound()
+
         conn = connection.LibvirtDriver(False)
-        self.mox.StubOutWithMock(connection.LibvirtDriver, '_conn')
-        connection.LibvirtDriver._conn.lookupByName = lambda x: None
+        self.stubs.Set(conn, '_lookup_by_name', fake_lookup_by_name)
 
         instance = db.instance_create(self.context, self.test_instance)
         conn.destroy(instance, {})
@@ -1666,11 +1668,57 @@ class LibvirtConnTestCase(test.TestCase):
         def fake_lookup_by_name(instance_name):
             return mock
 
+        def fake_get_info(instance_name):
+            return {'state': power_state.SHUTDOWN}
+
         conn = connection.LibvirtDriver(False)
         self.stubs.Set(conn, '_lookup_by_name', fake_lookup_by_name)
+        self.stubs.Set(conn, 'get_info', fake_get_info)
         instance = {"name": "instancename", "id": "instanceid",
                     "uuid": "875a8070-d0b9-4949-8b31-104d125c9a64"}
         conn.destroy(instance, [])
+
+    @test.skip_if(missing_libvirt(), "Test requires libvirt")
+    def test_private_destroy(self):
+        """Ensure Instance not found skips undefine"""
+        mock = self.mox.CreateMock(libvirt.virDomain)
+        mock.destroy()
+        self.mox.ReplayAll()
+
+        def fake_lookup_by_name(instance_name):
+            return mock
+
+        def fake_get_info(instance_name):
+            return {'state': power_state.SHUTDOWN}
+
+        conn = connection.LibvirtDriver(False)
+        self.stubs.Set(conn, '_lookup_by_name', fake_lookup_by_name)
+        self.stubs.Set(conn, 'get_info', fake_get_info)
+        instance = {"name": "instancename", "id": "instanceid",
+                    "uuid": "875a8070-d0b9-4949-8b31-104d125c9a64"}
+        result = conn._destroy(instance)
+        self.assertTrue(result)
+
+    @test.skip_if(missing_libvirt(), "Test requires libvirt")
+    def test_private_destroy_not_found(self):
+        """Ensure Instance not found skips undefine"""
+        mock = self.mox.CreateMock(libvirt.virDomain)
+        mock.destroy()
+        self.mox.ReplayAll()
+
+        def fake_lookup_by_name(instance_name):
+            return mock
+
+        def fake_get_info(instance_name):
+            raise exception.InstanceNotFound()
+
+        conn = connection.LibvirtDriver(False)
+        self.stubs.Set(conn, '_lookup_by_name', fake_lookup_by_name)
+        self.stubs.Set(conn, 'get_info', fake_get_info)
+        instance = {"name": "instancename", "id": "instanceid",
+                    "uuid": "875a8070-d0b9-4949-8b31-104d125c9a64"}
+        result = conn._destroy(instance)
+        self.assertFalse(result)
 
     def test_available_least_handles_missing(self):
         """Ensure destroy calls managedSaveRemove for saved instance"""
@@ -2669,6 +2717,9 @@ class LibvirtDriverTestCase(test.TestCase):
         def fake_execute(*args, **kwargs):
             pass
 
+        def fake_get_info(instance):
+            return {'state': power_state.RUNNING}
+
         self.flags(use_cow_images=True)
         self.stubs.Set(connection.disk, 'extend', fake_extend)
         self.stubs.Set(self.libvirtconnection, 'to_xml', fake_to_xml)
@@ -2682,13 +2733,14 @@ class LibvirtDriverTestCase(test.TestCase):
         self.stubs.Set(utils, 'execute', fake_execute)
         fw = base_firewall.NoopFirewallDriver()
         self.stubs.Set(self.libvirtconnection, 'firewall_driver', fw)
+        self.stubs.Set(self.libvirtconnection, 'get_info',
+                       fake_get_info)
 
         ins_ref = self._create_instance()
 
-        ref = self.libvirtconnection.finish_migration(
+        self.libvirtconnection.finish_migration(
                       context.get_admin_context(), None, ins_ref,
                       disk_info_text, None, None, None)
-        self.assertTrue(isinstance(ref, eventlet.event.Event))
 
     def test_finish_revert_migration(self):
         """Test for nova.virt.libvirt.connection.LivirtConnection
@@ -2706,6 +2758,9 @@ class LibvirtDriverTestCase(test.TestCase):
         def fake_enable_hairpin(instance):
             pass
 
+        def fake_get_info(instance):
+            return {'state': power_state.RUNNING}
+
         self.stubs.Set(self.libvirtconnection, 'plug_vifs', fake_plug_vifs)
         self.stubs.Set(utils, 'execute', fake_execute)
         fw = base_firewall.NoopFirewallDriver()
@@ -2714,6 +2769,8 @@ class LibvirtDriverTestCase(test.TestCase):
                        fake_create_domain)
         self.stubs.Set(self.libvirtconnection, '_enable_hairpin',
                        fake_enable_hairpin)
+        self.stubs.Set(self.libvirtconnection, 'get_info',
+                       fake_get_info)
 
         with utils.tempdir() as tmpdir:
             self.flags(instances_path=tmpdir)
@@ -2725,8 +2782,7 @@ class LibvirtDriverTestCase(test.TestCase):
             f = open(libvirt_xml_path, 'w')
             f.close()
 
-            ref = self.libvirtconnection.finish_revert_migration(ins_ref, None)
-            self.assertTrue(isinstance(ref, eventlet.event.Event))
+            self.libvirtconnection.finish_revert_migration(ins_ref, None)
 
 
 class LibvirtNonblockingTestCase(test.TestCase):

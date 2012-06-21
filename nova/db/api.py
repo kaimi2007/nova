@@ -642,25 +642,25 @@ def instance_get_all_hung_in_rebooting(context, reboot_window):
     return IMPL.instance_get_all_hung_in_rebooting(context, reboot_window)
 
 
-def instance_test_and_set(context, instance_id, attr, ok_states,
+def instance_test_and_set(context, instance_uuid, attr, ok_states,
                           new_state):
     """Atomically check if an instance is in a valid state, and if it is, set
     the instance into a new state.
     """
-    return IMPL.instance_test_and_set(
-            context, instance_id, attr, ok_states, new_state)
+    return IMPL.instance_test_and_set(context, instance_uuid, attr,
+                                      ok_states, new_state)
 
 
-def instance_update(context, instance_id, values):
+def instance_update(context, instance_uuid, values):
     """Set the given properties on an instance and update it.
 
     Raises NotFound if instance does not exist.
 
     """
-    return IMPL.instance_update(context, instance_id, values)
+    return IMPL.instance_update(context, instance_uuid, values)
 
 
-def instance_update_and_get_original(context, instance_id, values):
+def instance_update_and_get_original(context, instance_uuid, values):
     """Set the given properties on an instance and update it. Return
     a shallow copy of the original instance reference, as well as the
     updated one.
@@ -673,7 +673,8 @@ def instance_update_and_get_original(context, instance_id, values):
 
     Raises NotFound if instance does not exist.
     """
-    return IMPL.instance_update_and_get_original(context, instance_id, values)
+    return IMPL.instance_update_and_get_original(context, instance_uuid,
+                                                 values)
 
 
 def instance_add_security_group(context, instance_id, security_group_id):
@@ -1804,7 +1805,7 @@ def sm_flavor_create(context, values):
 
 def sm_flavor_update(context, sm_flavor_id, values):
     """Update a SM Flavor entry."""
-    return IMPL.sm_flavor_update(context, values)
+    return IMPL.sm_flavor_update(context, sm_flavor_id, values)
 
 
 def sm_flavor_delete(context, sm_flavor_id):
@@ -1812,14 +1813,19 @@ def sm_flavor_delete(context, sm_flavor_id):
     return IMPL.sm_flavor_delete(context, sm_flavor_id)
 
 
-def sm_flavor_get(context, sm_flavor):
+def sm_flavor_get(context, sm_flavor_id):
     """Get a specific SM Flavor."""
-    return IMPL.sm_flavor_get(context, sm_flavor)
+    return IMPL.sm_flavor_get(context, sm_flavor_id)
 
 
 def sm_flavor_get_all(context):
     """Get all SM Flavors."""
     return IMPL.sm_flavor_get_all(context)
+
+
+def sm_flavor_get_by_label(context, sm_flavor_label):
+    """Get a specific SM Flavor given label."""
+    return IMPL.sm_flavor_get_by_label(context, sm_flavor_label)
 
 
 ####################

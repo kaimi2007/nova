@@ -39,7 +39,8 @@ from nova import flags
 from nova.image import fake
 from nova.image import s3
 from nova import log as logging
-from nova import rpc
+from nova.network import api as network_api
+from nova.openstack.common import rpc
 from nova import test
 from nova import utils
 
@@ -233,8 +234,14 @@ class CloudTestCase(test.TestCase):
                                                  project_id=project_id)
 
         fixed_ips = nw_info.fixed_ips()
-
         ec2_id = ec2utils.id_to_ec2_id(inst['id'])
+
+        self.stubs.Set(ec2utils, 'get_ip_info_for_instance',
+                       lambda *args: {'fixed_ips': ['10.0.0.1'],
+                                      'fixed_ip6s': [],
+                                      'floating_ips': []})
+        self.stubs.Set(network_api.API, 'get_instance_id_by_floating_address',
+                       lambda *args: 1)
         self.cloud.associate_address(self.context,
                                      instance_id=ec2_id,
                                      public_ip=address)
@@ -846,8 +853,6 @@ class CloudTestCase(test.TestCase):
 
         test_instance_state(inst_state.RUNNING_CODE, inst_state.RUNNING,
                             power_state.RUNNING, vm_states.ACTIVE)
-        test_instance_state(inst_state.TERMINATED_CODE, inst_state.SHUTOFF,
-                            power_state.NOSTATE, vm_states.SHUTOFF)
         test_instance_state(inst_state.STOPPED_CODE, inst_state.STOPPED,
                             power_state.NOSTATE, vm_states.SHUTOFF,
                             {'shutdown_terminate': False})
@@ -1844,8 +1849,8 @@ class CloudTestCase(test.TestCase):
                   'max_count': 1, }
         instance_id = self._run_instance(**kwargs)
 
-        internal_id = ec2utils.ec2_id_to_id(instance_id)
-        instance = db.instance_update(self.context, internal_id,
+        internal_uuid = ec2utils.ec2_id_to_uuid(self.context, instance_id)
+        instance = db.instance_update(self.context, internal_uuid,
                                       {'disable_terminate': True})
 
         expected = {'instancesSet': [
@@ -1857,7 +1862,7 @@ class CloudTestCase(test.TestCase):
         result = self.cloud.terminate_instances(self.context, [instance_id])
         self.assertEqual(result, expected)
 
-        instance = db.instance_update(self.context, internal_id,
+        instance = db.instance_update(self.context, internal_uuid,
                                       {'disable_terminate': False})
 
         expected = {'instancesSet': [
@@ -2304,7 +2309,7 @@ class CloudTestCase(test.TestCase):
             self.assertEqual(result, expected)
             self._restart_compute_service()
 
-        test_dia_iisb('terminate', image_id='ami-1')
+        test_dia_iisb('stop', image_id='ami-1')
 
         block_device_mapping = [{'device_name': '/dev/vdb',
                                  'virtual_name': 'ephemeral0'}]
@@ -2350,7 +2355,7 @@ class CloudTestCase(test.TestCase):
         self.stubs.UnsetAll()
         self.stubs.Set(fake._FakeImageService, 'show', fake_show)
 
-        test_dia_iisb('terminate', image_id='ami-3')
+        test_dia_iisb('stop', image_id='ami-3')
         test_dia_iisb('stop', image_id='ami-4')
         test_dia_iisb('stop', image_id='ami-5')
         test_dia_iisb('stop', image_id='ami-6')

@@ -60,7 +60,7 @@ import pprint
 from nova import exception
 from nova import log as logging
 from nova.openstack.common import jsonutils
-from nova import utils
+from nova.openstack.common import timeutils
 
 
 _CLASSES = ['host', 'network', 'session', 'pool', 'SR', 'VBD',
@@ -276,16 +276,17 @@ def _create_object(table, obj):
 def _create_sr(table, obj):
     sr_type = obj[6]
     # Forces fake to support iscsi only
-    if sr_type != 'iscsi':
+    if sr_type != 'iscsi' and sr_type != 'nfs':
         raise Failure(['SR_UNKNOWN_DRIVER', sr_type])
     host_ref = _db_content['host'].keys()[0]
     sr_ref = _create_object(table, obj[2])
-    vdi_ref = create_vdi('', sr_ref)
-    pbd_ref = create_pbd('', host_ref, sr_ref, True)
-    _db_content['SR'][sr_ref]['VDIs'] = [vdi_ref]
-    _db_content['SR'][sr_ref]['PBDs'] = [pbd_ref]
-    _db_content['VDI'][vdi_ref]['SR'] = sr_ref
-    _db_content['PBD'][pbd_ref]['SR'] = sr_ref
+    if sr_type == 'iscsi':
+        vdi_ref = create_vdi('', sr_ref)
+        pbd_ref = create_pbd('', host_ref, sr_ref, True)
+        _db_content['SR'][sr_ref]['VDIs'] = [vdi_ref]
+        _db_content['SR'][sr_ref]['PBDs'] = [pbd_ref]
+        _db_content['VDI'][vdi_ref]['SR'] = sr_ref
+        _db_content['PBD'][pbd_ref]['SR'] = sr_ref
     return sr_ref
 
 
@@ -739,7 +740,7 @@ class SessionBase(object):
         except Failure, exc:
             task['error_info'] = exc.details
             task['status'] = 'failed'
-        task['finished'] = utils.utcnow()
+        task['finished'] = timeutils.utcnow()
         return task_ref
 
     def _check_session(self, params):

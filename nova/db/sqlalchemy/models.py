@@ -21,18 +21,17 @@
 SQLAlchemy models for nova data.
 """
 
-from sqlalchemy.orm import relationship, backref, object_mapper
 from sqlalchemy import Column, Integer, BigInteger, String, schema
-from sqlalchemy import ForeignKey, DateTime, Boolean, Text, Float
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy import ForeignKey, DateTime, Boolean, Text, Float
+from sqlalchemy.orm import relationship, backref, object_mapper
 from sqlalchemy.schema import ForeignKeyConstraint
 
 from nova.db.sqlalchemy.session import get_session
-
 from nova import exception
 from nova import flags
-from nova import utils
+from nova.openstack.common import timeutils
 
 
 FLAGS = flags.FLAGS
@@ -43,8 +42,8 @@ class NovaBase(object):
     """Base class for Nova Models."""
     __table_args__ = {'mysql_engine': 'InnoDB'}
     __table_initialized__ = False
-    created_at = Column(DateTime, default=utils.utcnow)
-    updated_at = Column(DateTime, onupdate=utils.utcnow)
+    created_at = Column(DateTime, default=timeutils.utcnow)
+    updated_at = Column(DateTime, onupdate=timeutils.utcnow)
     deleted_at = Column(DateTime)
     deleted = Column(Boolean, default=False)
     metadata = None
@@ -65,7 +64,7 @@ class NovaBase(object):
     def delete(self, session=None):
         """Delete this object."""
         self.deleted = True
-        self.deleted_at = utils.utcnow()
+        self.deleted_at = timeutils.utcnow()
         self.save(session=session)
 
     def __setitem__(self, key, value):
@@ -162,7 +161,7 @@ class ComputeNode(BASE, NovaBase):
 
 
 class Certificate(BASE, NovaBase):
-    """Represents a an x509 certificate"""
+    """Represents a x509 certificate"""
     __tablename__ = 'certificates'
     id = Column(Integer, primary_key=True)
 
@@ -172,7 +171,7 @@ class Certificate(BASE, NovaBase):
 
 
 class Instance(BASE, NovaBase):
-    """Represents a guest vm."""
+    """Represents a guest VM."""
     __tablename__ = 'instances'
     injected_files = []
 
@@ -248,7 +247,7 @@ class Instance(BASE, NovaBase):
     display_description = Column(String(255))
 
     # To remember on which host an instance booted.
-    # An instance may have moved to another host by live migraiton.
+    # An instance may have moved to another host by live migration.
     launched_on = Column(Text)
     locked = Column(Boolean)
 
@@ -270,10 +269,12 @@ class Instance(BASE, NovaBase):
     auto_disk_config = Column(Boolean())
     progress = Column(Integer)
 
-    # EC2 instance_initiated_shutdown_teminate
+    # EC2 instance_initiated_shutdown_terminate
     # True: -> 'terminate'
     # False: -> 'stop'
-    shutdown_terminate = Column(Boolean(), default=True, nullable=False)
+    # Note(maoy): currently Nova will always stop instead of terminate
+    # no matter what the flag says. So we set the default to False.
+    shutdown_terminate = Column(Boolean(), default=False, nullable=False)
 
     # EC2 disable_api_termination
     disable_terminate = Column(Boolean(), default=False, nullable=False)
@@ -321,7 +322,7 @@ class InstanceTypes(BASE, NovaBase):
 
 
 class Volume(BASE, NovaBase):
-    """Represents a block storage device that can be attached to a vm."""
+    """Represents a block storage device that can be attached to a VM."""
     __tablename__ = 'volumes'
     id = Column(String(36), primary_key=True)
 
@@ -480,7 +481,7 @@ class Reservation(BASE, NovaBase):
 
 
 class Snapshot(BASE, NovaBase):
-    """Represents a block storage device that can be attached to a vm."""
+    """Represents a block storage device that can be attached to a VM."""
     __tablename__ = 'snapshots'
     id = Column(String(36), primary_key=True)
 
@@ -512,7 +513,7 @@ class BlockDeviceMapping(BASE, NovaBase):
     instance_uuid = Column(Integer, ForeignKey('instances.uuid'),
                            nullable=False)
     instance = relationship(Instance,
-                            backref=backref('balock_device_mapping'),
+                            backref=backref('block_device_mapping'),
                             foreign_keys=instance_uuid,
                             primaryjoin='and_(BlockDeviceMapping.'
                                               'instance_uuid=='
@@ -542,7 +543,7 @@ class BlockDeviceMapping(BASE, NovaBase):
 
 
 class IscsiTarget(BASE, NovaBase):
-    """Represates an iscsi target for a given host"""
+    """Represents an iscsi target for a given host"""
     __tablename__ = 'iscsi_targets'
     __table_args__ = (schema.UniqueConstraint("target_num", "host"),
                       {'mysql_engine': 'InnoDB'})
