@@ -31,7 +31,7 @@ def upgrade_libvirt(instances, instance_types):
             tiny = inst_type['id']
             root_gb = 0
         else:
-            root_gb = 10
+            root_gb = 20
 
         instance_types.update()\
                       .values(root_gb=root_gb,
