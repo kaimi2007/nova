@@ -46,8 +46,8 @@ import multiprocessing
 import os
 import shutil
 import sys
-import uuid
 import subprocess
+import uuid
 from xml.dom import minidom
 from xml.etree import ElementTree
 
@@ -77,8 +77,8 @@ from nova.virt.libvirt import firewall
 from nova.virt.libvirt import imagebackend
 from nova.virt.libvirt import imagecache
 from nova.virt.libvirt import utils as libvirt_utils
-from nova import vnc
 from nova.compute import vm_states
+from nova import vnc
 import subprocess
 
 libvirt = None

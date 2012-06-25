@@ -21,8 +21,8 @@ from sqlalchemy import Index, Integer, MetaData, String, Table, Text
 from nova import flags
 from nova import log as logging
 
-from nova import db
 from nova import context
+from nova import db
 
 FLAGS = flags.FLAGS
 

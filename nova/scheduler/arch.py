@@ -19,20 +19,20 @@
 Archtecture Scheduler implementation
 """
 
+from nova import db
+from nova import exception
+from nova import flags
 import random
 import string
-from nova import db
-from nova import flags
 from nova import utils
-from nova import exception
 
 from nova import log as logging
 
 LOG = logging.getLogger('nova.scheduler.ArchitectureScheduler')
 
 from nova.common import cfg
-from nova.scheduler import driver
 from nova import db
+from nova.scheduler import driver
 
 ArchetectureScheduler_opts = [
     cfg.IntOpt('max_cores',
