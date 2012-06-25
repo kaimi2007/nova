@@ -692,22 +692,17 @@ class ProxyConnection(driver.ComputeDriver):
                'memory_mb': self.get_memory_mb_total(),
                'local_gb': self.get_local_gb_total(),
                'vcpus_used': self.get_vcpu_used(),
-               'memory_mb_used': self.get_memory_mb_used(),
+               #'memory_mb_used': self.get_memory_mb_used(),
+               'memory_mb_used': self.get_memory_mb_total() \
+                                 - self.get_memory_mb_used(),
                'local_gb_used': self.get_local_gb_used(),
                'hypervisor_type': self.get_hypervisor_type(),
                'hypervisor_version': self.get_hypervisor_version(),
                'cpu_info': self.get_cpu_info(),
-               'cpu_arch': FLAGS.cpu_arch,
-               'xpu_arch': FLAGS.xpu_arch,
-               'xpus': FLAGS.xpus,
-               'xpu_info': FLAGS.xpu_info,
-               'net_arch': FLAGS.net_arch,
-               'net_info': FLAGS.net_info,
-               'net_mbps': FLAGS.net_mbps,
                'service_id': service_ref['id']}
 
         compute_node_ref = service_ref['compute_node']
-        LOG.info(_('#### RLK: cpu_arch = %s ') % FLAGS.cpu_arch)
+        #LOG.info(_('#### RLK: cpu_arch = %s ') % FLAGS.cpu_arch)
         if not compute_node_ref:
             LOG.info(_('Compute_service record created for %s ') % host)
             dic['service_id'] = service_ref['id']
@@ -752,6 +747,12 @@ class HostState(object):
         super(HostState, self).__init__()
         self.connection = connection
         self._stats = {}
+        self.extra_specs = {}
+        for pair in FLAGS.instance_type_extra_specs:
+            keyval = pair.split(':', 1)
+            keyval[0] = keyval[0].strip()
+            keyval[1] = keyval[1].strip()
+            self.extra_specs[keyval[0]] = keyval[1]
         self.update_status()
 
     def get_host_stats(self, refresh=False):
@@ -771,13 +772,17 @@ class HostState(object):
         data["vcpus"] = self.connection.get_vcpu_total()
         data["vcpus_used"] = self.connection.get_vcpu_used()
         data["cpu_info"] = self.connection.get_cpu_info()
-        data["cpu_arch"] = FLAGS.cpu_arch
-        data["xpus"] = FLAGS.xpus
-        data["xpu_arch"] = FLAGS.xpu_arch
-        data["xpu_info"] = FLAGS.xpu_info
-        data["net_arch"] = FLAGS.net_arch
-        data["net_info"] = FLAGS.net_info
-        data["net_mbps"] = FLAGS.net_mbps
+        #data["cpu_arch"] = FLAGS.cpu_arch
+        self.extra_specs["hypervisor_type"] = \
+                          self.connection.get_hypervisor_type()
+        self.extra_specs["baremetal_driver"] = FLAGS.baremetal_driver
+        data.update({"instance_type_extra_specs": self.extra_specs})
+        #data["xpus"] = FLAGS.xpus
+        #data["xpu_arch"] = FLAGS.xpu_arch
+        #data["xpu_info"] = FLAGS.xpu_info
+        #data["net_arch"] = FLAGS.net_arch
+        #data["net_info"] = FLAGS.net_info
+        #data["net_mbps"] = FLAGS.net_mbps
         data["disk_total"] = self.connection.get_local_gb_total()
         data["disk_used"] = self.connection.get_local_gb_used()
         data["disk_available"] = data["disk_total"] - data["disk_used"]
