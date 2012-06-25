@@ -45,8 +45,8 @@ import hashlib
 import multiprocessing
 import os
 import shutil
-import sys
 import subprocess
+import sys
 import uuid
 from xml.dom import minidom
 from xml.etree import ElementTree
@@ -59,6 +59,7 @@ from xml.dom import minidom
 from nova import block_device
 from nova.compute import instance_types
 from nova.compute import power_state
+from nova.compute import vm_states
 from nova import context as nova_context
 from nova import db
 from nova import exception
@@ -77,7 +78,6 @@ from nova.virt.libvirt import firewall
 from nova.virt.libvirt import imagebackend
 from nova.virt.libvirt import imagecache
 from nova.virt.libvirt import utils as libvirt_utils
-from nova.compute import vm_states
 from nova import vnc
 import subprocess
 

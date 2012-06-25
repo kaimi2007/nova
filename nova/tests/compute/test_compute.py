@@ -42,10 +42,10 @@ from nova import flags
 from nova.image import fake as fake_image
 from nova import log as logging
 from nova.notifier import test_notifier
-from nova.openstack.common.rpc import common as rpc_common
 from nova.openstack.common import importutils
 from nova.openstack.common import policy as common_policy
 from nova.openstack.common import rpc
+from nova.openstack.common.rpc import common as rpc_common
 from nova.openstack.common import timeutils
 import nova.policy
 from nova import quota

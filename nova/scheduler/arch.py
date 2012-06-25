@@ -22,9 +22,9 @@ Archtecture Scheduler implementation
 from nova import db
 from nova import exception
 from nova import flags
+from nova import utils
 import random
 import string
-from nova import utils
 
 from nova import log as logging
 
