@@ -165,7 +165,7 @@ class LibvirtVolumeTestCase(test.TestCase):
         mount_device = "vde"
         conf = libvirt_driver.connect_volume(connection_info, mount_device)
         tree = conf.format_dom()
-        dev_str = '/dev/disk/by-path/ip-%s-iscsi-%s-lun-0' % (location, iqn)
+        dev_str = '/dev/disk/by-path/ip-%s-iscsi-%s-lun-1' % (location, iqn)
         self.assertEqual(tree.get('type'), 'block')
         self.assertEqual(tree.find('./source').get('dev'), dev_str)
         libvirt_driver.disconnect_volume(connection_info, mount_device)
@@ -204,7 +204,7 @@ class LibvirtVolumeTestCase(test.TestCase):
         mount_device = "vde"
         conf = libvirt_driver.connect_volume(connection_info, mount_device)
         tree = conf.format_dom()
-        dev_str = '/dev/disk/by-path/ip-%s-iscsi-%s-lun-0' % (location, iqn)
+        dev_str = '/dev/disk/by-path/ip-%s-iscsi-%s-lun-1' % (location, iqn)
         self.assertEqual(tree.get('type'), 'block')
         self.assertEqual(tree.find('./source').get('dev'), dev_str)
         libvirt_driver.disconnect_volume(connection_info, mount_device)
@@ -317,7 +317,7 @@ class LibvirtVolumeTestCase(test.TestCase):
         mount_device = "vde"
         conf = libvirt_driver.connect_volume(connection_info, mount_device)
         tree = conf.format_dom()
-        dev_str = '/dev/disk/by-path/ip-%s-iscsi-%s-lun-0' % (location, iqn)
+        dev_str = '/dev/disk/by-path/ip-%s-iscsi-%s-lun-1' % (location, iqn)
         self.assertEqual(tree.get('type'), 'block')
         self.assertEqual(tree.find('./source').get('dev'), dev_str)
         libvirt_driver.disconnect_volume(connection_info, mount_device)
@@ -594,6 +594,23 @@ class LibvirtConnTestCase(test.TestCase):
                           config.LibvirtConfigGuestDisk)
         self.assertEquals(type(cfg.devices[2]),
                           config.LibvirtConfigGuestConsole)
+
+    def test_get_guest_config_with_block_device(self):
+        conn = connection.LibvirtDriver(True)
+
+        instance_ref = db.instance_create(self.context, self.test_instance)
+        conn_info = {'driver_volume_type': 'fake'}
+        info = {'block_device_mapping': [
+                  {'connection_info': conn_info, 'mount_device': '/dev/vdc'},
+                  {'connection_info': conn_info, 'mount_device': '/dev/vdd'}]}
+
+        cfg = conn.get_guest_config(instance_ref, [], None, None, info)
+        self.assertEquals(type(cfg.devices[2]),
+                          config.LibvirtConfigGuestDisk)
+        self.assertEquals(cfg.devices[2].target_dev, 'vdc')
+        self.assertEquals(type(cfg.devices[3]),
+                          config.LibvirtConfigGuestDisk)
+        self.assertEquals(cfg.devices[3].target_dev, 'vdd')
 
     def test_xml_and_uri_no_ramdisk_no_kernel(self):
         instance_data = dict(self.test_instance)
@@ -1357,7 +1374,8 @@ class LibvirtConnTestCase(test.TestCase):
         self.mox.StubOutWithMock(conn, "volume_driver_method")
         for v in vol['block_device_mapping']:
             conn.volume_driver_method('connect_volume',
-                                     v['connection_info'], v['mount_device'])
+                                     v['connection_info'],
+                                      v['mount_device'].rpartition("/")[2])
 
         # Starting test
         self.mox.ReplayAll()
