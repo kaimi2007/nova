@@ -60,6 +60,8 @@ class ComputeFilter(filters.BaseHostFilter):
 
         cap_extra_specs = capabilities.get('instance_type_extra_specs', None)
         for key, req in instance_type['extra_specs'].iteritems():
+            if cap_extra_specs == None:
+                return False
             cap = cap_extra_specs.get(key, None)
             if cap == None:
                 return False
