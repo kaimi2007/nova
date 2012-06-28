@@ -584,9 +584,9 @@ def instance_get(context, instance_id):
     return IMPL.instance_get(context, instance_id)
 
 
-def instance_get_all(context):
+def instance_get_all(context, columns_to_join=None):
     """Get all instances."""
-    return IMPL.instance_get_all(context)
+    return IMPL.instance_get_all(context, columns_to_join=columns_to_join)
 
 
 def instance_get_all_by_filters(context, filters, sort_key='created_at',
@@ -1175,6 +1175,11 @@ def get_snapshot_uuid_by_ec2_id(context, ec2_id):
 def get_ec2_snapshot_id_by_uuid(context, snapshot_id):
     return IMPL.get_ec2_snapshot_id_by_uuid(context, snapshot_id)
 
+
+def ec2_snapshot_create(context, snapshot_id, forced_id=None):
+    return IMPL.ec2_snapshot_create(context, snapshot_id, forced_id)
+
+
 ####################
 
 
@@ -1295,6 +1300,11 @@ def security_group_in_use(context, group_id):
 def security_group_create(context, values):
     """Create a new security group."""
     return IMPL.security_group_create(context, values)
+
+
+def security_group_ensure_default(context):
+    """Ensure default security group exists for a project_id."""
+    return IMPL.security_group_ensure_default(context)
 
 
 def security_group_destroy(context, security_group_id):

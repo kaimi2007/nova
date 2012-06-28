@@ -114,11 +114,6 @@ def vpn_ping(address, port, timeout=0.05, session_id=None):
         return server_sess
 
 
-def fetchfile(url, target):
-    LOG.debug(_('Fetching %s') % url)
-    execute('curl', '--fail', url, '-o', target)
-
-
 def execute(*cmd, **kwargs):
     """Helper method to execute command with optional retry.
 
@@ -1040,19 +1035,6 @@ def generate_glance_url():
 def generate_image_url(image_ref):
     """Generate an image URL from an image_ref."""
     return "%s/images/%s" % (generate_glance_url(), image_ref)
-
-
-@contextlib.contextmanager
-def logging_error(message):
-    """Catches exception, write message to the log, re-raise.
-    This is a common refinement of save_and_reraise that writes a specific
-    message to the log.
-    """
-    try:
-        yield
-    except Exception as error:
-        with excutils.save_and_reraise_exception():
-            LOG.exception(message)
 
 
 @contextlib.contextmanager

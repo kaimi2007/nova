@@ -37,7 +37,7 @@ from nova.compute import vm_states
 from nova import context
 from nova.db.sqlalchemy import models
 from nova import exception as exc
-import nova.image.fake
+import nova.image.glance
 from nova.openstack.common import jsonutils
 from nova.openstack.common import timeutils
 from nova import quota
@@ -123,14 +123,6 @@ def stub_out_key_pair_funcs(stubs, have_key_pair=True):
         stubs.Set(nova.db, 'key_pair_get', one_key_pair)
     else:
         stubs.Set(nova.db, 'key_pair_get_all_by_user', no_key_pair)
-
-
-def stub_out_image_service(stubs):
-    def fake_get_image_service(context, image_href):
-        return (nova.image.fake.FakeImageService(), image_href)
-    stubs.Set(nova.image, 'get_image_service', fake_get_image_service)
-    stubs.Set(nova.image, 'get_default_image_service',
-        lambda: nova.image.fake.FakeImageService())
 
 
 def stub_out_rate_limiting(stubs):
@@ -276,10 +268,12 @@ def stub_out_glance_add_image(stubs, sent_to_glance):
 
 
 def stub_out_glance(stubs):
-    def fake_get_image_service():
+    def fake_get_remote_image_service():
         client = glance_stubs.StubGlanceClient(_make_image_fixtures())
         return nova.image.glance.GlanceImageService(client)
-    stubs.Set(nova.image, 'get_default_image_service', fake_get_image_service)
+    stubs.Set(nova.image.glance,
+              'get_default_image_service',
+              fake_get_remote_image_service)
 
 
 class FakeToken(object):
@@ -301,13 +295,13 @@ class FakeRequestContext(context.RequestContext):
         return super(FakeRequestContext, self).__init__(*args, **kwargs)
 
 
-class HTTPRequest(webob.Request):
+class HTTPRequest(os_wsgi.Request):
 
     @classmethod
     def blank(cls, *args, **kwargs):
         kwargs['base_url'] = 'http://localhost/v2'
         use_admin_context = kwargs.pop('use_admin_context', False)
-        out = webob.Request.blank(*args, **kwargs)
+        out = os_wsgi.Request.blank(*args, **kwargs)
         out.environ['nova.context'] = FakeRequestContext('fake_user', 'fake',
                 is_admin=use_admin_context)
         return out

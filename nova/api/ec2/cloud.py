@@ -334,7 +334,7 @@ class CloudController(object):
             key_pairs = [x for x in key_pairs if x['name'] in key_name]
 
         #If looking for non existent key pair
-        if key_name != None and key_pairs == []:
+        if key_name is not None and not key_pairs:
             msg = _('Could not find key pair(s): %s') % ','.join(key_name)
             raise exception.EC2APIError(msg)
 
@@ -1256,9 +1256,11 @@ class CloudController(object):
             internal_id = ec2utils.ec2_id_to_id(ec2_id)
             image = self.image_service.show(context, internal_id)
         except (exception.InvalidEc2Id, exception.ImageNotFound):
+            filters = {'name': ec2_id}
+            images = self.image_service.detail(context, filters=filters)
             try:
-                return self.image_service.show_by_name(context, ec2_id)
-            except exception.NotFound:
+                return images[0]
+            except IndexError:
                 raise exception.ImageNotFound(image_id=ec2_id)
         image_type = ec2_id.split('-')[0]
         if ec2utils.image_type(image.get('container_format')) != image_type:

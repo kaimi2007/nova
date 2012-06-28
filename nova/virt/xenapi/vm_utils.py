@@ -39,7 +39,6 @@ from nova.compute import power_state
 from nova import db
 from nova import exception
 from nova import flags
-import nova.image
 from nova.image import glance
 from nova import log as logging
 from nova.openstack.common import cfg
@@ -322,7 +321,7 @@ def create_vdi(session, sr_ref, info, disk_type, virtual_size,
     # hence information about instance may or may not be present
     otherconf = {}
     if not isinstance(info, basestring):
-        name_label = info['display_name']
+        name_label = info['name']
         otherconf = {'nova_instance_uuid': info['uuid'],
                      'nova_disk_type': disk_type}
     else:
@@ -869,7 +868,8 @@ def _fetch_image_glance_disk(context, session, instance, image_id, image_type):
     else:
         sr_ref = safe_find_sr(session)
 
-    image_service, image_id = nova.image.get_image_service(context, image_id)
+    image_service, image_id = glance.get_remote_image_service(
+            context, image_id)
     meta = image_service.show(context, image_id)
     virtual_size = int(meta['size'])
     vdi_size = virtual_size

@@ -64,7 +64,7 @@ from nova import context as nova_context
 from nova import db
 from nova import exception
 from nova import flags
-import nova.image
+from nova.image import glance
 from nova import log as logging
 from nova.openstack.common import cfg
 from nova.openstack.common import excutils
@@ -244,7 +244,7 @@ LIBVIRT_POWER_STATE = {
     VIR_DOMAIN_PMSUSPENDED: power_state.SUSPENDED,
 }
 
-MIN_LIBVIRT_VERSION = (0, 9, 7)
+MIN_LIBVIRT_VERSION = (0, 9, 6)
 
 
 def _late_load_cheetah():
@@ -1002,14 +1002,14 @@ class LibvirtDriver(driver.ComputeDriver):
         except exception.InstanceNotFound:
             raise exception.InstanceNotRunning()
 
-        (image_service, image_id) = nova.image.get_image_service(
+        (image_service, image_id) = glance.get_remote_image_service(
             context, instance['image_ref'])
         try:
             base = image_service.show(context, image_id)
         except exception.ImageNotFound:
             base = {}
 
-        _image_service = nova.image.get_image_service(context, image_href)
+        _image_service = glance.get_remote_image_service(context, image_href)
         snapshot_image_service, snapshot_image_id = _image_service
         snapshot = snapshot_image_service.show(context, snapshot_image_id)
 
@@ -1124,7 +1124,7 @@ class LibvirtDriver(driver.ComputeDriver):
             else:
                 LOG.warn(_("Failed to soft reboot instance."),
                          instance=instance)
-        return self._hard_reboot(instance, network_info)
+        return self._hard_reboot(instance)
 
     def _soft_reboot(self, instance):
         """Attempt to shutdown and restart the instance gracefully.
@@ -1161,17 +1161,30 @@ class LibvirtDriver(driver.ComputeDriver):
             greenthread.sleep(1)
         return False
 
-    def _hard_reboot(self, instance, network_info, xml=None):
+    def _hard_reboot(self, instance, xml=None):
         """Reboot a virtual machine, given an instance reference.
 
-        This method actually destroys and re-creates the domain to ensure the
-        reboot happens, as the guest OS cannot ignore this action.
+        Performs a Libvirt reset (if supported) on the domain.
+
+        If Libvirt reset is unavailable this method actually destroys and
+        re-creates the domain to ensure the reboot happens, as the guest
+        OS cannot ignore this action.
 
         If xml is set, it uses the passed in xml in place of the xml from the
         existing domain.
         """
+
         virt_dom = self._conn.lookupByName(instance['name'])
-        virt_dom.reset(0)
+        # NOTE(itoumsn): Use XML delived from the running instance.
+        if not xml:
+            xml = virt_dom.XMLDesc(0)
+
+        # NOTE(dprince): reset was added in Libvirt 0.9.7
+        if hasattr(virt_dom, 'reset'):
+            virt_dom.reset(0)
+        else:
+            self._destroy(instance)
+            self._create_domain(xml, virt_dom)
 
         def _wait_for_reboot():
             """Called at an interval until the VM is running again."""
@@ -1860,7 +1873,7 @@ class LibvirtDriver(driver.ComputeDriver):
 
         if FLAGS.libvirt_type == "lxc":
             fs = config.LibvirtConfigGuestFilesys()
-            fs.type = "mount"
+            fs.source_type = "mount"
             fs.source_dir = os.path.join(FLAGS.instances_path,
                                          instance['name'],
                                          "rootfs")
@@ -2174,26 +2187,14 @@ class LibvirtDriver(driver.ComputeDriver):
                        "This error can be safely ignored for now."))
             return 0
 
-    @staticmethod
-    def get_memory_mb_total():
+    def get_memory_mb_total(self):
         """Get the total memory size(MB) of physical computer.
 
         :returns: the total amount of memory(MB).
 
         """
 
-        if sys.platform.upper() not in ['LINUX2', 'LINUX3']:
-            return 0
-
-        if FLAGS.libvirt_type == 'xen':
-            meminfo = self._conn.getInfo()[1]
-            # this is in MB
-            return meminfo
-        else:
-            meminfo = open('/proc/meminfo').read().split()
-            idx = meminfo.index('MemTotal:')
-            # transforming KB to MB
-            return int(meminfo[idx + 1]) / 1024
+        return self._conn.getInfo()[1]
 
     @staticmethod
     def get_local_gb_total():

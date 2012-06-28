@@ -66,7 +66,7 @@ def return_non_existing_address(*args, **kwarg):
 
 def fake_InstanceMetadata(stubs, inst_data, address=None, sgroups=None):
 
-    if sgroups == None:
+    if sgroups is None:
         sgroups = [{'name': 'default'}]
 
     def sg_get(*args, **kwargs):
@@ -84,7 +84,7 @@ def fake_request(stubs, mdinst, relpath, address="127.0.0.1",
 
     app = handler.MetadataRequestHandler()
 
-    if fake_get_metadata == None:
+    if fake_get_metadata is None:
         fake_get_metadata = get_metadata
 
     if stubs:
@@ -93,7 +93,7 @@ def fake_request(stubs, mdinst, relpath, address="127.0.0.1",
     request = webob.Request.blank(relpath)
     request.remote_addr = address
 
-    if headers != None:
+    if headers is not None:
         request.headers.update(headers)
 
     response = request.get_response(app)
@@ -179,6 +179,16 @@ class MetadataTestCase(test.TestCase):
                          base._DEFAULT_MAPPINGS)
         self.assertEqual(base._format_instance_mapping(ctxt, instance_ref1),
                          expected)
+
+    def test_pubkey(self):
+        md = fake_InstanceMetadata(self.stubs, copy(self.instance))
+        data = md.get_ec2_metadata(version='2009-04-04')
+        pubkey_ent = data['meta-data']['public-keys']
+
+        self.assertEqual(base.ec2_md_print(pubkey_ent),
+            "0=%s" % self.instance['key_name'])
+        self.assertEqual(base.ec2_md_print(pubkey_ent['0']['openssh-key']),
+            self.instance['key_data'])
 
 
 class MetadataHandlerTestCase(test.TestCase):

@@ -39,7 +39,7 @@ from nova import context
 from nova import db
 from nova import exception
 from nova import flags
-from nova.image import fake as fake_image
+from nova.tests.image import fake as fake_image
 from nova import log as logging
 from nova.notifier import test_notifier
 from nova.openstack.common import importutils
@@ -125,11 +125,13 @@ class BaseTestCase(test.TestCase):
                                    'ramdisk_id': 'fake_ramdisk_id',
                                    'something_else': 'meow'}}
 
+        fake_image.stub_out_image_service(self.stubs)
         self.stubs.Set(fake_image._FakeImageService, 'show', fake_show)
         self.stubs.Set(rpc, 'call', rpc_call_wrapper)
         self.stubs.Set(rpc, 'cast', rpc_cast_wrapper)
 
     def tearDown(self):
+        fake_image.FakeImageService_reset()
         instances = db.instance_get_all(self.context.elevated())
         for instance in instances:
             db.instance_destroy(self.context.elevated(), instance['uuid'])
@@ -2159,7 +2161,20 @@ class ComputeAPITestCase(BaseTestCase):
                          len(db.instance_get_all(context.get_admin_context())))
 
     def test_default_hostname_generator(self):
-        cases = [(None, 'server-1'), ('Hello, Server!', 'hello-server'),
+        fake_uuids = [str(utils.gen_uuid()) for x in xrange(4)]
+
+        orig_populate = self.compute_api._populate_instance_for_create
+
+        def _fake_populate(base_options, *args, **kwargs):
+            base_options['uuid'] = fake_uuids.pop(0)
+            return orig_populate(base_options, *args, **kwargs)
+
+        self.stubs.Set(self.compute_api,
+                '_populate_instance_for_create',
+                _fake_populate)
+
+        cases = [(None, 'server-%s' % fake_uuids[0]),
+                 ('Hello, Server!', 'hello-server'),
                  ('<}\x1fh\x10e\x08l\x02l\x05o\x12!{>', 'hello'),
                  ('hello_server', 'hello-server')]
         for display_name, hostname in cases:

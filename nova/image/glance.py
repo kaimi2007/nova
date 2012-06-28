@@ -156,21 +156,6 @@ class GlanceImageService(object):
         raise exception.GlanceConnectionFailed(
                 reason=_('Maximum attempts reached'))
 
-    def index(self, context, **kwargs):
-        """Calls out to Glance for a list of images available."""
-        params = self._extract_query_params(kwargs)
-        image_metas = self._get_images(context, **params)
-
-        images = []
-        for image_meta in image_metas:
-            # NOTE(sirp): We need to use `get_images_detailed` and not
-            # `get_images` here because we need `is_public` and `properties`
-            # included so we can filter by user
-            if self._is_image_available(context, image_meta):
-                meta_subset = utils.subset_dict(image_meta, ('id', 'name'))
-                images.append(meta_subset)
-        return images
-
     def detail(self, context, **kwargs):
         """Calls out to Glance for a list of detailed image information."""
         params = self._extract_query_params(kwargs)
@@ -249,14 +234,6 @@ class GlanceImageService(object):
 
         base_image_meta = self._translate_from_glance(image_meta)
         return base_image_meta
-
-    def show_by_name(self, context, name):
-        """Returns a dict containing image data for the given name."""
-        image_metas = self.detail(context, filters={'name': name})
-        try:
-            return image_metas[0]
-        except (IndexError, TypeError):
-            raise exception.ImageNotFound(image_id=name)
 
     def get(self, context, image_id, data):
         """Calls out to Glance for metadata and data and writes data."""
@@ -452,7 +429,7 @@ def _convert_to_string(metadata):
 
 
 def _limit_attributes(image_meta):
-    IMAGE_ATTRIBUTES = ['size', 'disk_format',
+    IMAGE_ATTRIBUTES = ['size', 'disk_format', 'owner',
                         'container_format', 'checksum', 'id',
                         'name', 'created_at', 'updated_at',
                         'deleted_at', 'deleted', 'status',
@@ -511,3 +488,31 @@ def _translate_plain_exception(exc_type, exc_value):
     if exc_type is glance_exception.Invalid:
         return exception.Invalid(exc_value)
     return exc_value
+
+
+def get_remote_image_service(context, image_href):
+    """Create an image_service and parse the id from the given image_href.
+
+    The image_href param can be an href of the form
+    'http://example.com:9292/v1/images/b8b2c6f7-7345-4e2f-afa2-eedaba9cbbe3',
+    or just an id such as 'b8b2c6f7-7345-4e2f-afa2-eedaba9cbbe3'. If the
+    image_href is a standalone id, then the default image service is returned.
+
+    :param image_href: href that describes the location of an image
+    :returns: a tuple of the form (image_service, image_id)
+
+    """
+    #NOTE(bcwaldon): If image_href doesn't look like a URI, assume its a
+    # standalone image ID
+    if '/' not in str(image_href):
+        image_service = get_default_image_service()
+        image_id = image_href
+    else:
+        (glance_client, image_id) = _get_glance_client(context, image_href)
+        image_service = GlanceImageService(glance_client)
+
+    return (image_service, image_id)
+
+
+def get_default_image_service():
+    return GlanceImageService()

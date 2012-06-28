@@ -20,19 +20,19 @@ import StringIO
 
 from nova import context
 from nova import exception
-import nova.image
+import nova.tests.image.fake
 from nova import test
 
 
-class _ImageTestCase(test.TestCase):
+class FakeImageServiceTestCase(test.TestCase):
     def setUp(self):
-        super(_ImageTestCase, self).setUp()
+        super(FakeImageServiceTestCase, self).setUp()
+        self.image_service = nova.tests.image.fake.FakeImageService()
         self.context = context.get_admin_context()
 
-    def test_index(self):
-        res = self.image_service.index(self.context)
-        for image in res:
-            self.assertEquals(set(image.keys()), set(['id', 'name']))
+    def tearDown(self):
+        super(FakeImageServiceTestCase, self).setUp()
+        nova.tests.image.fake.FakeImageService_reset()
 
     def test_detail(self):
         res = self.image_service.detail(self.context)
@@ -59,32 +59,19 @@ class _ImageTestCase(test.TestCase):
             check_is_bool(image, 'deleted')
             check_is_bool(image, 'is_public')
 
-    def test_index_and_detail_have_same_results(self):
-        index = self.image_service.index(self.context)
-        detail = self.image_service.detail(self.context)
-        index_set = set([(i['id'], i['name']) for i in index])
-        detail_set = set([(i['id'], i['name']) for i in detail])
-        self.assertEqual(index_set, detail_set)
-
     def test_show_raises_imagenotfound_for_invalid_id(self):
         self.assertRaises(exception.ImageNotFound,
                           self.image_service.show,
                           self.context,
                           'this image does not exist')
 
-    def test_show_by_name(self):
-        self.assertRaises(exception.ImageNotFound,
-                          self.image_service.show_by_name,
-                          self.context,
-                          'this image does not exist')
-
     def test_create_adds_id(self):
-        index = self.image_service.index(self.context)
+        index = self.image_service.detail(self.context)
         image_count = len(index)
 
         self.image_service.create(self.context, {})
 
-        index = self.image_service.index(self.context)
+        index = self.image_service.detail(self.context)
         self.assertEquals(len(index), image_count + 1)
 
         self.assertTrue(index[0]['id'])
@@ -126,7 +113,7 @@ class _ImageTestCase(test.TestCase):
         self.image_service.create(self.context, {'id': '33', 'foo': 'bar'})
         self.image_service.create(self.context, {'id': '34', 'foo': 'bar'})
         self.image_service.delete_all()
-        index = self.image_service.index(self.context)
+        index = self.image_service.detail(self.context)
         self.assertEquals(len(index), 0)
 
     def test_create_then_get(self):
@@ -138,9 +125,3 @@ class _ImageTestCase(test.TestCase):
         s2 = StringIO.StringIO()
         self.image_service.get(self.context, '32', data=s2)
         self.assertEquals(s2.getvalue(), blob, 'Did not get blob back intact')
-
-
-class FakeImageTestCase(_ImageTestCase):
-    def setUp(self):
-        super(FakeImageTestCase, self).setUp()
-        self.image_service = nova.image.fake.FakeImageService()
