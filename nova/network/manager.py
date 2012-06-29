@@ -778,6 +778,7 @@ class NetworkManager(manager.SchedulerDependentManager):
 
         super(NetworkManager, self).__init__(service_name='network',
                                                 *args, **kwargs)
+        self.timeout_fixed_ips = True
 
     def _import_ipam_lib(self, ipam_lib):
         self.ipam = importutils.import_module(ipam_lib).get_ipam_lib(self)
