@@ -31,7 +31,7 @@ from nova import compute
 from nova.compute import instance_types
 from nova import exception
 from nova import flags
-from nova import log as logging
+from nova.openstack.common import log as logging
 from nova.openstack.common.rpc import common as rpc_common
 from nova.openstack.common import timeutils
 from nova import utils
@@ -524,9 +524,12 @@ class Controller(wsgi.Controller):
                 network_uuid = network['uuid']
 
                 if not utils.is_uuid_like(network_uuid):
-                    msg = _("Bad networks format: network uuid is not in"
-                         " proper format (%s)") % network_uuid
-                    raise exc.HTTPBadRequest(explanation=msg)
+                    br_uuid = network_uuid.split('-', 1)[-1]
+                    if not utils.is_uuid_like(br_uuid):
+                        msg = _("Bad networks format: network uuid is "
+                                "not in proper format "
+                                "(%s)") % network_uuid
+                        raise exc.HTTPBadRequest(explanation=msg)
 
                 #fixed IP address is optional
                 #if the fixed IP address is not provided then
@@ -659,9 +662,6 @@ class Controller(wsgi.Controller):
         self._validate_user_data(user_data)
 
         availability_zone = server_dict.get('availability_zone')
-        name = server_dict['name']
-        self._validate_server_name(name)
-        name = name.strip()
 
         block_device_mapping = self._get_block_device_mapping(server_dict)
 

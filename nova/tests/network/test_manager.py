@@ -23,10 +23,10 @@ import tempfile
 from nova import context
 from nova import db
 from nova import exception
-from nova import log as logging
 from nova.network import linux_net
 from nova.network import manager as network_manager
 from nova.openstack.common import importutils
+from nova.openstack.common import log as logging
 from nova.openstack.common import rpc
 import nova.policy
 from nova import test
@@ -942,6 +942,42 @@ class VlanNetworkTestCase(test.TestCase):
         self.network.deallocate_fixed_ip(context1, fix_addr, 'fake')
         fixed = db.fixed_ip_get_by_address(elevated, fix_addr)
         self.assertFalse(fixed['allocated'])
+
+    def test_deallocate_fixed_deleted(self):
+        """Verify doesn't deallocate deleted fixed_ip from deleted network"""
+
+        def network_get(_context, network_id):
+            return networks[network_id]
+
+        def teardown_network_on_host(_context, network):
+            if network['id'] == 0:
+                raise test.TestingException()
+
+        self.stubs.Set(db, 'network_get', network_get)
+        self.stubs.Set(self.network, '_teardown_network_on_host',
+                       teardown_network_on_host)
+
+        context1 = context.RequestContext('user', 'project1')
+
+        instance = db.instance_create(context1,
+                {'project_id': 'project1'})
+
+        elevated = context1.elevated()
+        fix_addr = db.fixed_ip_associate_pool(elevated, 1, instance['id'])
+        db.fixed_ip_update(elevated, fix_addr, {'deleted': 1})
+        elevated.read_deleted = 'yes'
+        delfixed = db.fixed_ip_get_by_address(elevated, fix_addr)
+        values = {'address': fix_addr,
+                  'network_id': 0,
+                  'instance_id': delfixed['instance_id']}
+        db.fixed_ip_create(elevated, values)
+        elevated.read_deleted = 'no'
+        newfixed = db.fixed_ip_get_by_address(elevated, fix_addr)
+        elevated.read_deleted = 'yes'
+
+        deallocate = self.network.deallocate_fixed_ip
+        self.assertRaises(test.TestingException, deallocate, context1,
+                          fix_addr, 'fake')
 
     def test_deallocate_fixed_no_vif(self):
         """Verify that deallocate doesn't raise when no vif is returned.

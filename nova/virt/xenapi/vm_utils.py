@@ -34,19 +34,19 @@ from xml.parsers import expat
 
 from eventlet import greenthread
 
+from nova import block_device
 from nova.compute import instance_types
 from nova.compute import power_state
 from nova import db
 from nova import exception
 from nova import flags
 from nova.image import glance
-from nova import log as logging
 from nova.openstack.common import cfg
 from nova.openstack.common import excutils
 from nova.openstack.common import jsonutils
+from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt.disk import api as disk
-from nova.virt import xenapi
 from nova.virt.xenapi import volume_utils
 
 
@@ -344,6 +344,55 @@ def create_vdi(session, sr_ref, info, disk_type, virtual_size,
     return vdi_ref
 
 
+def get_vdis_for_boot_from_vol(session, instance, dev_params):
+    vdis = {}
+    sr_uuid = dev_params['sr_uuid']
+    sr_ref = volume_utils.find_sr_by_uuid(session,
+                                          sr_uuid)
+    if sr_ref:
+        session.call_xenapi("SR.scan", sr_ref)
+        return {'root': dict(uuid=dev_params['vdi_uuid'],
+                                file=None)}
+    return vdis
+
+
+def _volume_in_mapping(mount_device, block_device_info):
+    block_device_list = [block_device.strip_prefix(vol['mount_device'])
+                         for vol in
+                         driver.block_device_info_get_mapping(
+                         block_device_info)]
+    swap = driver.block_device_info_get_swap(block_device_info)
+    if driver.swap_is_usable(swap):
+        swap_dev = swap['device_name']
+        block_device_list.append(block_device.strip_prefix(swap_dev))
+    block_device_list += [block_device.strip_prefix(ephemeral['device_name'])
+                          for ephemeral in
+                          driver.block_device_info_get_ephemerals(
+                          block_device_info)]
+    LOG.debug(_("block_device_list %s"), block_device_list)
+    return block_device.strip_prefix(mount_device) in block_device_list
+
+
+def get_vdis_for_instance(context, session, instance, image,
+                          image_type,
+                          block_device_info=None):
+    if block_device_info:
+        LOG.debug(_("block device info: %s"), block_device_info)
+        rootdev = block_device_info['root_device_name']
+        if _volume_in_mapping(rootdev, block_device_info):
+            # call function to return the vdi in connection info of block
+            # device.
+            # make it a point to return from here.
+            bdm_root_dev = block_device_info['block_device_mapping'][0]
+            dev_params = bdm_root_dev['connection_info']['data']
+            LOG.debug(dev_params)
+            return get_vdis_for_boot_from_vol(session,
+                                             instance,
+                                             dev_params)
+    return create_image(context, session, instance, image,
+                        image_type)
+
+
 def copy_vdi(session, sr_ref, vdi_to_copy_ref):
     """Copy a VDI and return the new VDIs reference."""
     vdi_ref = session.call_xenapi('VDI.copy', vdi_to_copy_ref, sr_ref)
@@ -454,7 +503,13 @@ def upload_image(context, session, instance, vdi_uuids, image_id):
 
     glance_host, glance_port = glance.pick_glance_api_server()
 
+    sys_meta = db.instance_system_metadata_get(context, instance['uuid'])
     properties = {}
+    prefix = 'image_'
+    for key, value in sys_meta.iteritems():
+        if key.startswith(prefix):
+            key = key[len(prefix):]
+        properties[key] = value
     properties['auto_disk_config'] = instance.auto_disk_config
     properties['os_type'] = instance.os_type or FLAGS.default_os_type
 
@@ -600,14 +655,23 @@ def create_kernel_image(context, session, instance, image_id, user_id,
         args = {}
         args['cached-image'] = image_id
         args['new-image-uuid'] = str(uuid.uuid4())
-        filename = session.call_plugin('glance', 'create_kernel_ramdisk',
-                                       args)
+        filename = session.call_plugin('kernel', 'create_kernel_ramdisk', args)
 
     if filename == "":
-        return fetch_image(context, session, instance, image_id, image_type)
+        return _fetch_disk_image(context, session, instance, image_id,
+                                 image_type)
     else:
         vdi_type = ImageType.to_string(image_type)
         return {vdi_type: dict(uuid=None, file=filename)}
+
+
+def destroy_kernel_ramdisk(session, kernel, ramdisk):
+    args = {}
+    if kernel:
+        args['kernel-file'] = kernel
+    if ramdisk:
+        args['ramdisk-file'] = ramdisk
+    session.call_plugin('kernel', 'remove_kernel_ramdisk', args)
 
 
 def _create_cached_image(context, session, instance, image_id, image_type):
@@ -623,9 +687,8 @@ def _create_cached_image(context, session, instance, image_id, image_type):
 
     root_vdi_ref = find_cached_image(session, image_id, sr_ref)
     if root_vdi_ref is None:
-        fetched_vdis = fetch_image(context, session, instance, image_id,
-                                   image_type)
-        root_vdi = fetched_vdis['root']
+        vdis = _fetch_image(context, session, instance, image_id, image_type)
+        root_vdi = vdis['root']
         root_vdi_ref = session.call_xenapi('VDI.get_by_uuid',
                                            root_vdi['uuid'])
         set_vdi_name(session, root_vdi['uuid'], 'Glance Image %s' % image_id,
@@ -633,7 +696,7 @@ def _create_cached_image(context, session, instance, image_id, image_type):
         session.call_xenapi('VDI.add_to_other_config',
                             root_vdi_ref, 'image-id', str(image_id))
 
-        for vdi_type, vdi in fetched_vdis.iteritems():
+        for vdi_type, vdi in vdis.iteritems():
             vdi_ref = session.call_xenapi('VDI.get_by_uuid',
                                           vdi['uuid'])
 
@@ -709,7 +772,7 @@ def create_image(context, session, instance, image_id, image_type):
         vdis = _create_cached_image(
                 context, session, instance, image_id, image_type)
     else:
-        vdis = fetch_image(
+        vdis = _fetch_image(
                 context, session, instance, image_id, image_type)
 
     # Set the name label and description to easily identify what
@@ -720,44 +783,41 @@ def create_image(context, session, instance, image_id, image_type):
     return vdis
 
 
-def fetch_image(context, session, instance, image_id, image_type):
+def _fetch_image(context, session, instance, image_id, image_type):
     """Fetch image from glance based on image type.
 
     Returns: A single filename if image_type is KERNEL or RAMDISK
              A list of dictionaries that describe VDIs, otherwise
     """
     if image_type == ImageType.DISK_VHD:
-        return _fetch_image_glance_vhd(context, session, instance, image_id)
+        vdis = _fetch_vhd_image(context, session, instance, image_id)
     else:
-        return _fetch_image_glance_disk(context, session, instance, image_id,
-                                        image_type)
+        vdis = _fetch_disk_image(context, session, instance, image_id,
+                                 image_type)
+
+    for vdi_type, vdi in vdis.iteritems():
+        vdi_uuid = vdi['uuid']
+        LOG.debug(_("Fetched VDIs of type '%(vdi_type)s' with UUID"
+                    " '%(vdi_uuid)s'"),
+                  locals(), instance=instance)
+
+    return vdis
 
 
-def _retry_glance_download_vhd(context, session, image_id):
-    # NOTE(sirp): The Glance plugin runs under Python 2.4
-    # which does not have the `uuid` module. To work around this,
-    # we generate the uuids here (under Python 2.6+) and
-    # pass them as arguments
-    uuid_stack = [str(uuid.uuid4()) for i in xrange(3)]
-
+def _fetch_using_dom0_plugin_with_retry(context, session, image_id,
+                                        plugin_name, params, callback=None):
     max_attempts = FLAGS.glance_num_retries + 1
     sleep_time = 0.5
     for attempt_num in xrange(1, max_attempts + 1):
-        glance_host, glance_port = glance.pick_glance_api_server()
-        params = {'image_id': image_id,
-                  'glance_host': glance_host,
-                  'glance_port': glance_port,
-                  'uuid_stack': uuid_stack,
-                  'sr_path': get_sr_path(session),
-                  'auth_token': getattr(context, 'auth_token', None)}
-        kwargs = {'params': pickle.dumps(params)}
-
-        LOG.info(_('download_vhd %(image_id)s '
-                   'attempt %(attempt_num)d/%(max_attempts)d '
-                   'from %(glance_host)s:%(glance_port)s') % locals())
+        LOG.info(_('download_vhd %(image_id)s, '
+                   'attempt %(attempt_num)d/%(max_attempts)d, '
+                   'params: %(params)s') % locals())
 
         try:
-            result = session.call_plugin('glance', 'download_vhd', kwargs)
+            if callback:
+                callback(params)
+            kwargs = {'params': pickle.dumps(params)}
+            result = session.call_plugin(plugin_name, 'download_vhd', kwargs)
             return jsonutils.loads(result)
         except session.XenAPI.Failure as exc:
             _type, _method, error = exc.details[:3]
@@ -773,30 +833,35 @@ def _retry_glance_download_vhd(context, session, image_id):
     raise exception.CouldNotFetchImage(image_id=image_id)
 
 
-def _fetch_image_glance_vhd(context, session, instance, image_id):
+def _fetch_vhd_image(context, session, instance, image_id):
     """Tell glance to download an image and put the VHDs into the SR
 
     Returns: A list of dictionaries that describe VDIs
     """
     LOG.debug(_("Asking xapi to fetch vhd image %(image_id)s"), locals(),
               instance=instance)
+
+    # NOTE(sirp): The XenAPI plugins run under Python 2.4
+    # which does not have the `uuid` module. To work around this,
+    # we generate the uuids here (under Python 2.6+) and
+    # pass them as arguments
+    params = {'image_id': image_id,
+              'uuid_stack': [str(uuid.uuid4()) for i in xrange(3)],
+              'sr_path': get_sr_path(session),
+              'auth_token': getattr(context, 'auth_token', None)}
+
+    def pick_glance(params):
+        glance_host, glance_port = glance.pick_glance_api_server()
+        params['glance_host'] = glance_host
+        params['glance_port'] = glance_port
+
+    plugin_name = 'glance'
+    vdis = _fetch_using_dom0_plugin_with_retry(
+            context, session, image_id, plugin_name, params,
+            callback=pick_glance)
+
     sr_ref = safe_find_sr(session)
-
-    fetched_vdis = _retry_glance_download_vhd(context, session, image_id)
-
-    # 'download_vhd' will return a list of dictionaries describing VDIs.
-    # The dictionary will contain 'vdi_type' and 'vdi_uuid' keys.
-    # 'vdi_type' can be 'root' or 'swap' right now.
-    for vdi in fetched_vdis:
-        LOG.debug(_("xapi 'download_vhd' returned VDI of "
-                    "type '%(vdi_type)s' with UUID '%(vdi_uuid)s'"),
-                  vdi, instance=instance)
-
     scan_sr(session, sr_ref)
-
-    vdis = {}
-    for vdi in fetched_vdis:
-        vdis[vdi['vdi_type']] = dict(uuid=vdi['vdi_uuid'], file=None)
 
     # Pull out the UUID of the root VDI
     root_vdi_uuid = vdis['root']['uuid']
@@ -845,11 +910,11 @@ def _check_vdi_size(context, session, instance, vdi_uuid):
         raise exception.ImageTooLarge()
 
 
-def _fetch_image_glance_disk(context, session, instance, image_id, image_type):
+def _fetch_disk_image(context, session, instance, image_id, image_type):
     """Fetch the image from Glance
 
     NOTE:
-    Unlike _fetch_image_glance_vhd, this method does not use the Glance
+    Unlike _fetch_vhd_image, this method does not use the Glance
     plugin; instead, it streams the disks through domU to the VDI
     directly.
 
@@ -893,7 +958,8 @@ def _fetch_image_glance_disk(context, session, instance, image_id, image_type):
         vdi_uuid = session.call_xenapi("VDI.get_uuid", vdi_ref)
 
         with vdi_attached_here(session, vdi_ref, read_only=False) as dev:
-            stream_func = lambda f: image_service.get(context, image_id, f)
+            stream_func = lambda f: image_service.download(
+                    context, image_id, f)
             _stream_disk(stream_func, image_type, virtual_size, dev)
 
         if image_type in (ImageType.KERNEL, ImageType.RAMDISK):
@@ -901,7 +967,7 @@ def _fetch_image_glance_disk(context, session, instance, image_id, image_type):
             # content of the VDI into the proper path.
             LOG.debug(_("Copying VDI %s to /boot/guest on dom0"),
                       vdi_ref, instance=instance)
-            fn = "copy_kernel_vdi"
+
             args = {}
             args['vdi-ref'] = vdi_ref
 
@@ -909,7 +975,7 @@ def _fetch_image_glance_disk(context, session, instance, image_id, image_type):
             args['image-size'] = str(vdi_size)
             if FLAGS.cache_images:
                 args['cached-image'] = image_id
-            filename = session.call_plugin('glance', fn, args)
+            filename = session.call_plugin('kernel', 'copy_vdi', args)
 
             # Remove the VDI as it is not needed anymore.
             destroy_vdi(session, vdi_ref)
@@ -1018,19 +1084,7 @@ def list_vms(session):
             yield vm_ref, vm_rec
 
 
-def lookup(session, name_label):
-    """Look the instance up and return it if available"""
-    vm_refs = session.call_xenapi("VM.get_by_name_label", name_label)
-    n = len(vm_refs)
-    if n == 0:
-        return None
-    elif n > 1:
-        raise exception.InstanceExists(name=name_label)
-    else:
-        return vm_refs[0]
-
-
-def lookup_vm_vdis(session, vm_ref):
+def lookup_vm_vdis(session, vm_ref, nodestroys=None):
     """Look for the VDIs that are attached to the VM"""
     # Firstly we get the VBDs, then the VDIs.
     # TODO(Armando): do we leave the read-only devices?
@@ -1046,8 +1100,21 @@ def lookup_vm_vdis(session, vm_ref):
             except session.XenAPI.Failure, exc:
                 LOG.exception(exc)
             else:
-                vdi_refs.append(vdi_ref)
+                if not nodestroys or record['uuid'] not in nodestroys:
+                    vdi_refs.append(vdi_ref)
     return vdi_refs
+
+
+def lookup(session, name_label):
+    """Look the instance up and return it if available"""
+    vm_refs = session.call_xenapi("VM.get_by_name_label", name_label)
+    n = len(vm_refs)
+    if n == 0:
+        return None
+    elif n > 1:
+        raise exception.InstanceExists(name=name_label)
+    else:
+        return vm_refs[0]
 
 
 def preconfigure_instance(session, instance, vdi_ref, network_info):

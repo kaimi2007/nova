@@ -28,8 +28,8 @@ from nova import context
 from nova import db
 from nova import exception
 from nova import flags
-from nova import log as logging
 from nova import network
+from nova.openstack.common import log as logging
 from nova import volume
 
 FLAGS = flags.FLAGS
@@ -88,16 +88,17 @@ class InstanceMetadata():
 
         self.ec2_ids = {}
 
-        self.ec2_ids['instance-id'] = ec2utils.id_to_ec2_id(instance['id'])
+        self.ec2_ids['instance-id'] = ec2utils.id_to_ec2_inst_id(
+                instance['id'])
         self.ec2_ids['ami-id'] = ec2utils.glance_id_to_ec2_id(ctxt,
             instance['image_ref'])
 
         for image_type in ['kernel', 'ramdisk']:
             if self.instance.get('%s_id' % image_type):
                 image_id = self.instance['%s_id' % image_type]
-                image_type = ec2utils.image_type(image_type)
+                ec2_image_type = ec2utils.image_type(image_type)
                 ec2_id = ec2utils.glance_id_to_ec2_id(ctxt, image_id,
-                                                      image_type)
+                                                      ec2_image_type)
                 self.ec2_ids['%s-id' % image_type] = ec2_id
 
         self.address = address

@@ -39,10 +39,9 @@ from nova import context
 from nova import db
 from nova import exception
 from nova import flags
-from nova.tests.image import fake as fake_image
-from nova import log as logging
-from nova.notifier import test_notifier
 from nova.openstack.common import importutils
+from nova.openstack.common import log as logging
+from nova.openstack.common.notifier import test_notifier
 from nova.openstack.common import policy as common_policy
 from nova.openstack.common import rpc
 from nova.openstack.common.rpc import common as rpc_common
@@ -52,6 +51,7 @@ from nova import quota
 from nova.scheduler import driver as scheduler_driver
 from nova import test
 from nova.tests import fake_network
+from nova.tests.image import fake as fake_image
 from nova import utils
 import nova.volume
 
@@ -109,7 +109,7 @@ class BaseTestCase(test.TestCase):
         super(BaseTestCase, self).setUp()
         self.flags(compute_driver='nova.virt.fake.FakeDriver',
                    stub_network=True,
-                   notification_driver='nova.notifier.test_notifier',
+           notification_driver='nova.openstack.common.notifier.test_notifier',
                    network_manager='nova.network.manager.FlatManager')
         self.compute = importutils.import_object(FLAGS.compute_manager)
 
@@ -4070,6 +4070,19 @@ class ComputeHostAPITestCase(BaseTestCase):
         self.assertEqual(call_info['msg'],
                 {'method': 'set_host_enabled',
                  'args': {'enabled': 'fake_enabled'},
+                 'version': compute_rpcapi.ComputeAPI.RPC_API_VERSION})
+
+    def test_get_host_uptime(self):
+        ctxt = context.RequestContext('fake', 'fake')
+        call_info = {}
+        self._rpc_call_stub(call_info)
+
+        self.host_api.get_host_uptime(ctxt, 'fake_host')
+        self.assertEqual(call_info['context'], ctxt)
+        self.assertEqual(call_info['topic'], 'compute.fake_host')
+        self.assertEqual(call_info['msg'],
+                {'method': 'get_host_uptime',
+                 'args': {},
                  'version': compute_rpcapi.ComputeAPI.RPC_API_VERSION})
 
     def test_host_power_action(self):

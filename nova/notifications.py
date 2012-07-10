@@ -23,11 +23,11 @@ import nova.context
 from nova import db
 from nova import exception
 from nova import flags
-from nova import log
 from nova import network
 from nova.network import model as network_model
-from nova.notifier import api as notifier_api
 from nova.openstack.common import cfg
+from nova.openstack.common import log
+from nova.openstack.common.notifier import api as notifier_api
 from nova.openstack.common import timeutils
 from nova import utils
 
@@ -108,16 +108,6 @@ def _send_instance_update_notification(context, instance, old_vm_state,
     # add bw usage info:
     bw = bandwidth_usage(instance, audit_start)
     payload["bandwidth"] = bw
-
-    try:
-        system_metadata = db.instance_system_metadata_get(
-                context, instance.uuid)
-    except exception.NotFound:
-        system_metadata = {}
-
-    # add image metadata
-    image_meta_props = image_meta(system_metadata)
-    payload["image_meta"] = image_meta_props
 
     # if the service name (e.g. api/scheduler/compute) is not provided, default
     # to "compute"
@@ -222,6 +212,14 @@ def usage_from_instance(context, instance_ref, network_info,
 
     instance_type_name = instance_ref.get('instance_type', {}).get('name', '')
 
+    if system_metadata is None:
+        try:
+            system_metadata = db.instance_system_metadata_get(
+                    context, instance_ref['uuid'])
+
+        except exception.NotFound:
+            system_metadata = {}
+
     usage_info = dict(
         # Owner properties
         tenant_id=instance_ref['project_id'],
@@ -272,6 +270,10 @@ def usage_from_instance(context, instance_ref, network_info,
 
     if network_info is not None:
         usage_info['fixed_ips'] = network_info.fixed_ips()
+
+    # add image metadata
+    image_meta_props = image_meta(system_metadata)
+    usage_info["image_meta"] = image_meta_props
 
     usage_info.update(kw)
     return usage_info

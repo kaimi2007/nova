@@ -42,46 +42,6 @@ class ExceptionTestCase(test.TestCase):
 
 
 class ProjectTestCase(test.TestCase):
-    def test_authors_up_to_date(self):
-        topdir = os.path.normpath(os.path.dirname(__file__) + '/../../')
-        missing = set()
-        contributors = set()
-        mailmap = utils.parse_mailmap(os.path.join(topdir, '.mailmap'))
-        authors_file = open(os.path.join(topdir,
-                                         'Authors'), 'r').read().lower()
-
-        if os.path.exists(os.path.join(topdir, '.git')):
-            for email in commands.getoutput('git log --format=%ae').split():
-                if not email:
-                    continue
-                if "jenkins" in email and "openstack.org" in email:
-                    continue
-                email = '<' + email.lower() + '>'
-                contributors.add(utils.str_dict_replace(email, mailmap))
-        else:
-            return
-
-        for contributor in contributors:
-            if contributor == 'nova-core':
-                continue
-            # TODO(lorinh): Handle ISI's local Hudson server upstream
-            # merges properly so that the server doesn't look like a
-            # contributor. For now, we hardcode 'hudson@kronos' and 'Server'
-            # as exceptions the same way nova-core is handled
-            if contributor == '<hudson@kronos.east.isi.edu>':
-                continue
-            if contributor == '<do-not-email@isi.edu>':
-                continue
-            # Note(lorinh): Hack because accidental commit as root
-            if (contributor == '<root@bespin.(none)>'):
-                continue
-            if contributor == 'Server':
-                continue
-            if not contributor in authors_file:
-                missing.add(contributor)
-
-        self.assertTrue(len(missing) == 0,
-                        '%r not listed in Authors' % missing)
 
     def test_all_migrations_have_downgrade(self):
         topdir = os.path.normpath(os.path.dirname(__file__) + '/../../')

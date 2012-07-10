@@ -25,10 +25,10 @@ from nova.compute import vm_states
 from nova import context
 from nova import db
 from nova import flags
-from nova import log as logging
-from nova import notifications
 import nova.network
-from nova.notifier import test_notifier
+from nova import notifications
+from nova.openstack.common import log as logging
+from nova.openstack.common.notifier import test_notifier
 from nova import test
 from nova.tests import fake_network
 
@@ -52,7 +52,7 @@ class NotificationsTestCase(test.TestCase):
 
         self.flags(compute_driver='nova.virt.fake.FakeDriver',
                    stub_network=True,
-                   notification_driver='nova.notifier.test_notifier',
+            notification_driver='nova.openstack.common.notifier.test_notifier',
                    network_manager='nova.network.manager.FlatManager',
                    notify_on_state_change="vm_and_task_state",
                    host='testhost')

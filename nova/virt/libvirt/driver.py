@@ -65,11 +65,11 @@ from nova import db
 from nova import exception
 from nova import flags
 from nova.image import glance
-from nova import log as logging
 from nova.openstack.common import cfg
 from nova.openstack.common import excutils
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
+from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt.disk import api as disk
 from nova.virt import driver
@@ -183,6 +183,23 @@ libvirt_opts = [
                default=None,
                help='Set to force injection to take place on a config drive '
                     '(if set, valid options are: always)'),
+    cfg.StrOpt('libvirt_cpu_mode',
+               default=None,
+               help='Set to "host-model" to clone the host CPU feature flags; '
+                    'to "host-passthrough" to use the host CPU model exactly; '
+                    'to "custom" to use a named CPU model; '
+                    'to "none" to not set any CPU model. '
+                    'If libvirt_type="kvm|qemu", it will default to '
+                    '"host-model", otherwise it will default to "none"'),
+    cfg.StrOpt('libvirt_cpu_model',
+               default=None,
+               help='Set to a named libvirt CPU model (see names listed '
+                    'in /usr/share/libvirt/cpu_map.xml). Only has effect if '
+                    'libvirt_cpu_mode="custom" and libvirt_type="kvm|qemu"'),
+    cfg.StrOpt('libvirt_snapshots_directory',
+               default='$instances_path/snapshots',
+               help='Location where libvirt driver will store snapshots '
+                    'before uploading them to image service'),
     ]
 
 FLAGS = flags.FLAGS
@@ -250,6 +267,9 @@ LIBVIRT_POWER_STATE = {
 }
 
 MIN_LIBVIRT_VERSION = (0, 9, 6)
+# When the above version matches/exceeds this version
+# delete it & corresponding code using it
+MIN_LIBVIRT_HOST_CPU_VERSION = (0, 9, 10)
 
 
 def _late_load_cheetah():
@@ -435,9 +455,15 @@ class LibvirtDriver(driver.ComputeDriver):
         except libvirt.libvirtError:
             return False
 
+    # TODO(Shrews): Remove when libvirt Bugzilla bug # 836647 is fixed.
+    def list_instance_ids(self):
+        if self._conn.numOfDomains() == 0:
+            return []
+        return self._conn.listDomainsID()
+
     def list_instances(self):
         return [self._conn.lookupByID(x).name()
-                for x in self._conn.listDomainsID()
+                for x in self.list_instance_ids()
                 if x != 0]  # We skip domains with ID 0 (hypervisors).
 
     @staticmethod
@@ -460,7 +486,7 @@ class LibvirtDriver(driver.ComputeDriver):
 
     def list_instances_detail(self):
         infos = []
-        for domain_id in self._conn.listDomainsID():
+        for domain_id in self.list_instance_ids():
             domain = self._conn.lookupByID(domain_id)
             info = self._map_to_instance_info(domain)
             infos.append(info)
@@ -896,6 +922,13 @@ class LibvirtDriver(driver.ComputeDriver):
                         raise exception.DeviceIsBusy(device=mount_device)
                 raise
 
+        # TODO(danms) once libvirt has support for LXC hotplug,
+        # replace this re-define with use of the
+        # VIR_DOMAIN_AFFECT_LIVE & VIR_DOMAIN_AFFECT_CONFIG flags with
+        # attachDevice()
+        domxml = virt_dom.XMLDesc(libvirt.VIR_DOMAIN_XML_SECURE)
+        self._conn.defineXML(domxml)
+
     @staticmethod
     def _get_disk_xml(xml, device):
         """Returns the xml for the disk mounted at device"""
@@ -968,6 +1001,13 @@ class LibvirtDriver(driver.ComputeDriver):
             self.volume_driver_method('disconnect_volume',
                                       connection_info,
                                       mount_device)
+
+        # TODO(danms) once libvirt has support for LXC hotplug,
+        # replace this re-define with use of the
+        # VIR_DOMAIN_AFFECT_LIVE & VIR_DOMAIN_AFFECT_CONFIG flags with
+        # detachDevice()
+        domxml = virt_dom.XMLDesc(libvirt.VIR_DOMAIN_XML_SECURE)
+        self._conn.defineXML(domxml)
 
     @exception.wrap_exception()
     def _attach_lxc_volume(self, xml, virt_dom, instance_name):
@@ -1119,7 +1159,9 @@ class LibvirtDriver(driver.ComputeDriver):
         libvirt_utils.create_snapshot(disk_path, snapshot_name)
 
         # Export the snapshot to a raw image
-        with utils.tempdir() as tmpdir:
+        snapshot_directory = FLAGS.libvirt_snapshots_directory
+        libvirt_utils.ensure_tree(snapshot_directory)
+        with utils.tempdir(dir=snapshot_directory) as tmpdir:
             try:
                 out_path = os.path.join(tmpdir, snapshot_name)
                 libvirt_utils.extract_snapshot(disk_path, source_format,
@@ -1801,6 +1843,86 @@ class LibvirtDriver(driver.ComputeDriver):
         config_drive, config_drive_id = self._get_config_drive_info(instance)
         return any((config_drive, config_drive_id))
 
+    def get_host_capabilities(self):
+        """Returns an instance of config.LibvirtConfigCaps representing
+           the capabilities of the host"""
+        xmlstr = self._conn.getCapabilities()
+
+        caps = config.LibvirtConfigCaps()
+        caps.parse_str(xmlstr)
+        return caps
+
+    def get_host_cpu_for_guest(self):
+        """Returns an instance of config.LibvirtConfigGuestCPU
+           representing the host's CPU model & topology with
+           policy for configuring a guest to match"""
+
+        caps = self.get_host_capabilities()
+        hostcpu = caps.host.cpu
+        guestcpu = config.LibvirtConfigGuestCPU()
+
+        guestcpu.model = hostcpu.model
+        guestcpu.vendor = hostcpu.vendor
+        guestcpu.arch = hostcpu.arch
+
+        guestcpu.match = "exact"
+
+        for hostfeat in hostcpu.features:
+            guestfeat = config.LibvirtConfigGuestCPUFeature(hostfeat.name)
+            guestfeat.policy = "require"
+
+        return guestcpu
+
+    def get_guest_cpu_config(self):
+        mode = FLAGS.libvirt_cpu_mode
+        model = FLAGS.libvirt_cpu_model
+
+        if mode is None:
+            if FLAGS.libvirt_type == "kvm" or FLAGS.libvirt_type == "qemu":
+                mode = "host-model"
+            else:
+                mode = "none"
+
+        if mode == "none":
+            return None
+
+        if FLAGS.libvirt_type != "kvm" and FLAGS.libvirt_type != "qemu":
+            msg = _("Config requested an explicit CPU model, but "
+                    "the current libvirt hypervisor '%s' does not "
+                    "support selecting CPU models") % FLAGS.libvirt_type
+            raise exception.Invalid(msg)
+
+        if mode == "custom" and model is None:
+            msg = _("Config requested a custom CPU model, but no "
+                    "model name was provided")
+            raise exception.Invalid(msg)
+        elif mode != "custom" and model is not None:
+            msg = _("A CPU model name should not be set when a "
+                    "host CPU model is requested")
+            raise exception.Invalid(msg)
+
+        LOG.debug(_("CPU mode '%(mode)s' model '%(model)s' was chosen")
+                  % {'mode': mode, 'model': (model or "")})
+
+        # TODO(berrange): in the future, when MIN_LIBVIRT_VERSION is
+        # updated to be at least this new, we can kill off the elif
+        # blocks here
+        if self.has_min_version(MIN_LIBVIRT_HOST_CPU_VERSION):
+            cpu = config.LibvirtConfigGuestCPU()
+            cpu.mode = mode
+            cpu.model = model
+        elif mode == "custom":
+            cpu = config.LibvirtConfigGuestCPU()
+            cpu.model = model
+        elif mode == "host-model":
+            cpu = self.get_host_cpu_for_guest()
+        elif mode == "host-passthrough":
+            msg = _("Passthrough of the host CPU was requested but "
+                    "this libvirt version does not support this feature")
+            raise exception.NovaException(msg)
+
+        return cpu
+
     def get_guest_config(self, instance, network_info, image_meta, rescue=None,
                          block_device_info=None):
         """Get config data for parameters.
@@ -1824,6 +1946,8 @@ class LibvirtDriver(driver.ComputeDriver):
         guest.uuid = instance['uuid']
         guest.memory = inst_type['memory_mb'] * 1024
         guest.vcpus = inst_type['vcpus']
+
+        guest.cpu = self.get_guest_cpu_config()
 
         root_device_name = driver.block_device_info_get_root(block_device_info)
         if root_device_name:
@@ -2130,7 +2254,7 @@ class LibvirtDriver(driver.ComputeDriver):
         Return all block devices in use on this node.
         """
         devices = []
-        for dom_id in self._conn.listDomainsID():
+        for dom_id in self.list_instance_ids():
             domain = self._conn.lookupByID(dom_id)
             try:
                 doc = etree.fromstring(domain.XMLDesc(0))
@@ -2244,7 +2368,7 @@ class LibvirtDriver(driver.ComputeDriver):
         """
 
         total = 0
-        for dom_id in self._conn.listDomainsID():
+        for dom_id in self.list_instance_ids():
             dom = self._conn.lookupByID(dom_id)
             vcpus = dom.vcpus()
             if vcpus is None:
@@ -2271,7 +2395,7 @@ class LibvirtDriver(driver.ComputeDriver):
         idx3 = m.index('Cached:')
         if FLAGS.libvirt_type == 'xen':
             used = 0
-            for domain_id in self._conn.listDomainsID():
+            for domain_id in self.list_instance_ids():
                 # skip dom0
                 dom_mem = int(self._conn.lookupByID(domain_id).info()[2])
                 if domain_id != 0:
@@ -2346,53 +2470,38 @@ class LibvirtDriver(driver.ComputeDriver):
 
         """
 
-        xml = self._conn.getCapabilities()
-        xml = etree.fromstring(xml)
-        nodes = xml.findall('.//host/cpu')
-        if len(nodes) != 1:
-            reason = _("'<cpu>' must be 1, but %d\n") % len(nodes)
-            reason += xml.serialize()
-            raise exception.InvalidCPUInfo(reason=reason)
-
+        caps = self.get_host_capabilities()
         cpu_info = dict()
 
-        arch_nodes = xml.findall('.//host/cpu/arch')
-        if arch_nodes:
-            cpu_info['arch'] = arch_nodes[0].text
+        cpu_info['arch'] = caps.host.cpu.arch
+        cpu_info['model'] = caps.host.cpu.model
+        cpu_info['vendor'] = caps.host.cpu.vendor
 
-        model_nodes = xml.findall('.//host/cpu/model')
-        if model_nodes:
-            cpu_info['model'] = model_nodes[0].text
-
-        vendor_nodes = xml.findall('.//host/cpu/vendor')
-        if vendor_nodes:
-            cpu_info['vendor'] = vendor_nodes[0].text
-
-        topology_nodes = xml.findall('.//host/cpu/topology')
         topology = dict()
-        if topology_nodes:
-            topology_node = topology_nodes[0]
-
-            keys = ['cores', 'sockets', 'threads']
-            tkeys = topology_node.keys()
-            if set(tkeys) != set(keys):
-                ks = ', '.join(keys)
-                reason = _("topology (%(topology)s) must have %(ks)s")
-                raise exception.InvalidCPUInfo(reason=reason % locals())
-            for key in keys:
-                topology[key] = topology_node.get(key)
-
-        feature_nodes = xml.findall('.//host/cpu/feature')
-        features = list()
-        for nodes in feature_nodes:
-            features.append(nodes.get('name'))
-
-        arch_nodes = xml.findall('.//guest/arch')
-        guest_cpu_arches = list(node.get('name') for node in arch_nodes)
-
+        topology['sockets'] = caps.host.cpu.sockets
+        topology['cores'] = caps.host.cpu.cores
+        topology['threads'] = caps.host.cpu.threads
         cpu_info['topology'] = topology
+
+        features = list()
+        for f in caps.host.cpu.features:
+            features.append(f.name)
         cpu_info['features'] = features
-        cpu_info['permitted_instance_types'] = guest_cpu_arches
+
+        guest_arches = list()
+        for g in caps.guests:
+            guest_arches.append(g.arch)
+        cpu_info['permitted_instance_types'] = guest_arches
+
+        # TODO(berrange): why do we bother converting the
+        # libvirt capabilities XML into a special JSON format ?
+        # The data format is different across all the drivers
+        # so we could just return the raw capabilties XML
+        # which 'compare_cpu' could use directly
+        #
+        # That said, arch_filter.py now seems to rely on
+        # the libvirt drivers format which suggests this
+        # data format needs to be standardized across drivers
         return jsonutils.dumps(cpu_info)
 
     def block_stats(self, instance_name, disk):
@@ -2498,7 +2607,7 @@ class LibvirtDriver(driver.ComputeDriver):
         cpu.cores = info['topology']['cores']
         cpu.threads = info['topology']['threads']
         for f in info['features']:
-            cpu.add_feature(f)
+            cpu.add_feature(config.LibvirtConfigCPUFeature(f))
 
         u = "http://libvirt.org/html/libvirt-libvirt.html#virCPUCompareResult"
         m = _("CPU doesn't have compatibility.\n\n%(ret)s\n\nRefer to %(u)s")

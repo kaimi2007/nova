@@ -58,15 +58,15 @@ from nova import context
 from nova import exception
 from nova import flags
 from nova import ipv6
-from nova import log as logging
 from nova import manager
 from nova.network import api as network_api
 from nova.network import model as network_model
-from nova.notifier import api as notifier
 from nova.openstack.common import cfg
 from nova.openstack.common import excutils
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
+from nova.openstack.common import log as logging
+from nova.openstack.common.notifier import api as notifier
 from nova.openstack.common import rpc
 from nova.openstack.common import timeutils
 import nova.policy
@@ -370,8 +370,12 @@ class FloatingIP(object):
             # disassociate floating ips related to fixed_ip
             for floating_ip in floating_ips:
                 address = floating_ip['address']
-                self.disassociate_floating_ip(read_deleted_context, address,
-                                              affect_auto_assigned=True)
+                try:
+                    self.disassociate_floating_ip(read_deleted_context,
+                                                  address,
+                                                  affect_auto_assigned=True)
+                except exception.FloatingIpNotAssociated:
+                    LOG.exception(_("Floating IP is not associated. Ignore."))
                 # deallocate if auto_assigned
                 if floating_ip['auto_assigned']:
                     self.deallocate_floating_ip(read_deleted_context, address,
@@ -984,8 +988,7 @@ class NetworkManager(manager.SchedulerDependentManager):
                                                   context=read_deleted_context)
         # deallocate fixed ips
         for fixed_ip in fixed_ips:
-            self.deallocate_fixed_ip(read_deleted_context, fixed_ip['address'],
-                                     **kwargs)
+            self.deallocate_fixed_ip(context, fixed_ip['address'], **kwargs)
 
         # deallocate vifs (mac addresses)
         self.db.virtual_interface_delete_by_instance(read_deleted_context,

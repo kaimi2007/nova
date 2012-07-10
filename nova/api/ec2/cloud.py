@@ -37,9 +37,9 @@ from nova import db
 from nova import exception
 from nova import flags
 from nova.image import s3
-from nova import log as logging
 from nova import network
 from nova.openstack.common import excutils
+from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
 from nova import quota
 from nova import utils
@@ -315,11 +315,13 @@ class CloudController(object):
                   context=context)
         volume_id = ec2utils.ec2_vol_id_to_uuid(volume_id)
         volume = self.volume_api.get(context, volume_id)
-        snapshot = self.volume_api.create_snapshot(
-                context,
-                volume,
-                None,
-                kwargs.get('description'))
+        args = (context, volume, kwargs.get('name'), kwargs.get('description'))
+        if kwargs.get('force', False):
+            snapshot = self.volume_api.create_snapshot_force(*args)
+        else:
+            snapshot = self.volume_api.create_snapshot(*args)
+
+        db.ec2_snapshot_create(context, snapshot['id'])
         return self._format_snapshot(context, snapshot)
 
     def delete_snapshot(self, context, snapshot_id, **kwargs):
@@ -690,8 +692,7 @@ class CloudController(object):
             instance = db.instance_get_by_uuid(context.elevated(),
                     instance_uuid)
 
-            instance_id = instance['id']
-            instance_ec2_id = ec2utils.id_to_ec2_id(instance_id)
+            instance_ec2_id = ec2utils.id_to_ec2_inst_id(instance_uuid)
             instance_data = '%s[%s]' % (instance_ec2_id,
                                         instance['host'])
         v = {}
@@ -724,24 +725,28 @@ class CloudController(object):
         return v
 
     def create_volume(self, context, **kwargs):
-        size = kwargs.get('size')
-        if kwargs.get('snapshot_id') is not None:
+        snapshot_ec2id = kwargs.get('snapshot_id', None)
+        if snapshot_ec2id is not None:
             snapshot_id = ec2utils.ec2_snap_id_to_uuid(kwargs['snapshot_id'])
             snapshot = self.volume_api.get_snapshot(context, snapshot_id)
-            LOG.audit(_("Create volume from snapshot %s"), snapshot_id,
+            LOG.audit(_("Create volume from snapshot %s"), snapshot_ec2id,
                       context=context)
         else:
             snapshot = None
-            LOG.audit(_("Create volume of %s GB"), size, context=context)
-
-        availability_zone = kwargs.get('availability_zone', None)
+            LOG.audit(_("Create volume of %s GB"),
+                        kwargs.get('size'),
+                        context=context)
 
         volume = self.volume_api.create(context,
-                                        size,
-                                        None,
-                                        None,
+                                        kwargs.get('size'),
+                                        kwargs.get('name'),
+                                        kwargs.get('description'),
                                         snapshot,
-                                        availability_zone=availability_zone)
+                                        kwargs.get('volume_type'),
+                                        kwargs.get('metadata'),
+                                        kwargs.get('availability_zone'))
+
+        db.ec2_volume_create(context, volume['id'])
         # TODO(vish): Instance should be None at db layer instead of
         #             trying to lazy load, but for now we turn it into
         #             a dict to avoid an error.
@@ -750,7 +755,6 @@ class CloudController(object):
     def delete_volume(self, context, volume_id, **kwargs):
         validate_ec2_id(volume_id)
         volume_id = ec2utils.ec2_vol_id_to_uuid(volume_id)
-
         try:
             volume = self.volume_api.get(context, volume_id)
             self.volume_api.delete(context, volume)
@@ -759,7 +763,10 @@ class CloudController(object):
 
         return True
 
-    def attach_volume(self, context, volume_id, instance_id, device, **kwargs):
+    def attach_volume(self, context,
+                      volume_id,
+                      instance_id,
+                      device, **kwargs):
         validate_ec2_id(instance_id)
         validate_ec2_id(volume_id)
         volume_id = ec2utils.ec2_vol_id_to_uuid(volume_id)
@@ -778,7 +785,7 @@ class CloudController(object):
         volume = self.volume_api.get(context, volume_id)
         return {'attachTime': volume['attach_time'],
                 'device': volume['mountpoint'],
-                'instanceId': ec2utils.id_to_ec2_id(instance_id),
+                'instanceId': ec2utils.id_to_ec2_inst_id(instance_id),
                 'requestId': context.request_id,
                 'status': volume['attach_status'],
                 'volumeId': ec2utils.id_to_ec2_vol_id(volume_id)}
@@ -797,7 +804,7 @@ class CloudController(object):
 
         return {'attachTime': volume['attach_time'],
                 'device': volume['mountpoint'],
-                'instanceId': ec2utils.id_to_ec2_id(instance['id']),
+                'instanceId': ec2utils.id_to_ec2_inst_id(instance['uuid']),
                 'requestId': context.request_id,
                 'status': volume['attach_status'],
                 'volumeId': ec2utils.id_to_ec2_vol_id(volume_id)}
@@ -987,9 +994,10 @@ class CloudController(object):
         if instance_id:
             instances = []
             for ec2_id in instance_id:
-                internal_id = ec2utils.ec2_id_to_id(ec2_id)
                 try:
-                    instance = self.compute_api.get(context, internal_id)
+                    instance_uuid = ec2utils.ec2_inst_id_to_uuid(context,
+                                                                 ec2_id)
+                    instance = self.compute_api.get(context, instance_uuid)
                 except exception.NotFound:
                     continue
                 instances.append(instance)
@@ -1007,8 +1015,8 @@ class CloudController(object):
                 if instance['image_ref'] == str(FLAGS.vpn_image_id):
                     continue
             i = {}
-            instance_id = instance['id']
-            ec2_id = ec2utils.id_to_ec2_id(instance_id)
+            instance_uuid = instance['uuid']
+            ec2_id = ec2utils.id_to_ec2_inst_id(instance_uuid)
             i['instanceId'] = ec2_id
             image_uuid = instance['image_ref']
             i['imageId'] = ec2utils.glance_id_to_ec2_id(context, image_uuid)
@@ -1081,7 +1089,7 @@ class CloudController(object):
             fixed_id = floating_ip['fixed_ip_id']
             fixed = self.network_api.get_fixed_ip(context, fixed_id)
             if fixed['instance_id'] is not None:
-                ec2_id = ec2utils.id_to_ec2_id(fixed['instance_id'])
+                ec2_id = ec2utils.id_to_ec2_inst_id(fixed['instance_id'])
         address = {'public_ip': floating_ip['address'],
                    'instance_id': ec2_id}
         if context.is_admin:

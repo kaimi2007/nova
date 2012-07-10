@@ -36,10 +36,10 @@ from nova import context as nova_context
 from nova import db
 from nova import exception
 from nova import flags
-from nova import log as logging
 from nova.openstack.common import cfg
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
+from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
 from nova import utils
 from nova.virt import driver
@@ -152,7 +152,6 @@ class VMOps(object):
     Management class for VM-related tasks
     """
     def __init__(self, session):
-        self.XenAPI = session.get_imported_xenapi()
         self.compute_api = compute.API()
         self._session = session
         self.poll_rescue_last_ran = None
@@ -162,6 +161,7 @@ class VMOps(object):
         self.firewall_driver = fw_class(xenapi_session=self._session)
         vif_impl = importutils.import_class(FLAGS.xenapi_vif_driver)
         self.vif_driver = vif_impl(xenapi_session=self._session)
+        self.default_root_dev = '/dev/sda'
 
     def list_instances(self):
         """List VM instances."""
@@ -231,12 +231,13 @@ class VMOps(object):
                                   self._session.get_xenapi_host(),
                                   False, False)
 
-    def _create_disks(self, context, instance, image_meta):
+    def _create_disks(self, context, instance, image_meta,
+                      block_device_info=None):
         disk_image_type = vm_utils.determine_disk_image_type(image_meta)
-        vdis = vm_utils.create_image(context, self._session,
-                                     instance, instance.image_ref,
-                                     disk_image_type)
-
+        vdis = vm_utils.get_vdis_for_instance(context, self._session,
+                                          instance, instance.image_ref,
+                                          disk_image_type,
+                                          block_device_info=block_device_info)
         # Just get the VDI ref once
         for vdi in vdis.itervalues():
             vdi['ref'] = self._session.call_xenapi('VDI.get_by_uuid',
@@ -248,7 +249,8 @@ class VMOps(object):
 
         return vdis
 
-    def spawn(self, context, instance, image_meta, network_info):
+    def spawn(self, context, instance, image_meta, network_info,
+              block_device_info=None):
         step = make_step_decorator(context, instance)
 
         @step
@@ -263,7 +265,8 @@ class VMOps(object):
 
         @step
         def create_disks_step(undo_mgr):
-            vdis = self._create_disks(context, instance, image_meta)
+            vdis = self._create_disks(context, instance, image_meta,
+                                      block_device_info)
 
             def undo_create_disks():
                 self._safe_destroy_vdis([vdi['ref'] for vdi in vdis.values()])
@@ -292,8 +295,9 @@ class VMOps(object):
                 if kernel_file or ramdisk_file:
                     LOG.debug(_("Removing kernel/ramdisk files from dom0"),
                               instance=instance)
-                    self._destroy_kernel_ramdisk_plugin_call(kernel_file,
-                                                             ramdisk_file)
+                    vm_utils.destroy_kernel_ramdisk(
+                            self._session, kernel_file, ramdisk_file)
+
             undo_mgr.undo_with(undo_create_kernel_ramdisk)
             return kernel_file, ramdisk_file
 
@@ -331,8 +335,17 @@ class VMOps(object):
         def apply_security_group_filters_step(undo_mgr):
             self.firewall_driver.apply_instance_filter(instance, network_info)
 
+        @step
+        def bdev_set_default_root(undo_mgr):
+            if block_device_info:
+                LOG.debug(_("Block device information present: %s")
+                          % block_device_info, instance=instance)
+            if block_device_info and not block_device_info['root_device_name']:
+                block_device_info['root_device_name'] = self.default_root_dev
+
         undo_mgr = utils.UndoManager()
         try:
+            bdev_set_default_root(undo_mgr)
             vanity_step(undo_mgr)
 
             vdis = create_disks_step(undo_mgr)
@@ -618,7 +631,7 @@ class VMOps(object):
             template_vm_ref, template_vdi_uuids = vm_utils.create_snapshot(
                     self._session, instance, vm_ref, label)
             return template_vm_ref, template_vdi_uuids
-        except self.XenAPI.Failure, exc:
+        except self._session.XenAPI.Failure, exc:
             LOG.error(_("Unable to Snapshot instance: %(exc)s"), locals(),
                       instance=instance)
             raise
@@ -634,7 +647,7 @@ class VMOps(object):
             _params = {'params': pickle.dumps(params)}
             self._session.call_plugin('migration', 'transfer_vhd',
                                       _params)
-        except self.XenAPI.Failure:
+        except self._session.XenAPI.Failure:
             msg = _("Failed to transfer vhd to new host")
             raise exception.MigrationError(reason=msg)
 
@@ -843,10 +856,20 @@ class VMOps(object):
         # remove existing filters
         vm_ref = self._get_vm_opaque_ref(instance)
 
-        if reboot_type == "HARD":
-            self._session.call_xenapi('VM.hard_reboot', vm_ref)
-        else:
-            self._session.call_xenapi('VM.clean_reboot', vm_ref)
+        try:
+            if reboot_type == "HARD":
+                self._session.call_xenapi('VM.hard_reboot', vm_ref)
+            else:
+                self._session.call_xenapi('VM.clean_reboot', vm_ref)
+        except self._session.XenAPI.Failure, exc:
+            details = exc.details
+            if (details[0] == 'VM_BAD_POWER_STATE' and
+                    details[-1] == 'halted'):
+                LOG.info(_("Starting halted instance found during reboot"),
+                    instance=instance)
+                self._session.call_xenapi('VM.start', vm_ref, False, False)
+                return
+            raise
 
     def _get_agent_version(self, instance):
         """Get the version of the agent running on the VM instance."""
@@ -976,7 +999,7 @@ class VMOps(object):
                 self._session.call_xenapi('VM.hard_shutdown', vm_ref)
             else:
                 self._session.call_xenapi('VM.clean_shutdown', vm_ref)
-        except self.XenAPI.Failure, exc:
+        except self._session.XenAPI.Failure, exc:
             LOG.exception(exc)
 
     def _find_root_vdi_ref(self, vm_ref):
@@ -993,6 +1016,30 @@ class VMOps(object):
 
         raise exception.NotFound(_("Unable to find root VBD/VDI for VM"))
 
+    def _destroy_vdis(self, instance, vm_ref, block_device_info=None):
+        """Destroys all VDIs associated with a VM."""
+        instance_uuid = instance['uuid']
+        LOG.debug(_("Destroying VDIs for Instance %(instance_uuid)s")
+                  % locals())
+        nodestroy = []
+        if block_device_info:
+            for bdm in block_device_info['block_device_mapping']:
+                LOG.debug(bdm)
+                # bdm vols should be left alone if delete_on_termination
+                # is false, or they will be destroyed on cleanup_volumes
+                nodestroy.append(bdm['connection_info']['data']['vdi_uuid'])
+
+        vdi_refs = vm_utils.lookup_vm_vdis(self._session, vm_ref, nodestroy)
+
+        if not vdi_refs:
+            return
+
+        for vdi_ref in vdi_refs:
+            try:
+                vm_utils.destroy_vdi(self._session, vdi_ref)
+            except volume_utils.StorageError as exc:
+                LOG.error(exc)
+
     def _safe_destroy_vdis(self, vdi_refs):
         """Destroys the requested VDIs, logging any StorageError exceptions."""
         for vdi_ref in vdi_refs:
@@ -1000,14 +1047,6 @@ class VMOps(object):
                 vm_utils.destroy_vdi(self._session, vdi_ref)
             except volume_utils.StorageError as exc:
                 LOG.error(exc)
-
-    def _destroy_kernel_ramdisk_plugin_call(self, kernel, ramdisk):
-        args = {}
-        if kernel:
-            args['kernel-file'] = kernel
-        if ramdisk:
-            args['ramdisk-file'] = ramdisk
-        self._session.call_plugin('glance', 'remove_kernel_ramdisk', args)
 
     def _destroy_kernel_ramdisk(self, instance, vm_ref):
         """Three situations can occur:
@@ -1038,14 +1077,14 @@ class VMOps(object):
         (kernel, ramdisk) = vm_utils.lookup_kernel_ramdisk(self._session,
                                                            vm_ref)
 
-        self._destroy_kernel_ramdisk_plugin_call(kernel, ramdisk)
+        vm_utils.destroy_kernel_ramdisk(self._session, kernel, ramdisk)
         LOG.debug(_("kernel/ramdisk files removed"), instance=instance)
 
     def _destroy_vm(self, instance, vm_ref):
         """Destroys a VM record."""
         try:
             self._session.call_xenapi('VM.destroy', vm_ref)
-        except self.XenAPI.Failure, exc:
+        except self._session.XenAPI.Failure, exc:
             LOG.exception(exc)
             return
 
@@ -1068,7 +1107,7 @@ class VMOps(object):
         # Destroy Rescue VM
         self._session.call_xenapi("VM.destroy", rescue_vm_ref)
 
-    def destroy(self, instance, network_info):
+    def destroy(self, instance, network_info, block_device_info=None):
         """Destroy VM instance.
 
         This is the method exposed by xenapi_conn.destroy(). The rest of the
@@ -1087,10 +1126,11 @@ class VMOps(object):
         if rescue_vm_ref:
             self._destroy_rescue_instance(rescue_vm_ref, vm_ref)
 
-        return self._destroy(instance, vm_ref, network_info)
+        return self._destroy(instance, vm_ref, network_info,
+                             block_device_info=block_device_info)
 
     def _destroy(self, instance, vm_ref, network_info=None,
-                 destroy_kernel_ramdisk=True):
+                 destroy_kernel_ramdisk=True, block_device_info=None):
         """Destroys VM instance by performing:
 
             1. A shutdown
@@ -1107,9 +1147,7 @@ class VMOps(object):
         self._shutdown(instance, vm_ref)
 
         # Destroy VDIs
-        vdi_refs = vm_utils.lookup_vm_vdis(self._session, vm_ref)
-        self._safe_destroy_vdis(vdi_refs)
-
+        self._destroy_vdis(instance, vm_ref, block_device_info)
         if destroy_kernel_ramdisk:
             self._destroy_kernel_ramdisk(instance, vm_ref)
 
@@ -1499,7 +1537,7 @@ class VMOps(object):
         args.update(addl_args)
         try:
             return self._session.call_plugin(plugin, method, args)
-        except self.XenAPI.Failure, e:
+        except self._session.XenAPI.Failure, e:
             err_msg = e.details[-1].splitlines()[-1]
             if 'TIMEOUT:' in err_msg:
                 LOG.error(_('TIMEOUT: The call to %(method)s timed out. '

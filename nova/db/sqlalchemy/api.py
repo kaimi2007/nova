@@ -33,7 +33,7 @@ from nova.db.sqlalchemy import models
 from nova.db.sqlalchemy.session import get_session
 from nova import exception
 from nova import flags
-from nova import log as logging
+from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
 from nova import utils
 from sqlalchemy import and_
@@ -473,7 +473,7 @@ def service_update(context, service_id, values):
 
 ###################
 
-def _compute_node_get(context, compute_id, session=None):
+def compute_node_get(context, compute_id, session=None):
     result = model_query(context, models.ComputeNode, session=session).\
                      filter_by(id=compute_id).\
                      first()
@@ -551,6 +551,14 @@ def compute_node_get_for_service(context, service_id):
                     first()
 
 
+def compute_node_search_by_hypervisor(context, hypervisor_match):
+    field = models.ComputeNode.hypervisor_hostname
+    return model_query(context, models.ComputeNode).\
+                    options(joinedload('service')).\
+                    filter(field.like('%%%s%%' % hypervisor_match)).\
+                    all()
+
+
 def _get_host_utilization(context, host, ram_mb, disk_gb):
     """Compute the current utilization of a given host."""
     instances = instance_get_all_by_host(context, host)
@@ -602,7 +610,7 @@ def compute_node_update(context, compute_id, values, auto_adjust):
     if auto_adjust:
         _adjust_compute_node_values_for_utilization(context, values, session)
     with session.begin(subtransactions=True):
-        compute_ref = _compute_node_get(context, compute_id, session=session)
+        compute_ref = compute_node_get(context, compute_id, session=session)
         compute_ref.update(values)
         compute_ref.save(session=session)
 
@@ -1198,8 +1206,7 @@ def fixed_ip_get_all(context, session=None):
 
 @require_context
 def fixed_ip_get_by_address(context, address, session=None):
-    result = model_query(context, models.FixedIp, session=session,
-                         read_deleted=context.read_deleted).\
+    result = model_query(context, models.FixedIp, session=session).\
                      filter_by(address=address).\
                      first()
     if not result:
@@ -1441,6 +1448,9 @@ def instance_create(context, values):
         # exists in the ref when we return.  Fixes lazy loading issues.
         instance_ref.instance_type
 
+    # create the instance uuid to ec2_id mapping entry for instance
+    ec2_instance_create(context, instance_ref['uuid'])
+
     return instance_ref
 
 
@@ -1478,21 +1488,6 @@ def instance_destroy(context, instance_uuid, constraint=None):
         if count == 0:
             raise exception.ConstraintNotMet()
         session.query(models.SecurityGroupInstanceAssociation).\
-                filter_by(instance_uuid=instance_ref['uuid']).\
-                update({'deleted': True,
-                        'deleted_at': timeutils.utcnow(),
-                        'updated_at': literal_column('updated_at')})
-        session.query(models.InstanceMetadata).\
-                filter_by(instance_uuid=instance_ref['uuid']).\
-                update({'deleted': True,
-                        'deleted_at': timeutils.utcnow(),
-                        'updated_at': literal_column('updated_at')})
-        session.query(models.InstanceSystemMetadata).\
-                filter_by(instance_uuid=instance_ref['uuid']).\
-                update({'deleted': True,
-                        'deleted_at': timeutils.utcnow(),
-                        'updated_at': literal_column('updated_at')})
-        session.query(models.BlockDeviceMapping).\
                 filter_by(instance_uuid=instance_ref['uuid']).\
                 update({'deleted': True,
                         'deleted_at': timeutils.utcnow(),
@@ -1915,7 +1910,7 @@ def instance_info_cache_get(context, instance_uuid, session=None):
     session = session or get_session()
 
     info_cache = session.query(models.InstanceInfoCache).\
-                         filter_by(instance_id=instance_uuid).\
+                         filter_by(instance_uuid=instance_uuid).\
                          first()
     return info_cache
 
@@ -1939,7 +1934,7 @@ def instance_info_cache_update(context, instance_uuid, values,
     else:
         # NOTE(tr3buchet): just in case someone blows away an instance's
         #                  cache entry
-        values['instance_id'] = instance_uuid
+        values['instance_uuid'] = instance_uuid
         info_cache = instance_info_cache_create(context, values)
 
     return info_cache
@@ -2972,7 +2967,6 @@ def volume_create(context, values):
     with session.begin():
         volume_ref.save(session=session)
 
-    ec2_volume_create(context, volume_ref['id'])
     return volume_ref
 
 
@@ -3277,7 +3271,6 @@ def snapshot_create(context, values):
     session = get_session()
     with session.begin():
         snapshot_ref.save(session=session)
-    ec2_snapshot_create(context, snapshot_ref['id'])
     return snapshot_ref
 
 
@@ -4235,7 +4228,6 @@ def _instance_metadata_get_query(context, instance_uuid, session=None):
 
 
 @require_context
-@require_instance_exists_using_uuid
 def instance_metadata_get(context, instance_uuid):
     rows = _instance_metadata_get_query(context, instance_uuid).all()
 
@@ -4247,7 +4239,6 @@ def instance_metadata_get(context, instance_uuid):
 
 
 @require_context
-@require_instance_exists_using_uuid
 def instance_metadata_delete(context, instance_uuid, key):
     _instance_metadata_get_query(context, instance_uuid).\
         filter_by(key=key).\
@@ -4257,7 +4248,6 @@ def instance_metadata_delete(context, instance_uuid, key):
 
 
 @require_context
-@require_instance_exists_using_uuid
 def instance_metadata_get_item(context, instance_uuid, key, session=None):
     result = _instance_metadata_get_query(
                             context, instance_uuid, session=session).\
@@ -4272,7 +4262,6 @@ def instance_metadata_get_item(context, instance_uuid, key, session=None):
 
 
 @require_context
-@require_instance_exists_using_uuid
 def instance_metadata_update(context, instance_uuid, metadata, delete):
     session = get_session()
 
@@ -4311,13 +4300,12 @@ def instance_metadata_update(context, instance_uuid, metadata, delete):
 # System-owned metadata
 
 def _instance_system_metadata_get_query(context, instance_uuid, session=None):
-    return model_query(context, models.InstanceSystemMetadata, session=session,
-                       read_deleted="no").\
+    return model_query(context, models.InstanceSystemMetadata,
+                       session=session).\
                     filter_by(instance_uuid=instance_uuid)
 
 
 @require_context
-@require_instance_exists_using_uuid
 def instance_system_metadata_get(context, instance_uuid):
     rows = _instance_system_metadata_get_query(context, instance_uuid).all()
 
@@ -4329,7 +4317,6 @@ def instance_system_metadata_get(context, instance_uuid):
 
 
 @require_context
-@require_instance_exists_using_uuid
 def instance_system_metadata_delete(context, instance_uuid, key):
     _instance_system_metadata_get_query(context, instance_uuid).\
         filter_by(key=key).\
@@ -4353,7 +4340,6 @@ def _instance_system_metadata_get_item(context, instance_uuid, key,
 
 
 @require_context
-@require_instance_exists_using_uuid
 def instance_system_metadata_update(context, instance_uuid, metadata, delete):
     session = get_session()
 
@@ -4467,6 +4453,7 @@ def bw_usage_update(context,
                               session=session, read_deleted="yes").\
                       filter_by(start_period=start_period).\
                       filter_by(uuid=uuid).\
+                      filter_by(mac=mac).\
                       first()
 
         if not bwusage:
@@ -5237,3 +5224,50 @@ def instance_fault_get_by_instance_uuids(context, instance_uuids):
         output[row['instance_uuid']].append(data)
 
     return output
+
+
+##################
+
+
+@require_context
+def ec2_instance_create(context, instance_uuid, id=None):
+    """Create ec2 compatable instance by provided uuid"""
+    ec2_instance_ref = models.InstanceIdMapping()
+    ec2_instance_ref.update({'uuid': instance_uuid})
+    if id is not None:
+        ec2_instance_ref.update({'id': id})
+
+    ec2_instance_ref.save()
+
+    return ec2_instance_ref
+
+
+@require_context
+def get_ec2_instance_id_by_uuid(context, instance_id, session=None):
+    result = _ec2_instance_get_query(context,
+                                     session=session).\
+                    filter_by(uuid=instance_id).\
+                    first()
+
+    if not result:
+        raise exception.InstanceNotFound(uuid=instance_id)
+
+    return result['id']
+
+
+@require_context
+def get_instance_uuid_by_ec2_id(context, instance_id, session=None):
+    result = _ec2_instance_get_query(context,
+                                     session=session).\
+                    filter_by(id=instance_id).\
+                    first()
+
+    if not result:
+        raise exception.InstanceNotFound(id=instance_id)
+
+    return result['uuid']
+
+
+@require_context
+def _ec2_instance_get_query(context, session=None):
+    return model_query(context, models.InstanceIdMapping, session=session)

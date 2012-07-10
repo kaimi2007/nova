@@ -1,4 +1,6 @@
-# Copyright 2011 OpenStack LLC.
+# vim: tabstop=4 shiftwidth=4 softtabstop=4
+
+# Copyright 2012 Red Hat, Inc.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -13,13 +15,19 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from nova import flags
+"""
+gettext for openstack-common modules.
 
-FLAGS = flags.FLAGS
+Usual usage in an openstack.common module:
 
-NOTIFICATIONS = []
+    from openstack.common.gettextutils import _
+"""
+
+import gettext
 
 
-def notify(_context, message):
-    """Test notifier, stores notifications in memory for unittests."""
-    NOTIFICATIONS.append(message)
+t = gettext.translation('openstack-common', 'locale', fallback=True)
+
+
+def _(msg):
+    return t.ugettext(msg)

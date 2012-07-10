@@ -58,16 +58,16 @@ import nova.context
 from nova import exception
 from nova import flags
 from nova.image import glance
-from nova import log as logging
 from nova import manager
 from nova import network
 from nova.network import model as network_model
 from nova import notifications
-from nova.notifier import api as notifier
 from nova.openstack.common import cfg
 from nova.openstack.common import excutils
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
+from nova.openstack.common import log as logging
+from nova.openstack.common.notifier import api as notifier
 from nova.openstack.common import rpc
 from nova.openstack.common import timeutils
 from nova import utils
@@ -255,7 +255,7 @@ def _get_additional_capabilities():
 class ComputeManager(manager.SchedulerDependentManager):
     """Manages the running instances from creation to destruction."""
 
-    RPC_API_VERSION = '1.0'
+    RPC_API_VERSION = '1.1'
 
     def __init__(self, compute_driver=None, *args, **kwargs):
         """Load configuration options and connect to the hypervisor."""
@@ -266,7 +266,7 @@ class ComputeManager(manager.SchedulerDependentManager):
 
         try:
             self.driver = utils.check_isinstance(
-                    importutils.import_object(compute_driver),
+                    importutils.import_object_ns('nova.virt', compute_driver),
                     driver.ComputeDriver)
         except ImportError as e:
             LOG.error(_("Unable to load the virtualization driver: %s") % (e))
@@ -457,9 +457,10 @@ class ComputeManager(manager.SchedulerDependentManager):
                 self.db.block_device_mapping_update(
                         context, bdm['id'],
                         {'connection_info': jsonutils.dumps(cinfo)})
-                block_device_mapping.append({'connection_info': cinfo,
-                                             'mount_device':
-                                             bdm['device_name']})
+                bdmap = {'connection_info': cinfo,
+                         'mount_device': bdm['device_name'],
+                         'delete_on_termination': bdm['delete_on_termination']}
+                block_device_mapping.append(bdmap)
 
         return {
             'root_device_name': instance['root_device_name'],
@@ -712,9 +713,10 @@ class ComputeManager(manager.SchedulerDependentManager):
         for bdm in bdms:
             try:
                 cinfo = jsonutils.loads(bdm['connection_info'])
-                block_device_mapping.append({'connection_info': cinfo,
-                                             'mount_device':
-                                             bdm['device_name']})
+                bdmap = {'connection_info': cinfo,
+                         'mount_device': bdm['device_name'],
+                         'delete_on_termination': bdm['delete_on_termination']}
+                block_device_mapping.append(bdmap)
             except TypeError:
                 # if the block_device_mapping has no value in connection_info
                 # (returned as None), don't include in the mapping
@@ -788,12 +790,9 @@ class ComputeManager(manager.SchedulerDependentManager):
                                          vm_state=vm_states.DELETED,
                                          task_state=None,
                                          terminated_at=timeutils.utcnow())
-        # Pull the system_metadata before we delete the instance, so we
-        # can pass it to delete.end notification, as it will not be able
-        # to look it up anymore, if it needs it.
-        system_meta = self.db.instance_system_metadata_get(context,
-                instance_uuid)
         self.db.instance_destroy(context, instance_uuid)
+        system_meta = self.db.instance_system_metadata_get(context,
+            instance_uuid)
         self._notify_about_instance_usage(context, instance, "delete.end",
                 system_metadata=system_meta)
 
@@ -989,8 +988,15 @@ class ComputeManager(manager.SchedulerDependentManager):
                      context=context, instance_uuid=instance_uuid)
 
         network_info = self._get_instance_nw_info(context, instance)
-        self.driver.reboot(instance, self._legacy_nw_info(network_info),
-                           reboot_type)
+        try:
+            self.driver.reboot(instance, self._legacy_nw_info(network_info),
+                    reboot_type)
+        except Exception, exc:
+            LOG.error(_('Cannot reboot instance: %(exc)s'), locals(),
+                    context=context, instance_uuid=instance_uuid)
+            self.add_instance_fault_from_exc(context, instance_uuid, exc,
+                    sys.exc_info())
+            # Fall through and reset task_state to None
 
         current_power_state = self._get_power_state(context, instance)
         self._instance_update(context,
@@ -1025,7 +1031,7 @@ class ComputeManager(manager.SchedulerDependentManager):
                               power_state=current_power_state,
                               vm_state=vm_states.ACTIVE)
 
-        LOG.audit(_('instance %s: snapshotting'), context=context,
+        LOG.audit(_('instance snapshotting'), context=context,
                   instance_uuid=instance_uuid)
 
         if instance_ref['power_state'] != power_state.RUNNING:
@@ -1620,6 +1626,11 @@ class ComputeManager(manager.SchedulerDependentManager):
     def set_host_enabled(self, context, host=None, enabled=None):
         """Sets the specified host's ability to accept new instances."""
         return self.driver.set_host_enabled(host, enabled)
+
+    @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
+    def get_host_uptime(self, context, host):
+        """Returns the result of calling "uptime" on the target host."""
+        return self.driver.get_host_uptime(host)
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @wrap_instance_fault

@@ -13,21 +13,10 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from nova import flags
-from nova import log as logging
-from nova.openstack.common import jsonutils
 
-
-FLAGS = flags.FLAGS
+NOTIFICATIONS = []
 
 
 def notify(_context, message):
-    """Notifies the recipient of the desired event given the model.
-    Log notifications using nova's default logging system"""
-
-    priority = message.get('priority',
-                           FLAGS.default_notification_level)
-    priority = priority.lower()
-    logger = logging.getLogger(
-            'nova.notification.%s' % message['event_type'])
-    getattr(logger, priority)(jsonutils.dumps(message))
+    """Test notifier, stores notifications in memory for unittests."""
+    NOTIFICATIONS.append(message)

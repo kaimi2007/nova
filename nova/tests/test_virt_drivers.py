@@ -21,8 +21,8 @@ import traceback
 
 from nova.compute.manager import ComputeManager
 from nova import exception
-from nova import log as logging
 from nova.openstack.common import importutils
+from nova.openstack.common import log as logging
 from nova import test
 from nova.tests.image import fake as fake_image
 from nova.tests import utils as test_utils
@@ -79,7 +79,8 @@ class _FakeDriverBackendTestCase(test.TestCase):
         self.flags(firewall_driver=nova.virt.libvirt.firewall.drivers[0],
                    rescue_image_id="2",
                    rescue_kernel_id="3",
-                   rescue_ramdisk_id=None)
+                   rescue_ramdisk_id=None,
+                   libvirt_snapshots_directory='./')
 
         def fake_extend(image, size):
             pass
@@ -117,9 +118,13 @@ class VirtDriverLoaderTestCase(_FakeDriverBackendTestCase):
     final class"""
 
     # if your driver supports being tested in a fake way, it can go here
+    #
+    # both long form and short form drivers are supported
     new_drivers = {
         'nova.virt.fake.FakeDriver': 'FakeDriver',
-        'nova.virt.libvirt.LibvirtDriver': 'LibvirtDriver'
+        'nova.virt.libvirt.LibvirtDriver': 'LibvirtDriver',
+        'fake.FakeDriver': 'FakeDriver',
+        'libvirt.LibvirtDriver': 'LibvirtDriver'
         }
 
     # NOTE(sdague): remove after Folsom release when connection_type
@@ -515,6 +520,10 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
     @catch_notimplementederror
     def test_set_host_enabled(self):
         self.connection.set_host_enabled('a useless argument?', True)
+
+    @catch_notimplementederror
+    def test_get_host_uptime(self):
+        self.connection.get_host_uptime('a useless argument?')
 
     @catch_notimplementederror
     def test_host_power_action_reboot(self):

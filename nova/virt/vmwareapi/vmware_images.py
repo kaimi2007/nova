@@ -21,7 +21,7 @@ import StringIO
 
 from nova import exception
 from nova.image import glance
-from nova import log as logging
+from nova.openstack.common import log as logging
 from nova.virt.vmwareapi import io_util
 from nova.virt.vmwareapi import read_write_util
 
@@ -91,10 +91,11 @@ def fetch_image(context, image, instance, **kwargs):
     LOG.debug(_("Downloading image %s from glance image server") % image,
               instance=instance)
     (image_service, image_id) = glance.get_remote_image_service(context, image)
-    f = StringIO.StringIO()
-    metadata = image_service.get(context, image_id, f)
-    read_file_handle = read_write_util.GlanceFileRead(f)
+    metadata = image_service.show(context, image_id)
     file_size = int(metadata['size'])
+    f = StringIO.StringIO()
+    image_service.download(context, image_id, f)
+    read_file_handle = read_write_util.GlanceFileRead(f)
     write_file_handle = read_write_util.VMWareHTTPWriteFile(
                                 kwargs.get("host"),
                                 kwargs.get("data_center_name"),

@@ -26,9 +26,9 @@ import re
 
 from nova import exception
 from nova import flags
-from nova import log as logging
 from nova.openstack.common import cfg
 from nova.openstack.common import jsonutils
+from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt import images
 
@@ -328,24 +328,6 @@ def file_delete(path):
           state at all (for unit tests)
     """
     return os.unlink(path)
-
-
-def get_open_port(start_port, end_port):
-    """Find an available port
-
-    :param start_port: Start of acceptable port range
-    :param end_port: End of acceptable port range
-    """
-    for i in xrange(0, 100):  # don't loop forever
-        port = random.randint(start_port, end_port)
-        # netcat will exit with 0 only if the port is in use,
-        # so a nonzero return value implies it is unused
-        cmd = 'netcat', '0.0.0.0', port, '-w', '1'
-        try:
-            stdout, stderr = execute(*cmd, process_input='')
-        except exception.ProcessExecutionError:
-            return port
-    raise Exception(_('Unable to find an open port'))
 
 
 def get_fs_info(path):

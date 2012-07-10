@@ -40,12 +40,12 @@ from nova.db import base
 from nova import exception
 from nova import flags
 from nova.image import glance
-from nova import log as logging
 from nova import network
 from nova import notifications
 from nova.openstack.common import excutils
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
+from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
 import nova.policy
 from nova import quota
@@ -570,9 +570,8 @@ class API(base.Base):
             #                 (--block-device-mapping)
             if virtual_name == 'NoDevice':
                 values['no_device'] = True
-                for k in ('delete_on_termination', 'volume_id',
-                          'snapshot_id', 'volume_id', 'volume_size',
-                          'virtual_name'):
+                for k in ('delete_on_termination', 'virtual_name',
+                          'snapshot_id', 'volume_id', 'volume_size'):
                     values[k] = None
 
             self.db.block_device_mapping_update_or_create(elevated_context,
@@ -587,7 +586,6 @@ class API(base.Base):
         instance_uuid = instance['uuid']
         mappings = image['properties'].get('mappings', [])
         if mappings:
-            instance['shutdown_terminate'] = False
             self._update_image_block_device_mapping(elevated,
                     instance_type, instance_uuid, mappings)
 
@@ -595,9 +593,16 @@ class API(base.Base):
         for mapping in (image_bdm, block_device_mapping):
             if not mapping:
                 continue
-            instance['shutdown_terminate'] = False
             self._update_block_device_mapping(elevated,
                     instance_type, instance_uuid, mapping)
+
+    def _populate_instance_shutdown_terminate(self, instance, image,
+                                              block_device_mapping):
+        """Populate instance shutdown_terminate information."""
+        if (block_device_mapping or
+            image['properties'].get('mappings') or
+            image['properties'].get('block_device_mapping')):
+            instance['shutdown_terminate'] = False
 
     def _populate_instance_names(self, instance):
         """Populate instance display_name and hostname."""
@@ -662,10 +667,13 @@ class API(base.Base):
 
         self._populate_instance_names(instance)
 
-        self._populate_instance_for_bdm(context, instance,
-                instance_type, image, block_device_mapping)
+        self._populate_instance_shutdown_terminate(instance, image,
+                                                   block_device_mapping)
 
         instance = self.db.instance_create(context, instance)
+
+        self._populate_instance_for_bdm(context, instance,
+                instance_type, image, block_device_mapping)
 
         # send a state update notification for the initial create to
         # show it going from non-existent to BUILDING
@@ -1654,6 +1662,12 @@ class HostAPI(base.Base):
         return self.compute_rpcapi.set_host_enabled(context, enabled=enabled,
                 host=host)
 
+    def get_host_uptime(self, context, host):
+        """Returns the result of calling "uptime" on the target host."""
+        # NOTE(comstud): No instance_uuid argument to this compute manager
+        # call
+        return self.compute_rpcapi.get_host_uptime(context, host=host)
+
     def host_power_action(self, context, host, action):
         """Reboots, shuts down or powers up the host."""
         # NOTE(comstud): No instance_uuid argument to this compute manager
@@ -1814,8 +1828,7 @@ class KeypairAPI(base.Base):
         # NOTE: check for existing keypairs of same name
         try:
             self.db.key_pair_get(context, user_id, key_name)
-            msg = _("Key pair '%s' already exists.") % key_name
-            raise exception.KeyPairExists(explanation=msg)
+            raise exception.KeyPairExists(key_name=key_name)
         except exception.NotFound:
             pass
 

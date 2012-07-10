@@ -16,7 +16,7 @@
 #    under the License.
 
 """
-A connection to XenServer or Xen Cloud Platform.
+A driver for XenServer or Xen Cloud Platform.
 
 **Related Flags**
 
@@ -49,8 +49,8 @@ from nova import context
 from nova import db
 from nova import exception
 from nova import flags
-from nova import log as logging
 from nova.openstack.common import cfg
+from nova.openstack.common import log as logging
 from nova.virt import driver
 from nova.virt.xenapi import host
 from nova.virt.xenapi import pool
@@ -176,7 +176,8 @@ class XenAPIDriver(driver.ComputeDriver):
     def spawn(self, context, instance, image_meta,
               network_info=None, block_device_info=None):
         """Create VM instance"""
-        self._vmops.spawn(context, instance, image_meta, network_info)
+        self._vmops.spawn(context, instance, image_meta, network_info,
+                          block_device_info)
 
     def confirm_migration(self, migration, instance, network_info):
         """Confirms a resize, destroying the source VM"""
@@ -214,7 +215,7 @@ class XenAPIDriver(driver.ComputeDriver):
 
     def destroy(self, instance, network_info, block_device_info=None):
         """Destroy VM instance"""
-        self._vmops.destroy(instance, network_info)
+        self._vmops.destroy(instance, network_info, block_device_info)
 
     def pause(self, instance):
         """Pause VM instance"""
@@ -474,6 +475,10 @@ class XenAPIDriver(driver.ComputeDriver):
         """Sets the specified host's ability to accept new instances."""
         return self._host.set_host_enabled(host, enabled)
 
+    def get_host_uptime(self, host):
+        """Returns the result of calling "uptime" on the target host."""
+        return self._host.get_host_uptime(host)
+
     def host_maintenance_mode(self, host, mode):
         """Start/Stop host maintenance window. On start, it triggers
         guest VMs evacuation."""
@@ -500,7 +505,8 @@ class XenAPISession(object):
     """The session to invoke XenAPI SDK calls"""
 
     def __init__(self, url, user, pw):
-        self.XenAPI = self.get_imported_xenapi()
+        import XenAPI
+        self.XenAPI = XenAPI
         self._sessions = queue.Queue()
         self.is_slave = False
         exception = self.XenAPI.Failure(_("Unable to log in to XenAPI "
@@ -557,10 +563,6 @@ class XenAPISession(object):
                                             host)
         product_version = software_version['product_version']
         return tuple(int(part) for part in product_version.split('.'))
-
-    def get_imported_xenapi(self):
-        """Stubout point. This can be replaced with a mock xenapi module."""
-        return __import__('XenAPI')
 
     def get_session_id(self):
         """Return a string session_id.  Used for vnc consoles."""

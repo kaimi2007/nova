@@ -20,8 +20,8 @@ import StringIO
 
 from nova import context
 from nova import exception
-import nova.tests.image.fake
 from nova import test
+import nova.tests.image.fake
 
 
 class FakeImageServiceTestCase(test.TestCase):
@@ -123,5 +123,5 @@ class FakeImageServiceTestCase(test.TestCase):
                                   {'id': '32', 'foo': 'bar'},
                                   data=s1)
         s2 = StringIO.StringIO()
-        self.image_service.get(self.context, '32', data=s2)
+        self.image_service.download(self.context, '32', data=s2)
         self.assertEquals(s2.getvalue(), blob, 'Did not get blob back intact')

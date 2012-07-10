@@ -30,7 +30,7 @@ from nova.compute import utils as compute_utils
 from nova.compute import vm_states
 from nova import exception
 from nova import flags
-from nova import log as logging
+from nova.openstack.common import log as logging
 from nova import quota
 
 
@@ -61,7 +61,7 @@ _STATE_MAP = {
         'default': 'BUILD',
     },
     vm_states.STOPPED: {
-        'default': 'STOPPED',
+        'default': 'SHUTOFF',
     },
     vm_states.RESIZED: {
         'default': 'VERIFY_RESIZE',
@@ -93,10 +93,15 @@ _STATE_MAP = {
 
 def status_from_state(vm_state, task_state='default'):
     """Given vm_state and task_state, return a status string."""
-    task_map = _STATE_MAP.get(vm_state, dict(default='UNKNOWN_STATE'))
+    task_map = _STATE_MAP.get(vm_state, dict(default='UNKNOWN'))
     status = task_map.get(task_state, task_map['default'])
-    LOG.debug("Generated %(status)s from vm_state=%(vm_state)s "
-              "task_state=%(task_state)s." % locals())
+    if status == "UNKNOWN":
+        LOG.error(_("status is UNKNOWN from vm_state=%(vm_state)s "
+                    "task_state=%(task_state)s. Bad upgrade or db "
+                    "corrupted?") % locals())
+    else:
+        LOG.debug(_("Generated %(status)s from vm_state=%(vm_state)s "
+                    "task_state=%(task_state)s.") % locals())
     return status
 
 
