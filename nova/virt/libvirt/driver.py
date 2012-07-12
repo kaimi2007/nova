@@ -706,19 +706,12 @@ class LibvirtDriver(driver.ComputeDriver):
         LOG.info(_('Deleting instance files %(target)s') % locals(),
                  instance=instance)
         if FLAGS.libvirt_type == 'lxc':
-            try:
                 disk.destroy_container(self.container)
-            except Exception:
-                LOG.info(_('destroy_container fails but ignored'))
-                pass
         if FLAGS.connection_type == 'gpu':
             self.deassign_gpus(instance)
             disk.destroy_container(self.container)
         if os.path.exists(target):
-            try:
                 shutil.rmtree(target)
-            except Exception:
-                pass
 
         #NOTE(bfilippov): destroy all LVM disks for this instance
         self._cleanup_lvm(instance)
@@ -982,8 +975,6 @@ class LibvirtDriver(driver.ComputeDriver):
 
     @exception.wrap_exception()
     def detach_volume(self, connection_info, instance_name, mountpoint):
-        virt_dom = self._lookup_by_name(instance_name)
-
         mount_device = mountpoint.rpartition("/")[2]
         try:
             # NOTE(vish): This is called to cleanup volumes after live
@@ -1112,16 +1103,6 @@ class LibvirtDriver(driver.ComputeDriver):
 
         if 'container_format' in base:
             metadata['container_format'] = base['container_format']
-
-        # Make the snapshot
-        snapshot_name = uuid.uuid4().hex
-        snapshot_xml = """
-        <domainsnapshot>
-            <name>%s</name>
-        </domainsnapshot>
-        """ % snapshot_name
-        if FLAGS.libvirt_type != 'lxc':
-            snapshot_ptr = virt_dom.snapshotCreateXML(snapshot_xml, 0)
 
         # Find the disk
         xml_desc = virt_dom.XMLDesc(0)
@@ -2563,13 +2544,13 @@ class LibvirtDriver(driver.ComputeDriver):
                'hypervisor_hostname': self.get_hypervisor_hostname(),
                'cpu_info': self.get_cpu_info(),
                #RLK
-               'cpu_arch': FLAGS.cpu_arch,
-               'xpu_arch': FLAGS.xpu_arch,
-               'xpus': FLAGS.xpus,
-               'xpu_info': FLAGS.xpu_info,
-               'net_arch': FLAGS.net_arch,
-               'net_info': FLAGS.net_info,
-               'net_mbps': FLAGS.net_mbps,
+               #'cpu_arch': FLAGS.cpu_arch,
+               #'xpu_arch': FLAGS.xpu_arch,
+               #'xpus': FLAGS.xpus,
+               #'xpu_info': FLAGS.xpu_info,
+               #'net_arch': FLAGS.net_arch,
+               #'net_info': FLAGS.net_info,
+               #'net_mbps': FLAGS.net_mbps,
                'service_id': service_ref['id'],
                'disk_available_least': self.get_disk_available_least()}
 
