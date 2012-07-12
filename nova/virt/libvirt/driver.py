@@ -3123,8 +3123,8 @@ class HostState(object):
         data["disk_total"] = self.connection.get_local_gb_total()
         if FLAGS.connection_type == 'gpu':
             print "*****************"
-            print  num_gpus
-            print  gpus_available
+            print num_gpus
+            print gpus_available
             print "*****************"
             if 'gpus' in extra_specs:
                 extra_specs["gpus"] = int(len(gpus_available))
