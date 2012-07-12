@@ -173,7 +173,9 @@ compute_opts = [
                'instance_type_extra_specs for this compute '
                'host to advertise. Valid entries are name=value, pairs '
                'For example, "key1:val1, key2:val2"'),
-
+    cfg.BoolOpt('instance_usage_audit',
+               default=False,
+               help="Generate periodic compute.instance.exists notifications"),
     ]
 
 FLAGS = flags.FLAGS
@@ -767,6 +769,9 @@ class ComputeManager(manager.SchedulerDependentManager):
                 self.volume_api.detach(context, volume)
             except exception.DiskNotFound as exc:
                 LOG.warn(_('Ignoring DiskNotFound: %s') % exc,
+                         instance=instance)
+            except exception.VolumeNotFound as exc:
+                LOG.warn(_('Ignoring VolumeNotFound: %s') % exc,
                          instance=instance)
 
         self._notify_about_instance_usage(context, instance, "shutdown.end")
@@ -2394,6 +2399,52 @@ class ComputeManager(manager.SchedulerDependentManager):
                     msg = _("Error auto-confirming resize: %(e)s. "
                             "Will retry later.")
                     LOG.error(msg % locals(), instance=instance)
+
+    @manager.periodic_task
+    def _instance_usage_audit(self, context):
+        if FLAGS.instance_usage_audit:
+            if not compute_utils.has_audit_been_run(context, self.host):
+                begin, end = utils.last_completed_audit_period()
+                instances = self.db.instance_get_active_by_window_joined(
+                                                            context,
+                                                            begin,
+                                                            end,
+                                                            host=self.host)
+                num_instances = len(instances)
+                errors = 0
+                successes = 0
+                LOG.info(_("Running instance usage audit for"
+                           " host %(host)s from %(begin_time)s to "
+                           "%(end_time)s. %(number_instances)s"
+                           " instances.") % dict(host=self.host,
+                               begin_time=begin,
+                               end_time=end,
+                               number_instances=num_instances))
+                start_time = time.time()
+                compute_utils.start_instance_usage_audit(context,
+                                              begin, end,
+                                              self.host, num_instances)
+                for instance_ref in instances:
+                    try:
+                        compute_utils.notify_usage_exists(
+                            context, instance_ref,
+                            ignore_missing_network_data=False)
+                        successes += 1
+                    except Exception:
+                        LOG.exception(_('Failed to generate usage '
+                                        'audit for instance '
+                                        'on host %s') % self.host,
+                                      instance=instance)
+                        errors += 1
+                compute_utils.finish_instance_usage_audit(context,
+                                              begin, end,
+                                              self.host, errors,
+                                              "Instance usage audit ran "
+                                              "for host %s, %s instances "
+                                              "in %s seconds." % (
+                                              self.host,
+                                              num_instances,
+                                              time.time() - start_time))
 
     @manager.periodic_task
     def _poll_bandwidth_usage(self, context, start_time=None, stop_time=None):

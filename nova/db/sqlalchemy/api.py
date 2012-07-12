@@ -1646,7 +1646,8 @@ def instance_get_all_by_filters(context, filters, sort_key, sort_dir):
 
 
 @require_context
-def instance_get_active_by_window(context, begin, end=None, project_id=None):
+def instance_get_active_by_window(context, begin, end=None,
+                                  project_id=None, host=None):
     """Return instances that were active during window."""
     session = get_session()
     query = session.query(models.Instance)
@@ -1657,13 +1658,15 @@ def instance_get_active_by_window(context, begin, end=None, project_id=None):
         query = query.filter(models.Instance.launched_at < end)
     if project_id:
         query = query.filter_by(project_id=project_id)
+    if host:
+        query = query.filter_by(host=host)
 
     return query.all()
 
 
 @require_admin_context
 def instance_get_active_by_window_joined(context, begin, end=None,
-                                         project_id=None):
+                                         project_id=None, host=None):
     """Return instances and joins that were active during window."""
     session = get_session()
     query = session.query(models.Instance)
@@ -1678,6 +1681,8 @@ def instance_get_active_by_window_joined(context, begin, end=None,
         query = query.filter(models.Instance.launched_at < end)
     if project_id:
         query = query.filter_by(project_id=project_id)
+    if host:
+        query = query.filter_by(host=host)
 
     return query.all()
 
@@ -2368,46 +2373,6 @@ def iscsi_target_create_safe(context, values):
         return iscsi_target_ref
     except IntegrityError:
         return None
-
-
-###################
-
-
-@require_admin_context
-def auth_token_destroy(context, token_id):
-    session = get_session()
-    with session.begin():
-        token_ref = auth_token_get(context, token_id, session=session)
-        token_ref.delete(session=session)
-
-
-@require_admin_context
-def auth_token_get(context, token_hash, session=None):
-    result = model_query(context, models.AuthToken, session=session).\
-                  filter_by(token_hash=token_hash).\
-                  first()
-
-    if not result:
-        raise exception.AuthTokenNotFound(token=token_hash)
-
-    return result
-
-
-@require_admin_context
-def auth_token_update(context, token_hash, values):
-    session = get_session()
-    with session.begin():
-        token_ref = auth_token_get(context, token_hash, session=session)
-        token_ref.update(values)
-        token_ref.save(session=session)
-
-
-@require_admin_context
-def auth_token_create(context, token):
-    tk = models.AuthToken()
-    tk.update(token)
-    tk.save()
-    return tk
 
 
 ###################
@@ -3689,205 +3654,6 @@ def provider_fw_rule_destroy(context, rule_id):
 
 
 ###################
-
-
-@require_admin_context
-def user_get(context, id, session=None):
-    result = model_query(context, models.User, session=session).\
-                     filter_by(id=id).\
-                     first()
-
-    if not result:
-        raise exception.UserNotFound(user_id=id)
-
-    return result
-
-
-@require_admin_context
-def user_get_by_access_key(context, access_key, session=None):
-    result = model_query(context, models.User, session=session).\
-                   filter_by(access_key=access_key).\
-                   first()
-
-    if not result:
-        raise exception.AccessKeyNotFound(access_key=access_key)
-
-    return result
-
-
-@require_admin_context
-def user_create(context, values):
-    user_ref = models.User()
-    user_ref.update(values)
-    user_ref.save()
-    return user_ref
-
-
-@require_admin_context
-def user_delete(context, id):
-    session = get_session()
-    with session.begin():
-        session.query(models.UserProjectAssociation).\
-                filter_by(user_id=id).\
-                delete()
-        session.query(models.UserRoleAssociation).\
-                filter_by(user_id=id).\
-                delete()
-        session.query(models.UserProjectRoleAssociation).\
-                filter_by(user_id=id).\
-                delete()
-        user_ref = user_get(context, id, session=session)
-        session.delete(user_ref)
-
-
-def user_get_all(context):
-    return model_query(context, models.User).all()
-
-
-def user_get_roles(context, user_id):
-    session = get_session()
-    with session.begin():
-        user_ref = user_get(context, user_id, session=session)
-        return [role.role for role in user_ref['roles']]
-
-
-def user_get_roles_for_project(context, user_id, project_id):
-    session = get_session()
-    with session.begin():
-        res = session.query(models.UserProjectRoleAssociation).\
-                   filter_by(user_id=user_id).\
-                   filter_by(project_id=project_id).\
-                   all()
-        return [association.role for association in res]
-
-
-def user_remove_project_role(context, user_id, project_id, role):
-    session = get_session()
-    with session.begin():
-        session.query(models.UserProjectRoleAssociation).\
-                filter_by(user_id=user_id).\
-                filter_by(project_id=project_id).\
-                filter_by(role=role).\
-                delete()
-
-
-def user_remove_role(context, user_id, role):
-    session = get_session()
-    with session.begin():
-        res = session.query(models.UserRoleAssociation).\
-                    filter_by(user_id=user_id).\
-                    filter_by(role=role).\
-                    all()
-        for role in res:
-            session.delete(role)
-
-
-def user_add_role(context, user_id, role):
-    session = get_session()
-    with session.begin():
-        user_ref = user_get(context, user_id, session=session)
-        models.UserRoleAssociation(user=user_ref, role=role).\
-               save(session=session)
-
-
-def user_add_project_role(context, user_id, project_id, role):
-    session = get_session()
-    with session.begin():
-        user_ref = user_get(context, user_id, session=session)
-        project_ref = project_get(context, project_id, session=session)
-        models.UserProjectRoleAssociation(user_id=user_ref['id'],
-                                          project_id=project_ref['id'],
-                                          role=role).save(session=session)
-
-
-def user_update(context, user_id, values):
-    session = get_session()
-    with session.begin():
-        user_ref = user_get(context, user_id, session=session)
-        user_ref.update(values)
-        user_ref.save(session=session)
-
-
-###################
-
-
-def project_create(context, values):
-    project_ref = models.Project()
-    project_ref.update(values)
-    project_ref.save()
-    return project_ref
-
-
-def project_add_member(context, project_id, user_id):
-    session = get_session()
-    with session.begin():
-        project_ref = project_get(context, project_id, session=session)
-        user_ref = user_get(context, user_id, session=session)
-
-        project_ref.members += [user_ref]
-        project_ref.save(session=session)
-
-
-def project_get(context, id, session=None):
-    result = model_query(context, models.Project, session=session,
-                         read_deleted="no").\
-                     filter_by(id=id).\
-                     options(joinedload_all('members')).\
-                     first()
-
-    if not result:
-        raise exception.ProjectNotFound(project_id=id)
-
-    return result
-
-
-def project_get_all(context):
-    return model_query(context, models.Project).\
-                   options(joinedload_all('members')).\
-                   all()
-
-
-def project_get_by_user(context, user_id):
-    user = model_query(context, models.User).\
-                   filter_by(id=user_id).\
-                   options(joinedload_all('projects')).\
-                   first()
-
-    if not user:
-        raise exception.UserNotFound(user_id=user_id)
-
-    return user.projects
-
-
-def project_remove_member(context, project_id, user_id):
-    session = get_session()
-    project = project_get(context, project_id, session=session)
-    user = user_get(context, user_id, session=session)
-
-    if user in project.members:
-        project.members.remove(user)
-        project.save(session=session)
-
-
-def project_update(context, project_id, values):
-    session = get_session()
-    with session.begin():
-        project_ref = project_get(context, project_id, session=session)
-        project_ref.update(values)
-        project_ref.save(session=session)
-
-
-def project_delete(context, id):
-    session = get_session()
-    with session.begin():
-        session.query(models.UserProjectAssociation).\
-                filter_by(project_id=id).\
-                delete()
-        session.query(models.UserProjectRoleAssociation).\
-                filter_by(project_id=id).\
-                delete()
-        project_ref = project_get(context, id, session=session)
-        session.delete(project_ref)
 
 
 @require_context
@@ -5271,3 +5037,89 @@ def get_instance_uuid_by_ec2_id(context, instance_id, session=None):
 @require_context
 def _ec2_instance_get_query(context, session=None):
     return model_query(context, models.InstanceIdMapping, session=session)
+
+
+@require_admin_context
+def task_log_get(context, task_name, period_beginning,
+                 period_ending, host, state=None, session=None):
+    query = model_query(context, models.TaskLog, session=session).\
+                     filter_by(task_name=task_name).\
+                     filter_by(period_beginning=period_beginning).\
+                     filter_by(period_ending=period_ending).\
+                     filter_by(host=host)
+    if state is not None:
+        query = query.filter_by(state=state)
+
+    return query.first()
+
+
+@require_admin_context
+def task_log_get_all(context, task_name, period_beginning,
+                 period_ending, host=None, state=None, session=None):
+    query = model_query(context, models.TaskLog, session=session).\
+                     filter_by(task_name=task_name).\
+                     filter_by(period_beginning=period_beginning).\
+                     filter_by(period_ending=period_ending)
+    if host is not None:
+        query = query.filter_by(host=host)
+    if state is not None:
+        query = query.filter_by(state=state)
+    return query.all()
+
+
+@require_admin_context
+def task_log_begin_task(context, task_name,
+                        period_beginning,
+                        period_ending,
+                        host,
+                        task_items=None,
+                        message=None,
+                        session=None):
+    session = session or get_session()
+    with session.begin():
+        task = task_log_get(context, task_name,
+                            period_beginning,
+                            period_ending,
+                            host,
+                            session=session)
+        if task:
+            #It's already run(ning)!
+            raise exception.TaskAlreadyRunning(task_name=task_name, host=host)
+        task = models.TaskLog()
+        task.task_name = task_name
+        task.period_beginning = period_beginning
+        task.period_ending = period_ending
+        task.host = host
+        task.state = "RUNNING"
+        if message:
+            task.message = message
+        if task_items:
+            task.task_items = task_items
+        task.save(session=session)
+    return task
+
+
+@require_admin_context
+def task_log_end_task(context, task_name,
+                        period_beginning,
+                        period_ending,
+                        host,
+                        errors,
+                        message=None,
+                        session=None):
+    session = session or get_session()
+    with session.begin():
+        task = task_log_get(context, task_name,
+                            period_beginning,
+                            period_ending,
+                            host,
+                            session=session)
+        if not task:
+            #It's not running!
+            raise exception.TaskNotRunning(task_name=task_name, host=host)
+        task.state = "DONE"
+        if message:
+            task.message = message
+        task.errors = errors
+        task.save(session=session)
+    return task

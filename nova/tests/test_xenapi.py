@@ -40,6 +40,7 @@ from nova.tests import fake_network
 from nova.tests import fake_utils
 import nova.tests.image.fake as fake_image
 from nova.tests.xenapi import stubs
+from nova.virt.xenapi import agent
 from nova.virt.xenapi import driver as xenapi_conn
 from nova.virt.xenapi import fake as xenapi_fake
 from nova.virt.xenapi import vm_utils
@@ -287,7 +288,7 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
 
     def test_init_host(self):
         session = xenapi_conn.XenAPISession('test_url', 'root', 'test_pass')
-        vm = vm_utils.get_this_vm_ref(session)
+        vm = vm_utils._get_this_vm_ref(session)
         # Local root disk
         vdi0 = xenapi_fake.create_vdi('compute', None)
         vbd0 = xenapi_fake.create_vbd(vm, vdi0)
@@ -308,7 +309,7 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
 
     def test_get_rrd_server(self):
         self.flags(xenapi_connection_url='myscheme://myaddress/')
-        server_info = vm_utils.get_rrd_server()
+        server_info = vm_utils._get_rrd_server()
         self.assertEqual(server_info[0], 'myscheme')
         self.assertEqual(server_info[1], 'myaddress')
 
@@ -316,7 +317,7 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
         def fake_get_rrd(host, vm_uuid):
             with open('xenapi/vm_rrd.xml') as f:
                 return re.sub(r'\s', '', f.read())
-        self.stubs.Set(vm_utils, 'get_rrd', fake_get_rrd)
+        self.stubs.Set(vm_utils, '_get_rrd', fake_get_rrd)
 
         fake_diagnostics = {
             'vbd_xvdb_write': '0.0',
@@ -862,8 +863,8 @@ class XenAPIDiffieHellmanTestCase(test.TestCase):
     """Unit tests for Diffie-Hellman code."""
     def setUp(self):
         super(XenAPIDiffieHellmanTestCase, self).setUp()
-        self.alice = vmops.SimpleDH()
-        self.bob = vmops.SimpleDH()
+        self.alice = agent.SimpleDH()
+        self.bob = agent.SimpleDH()
 
     def test_shared(self):
         alice_pub = self.alice.get_public()

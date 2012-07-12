@@ -606,20 +606,26 @@ def instance_get_all_by_filters(context, filters, sort_key='created_at',
                                             sort_dir)
 
 
-def instance_get_active_by_window(context, begin, end=None, project_id=None):
+def instance_get_active_by_window(context, begin, end=None, project_id=None,
+                                  host=None):
     """Get instances active during a certain time window.
 
-    Specifying a project_id will filter for a certain project."""
-    return IMPL.instance_get_active_by_window(context, begin, end, project_id)
+    Specifying a project_id will filter for a certain project.
+    Specifying a host will filter for instances on a given compute host.
+    """
+    return IMPL.instance_get_active_by_window(context, begin, end,
+                                              project_id, host)
 
 
 def instance_get_active_by_window_joined(context, begin, end=None,
-                                         project_id=None):
+                                         project_id=None, host=None):
     """Get instances and joins active during a certain time window.
 
-    Specifying a project_id will filter for a certain project."""
+    Specifying a project_id will filter for a certain project.
+    Specifying a host will filter for instances on a given compute host.
+    """
     return IMPL.instance_get_active_by_window_joined(context, begin, end,
-                                              project_id)
+                                              project_id, host)
 
 
 def instance_get_all_by_project(context, project_id):
@@ -918,29 +924,6 @@ def iscsi_target_create_safe(context, values):
 
 
 ###############
-
-
-def auth_token_destroy(context, token_id):
-    """Destroy an auth token."""
-    return IMPL.auth_token_destroy(context, token_id)
-
-
-def auth_token_get(context, token_hash):
-    """Retrieves a token given the hash representing it."""
-    return IMPL.auth_token_get(context, token_hash)
-
-
-def auth_token_update(context, token_hash, values):
-    """Updates a token given the hash representing it."""
-    return IMPL.auth_token_update(context, token_hash, values)
-
-
-def auth_token_create(context, token):
-    """Creates a new token."""
-    return IMPL.auth_token_create(context, token)
-
-
-###################
 
 
 def quota_create(context, project_id, resource, limit):
@@ -1383,109 +1366,6 @@ def provider_fw_rule_destroy(context, rule_id):
 
 
 ###################
-
-
-def user_get(context, id):
-    """Get user by id."""
-    return IMPL.user_get(context, id)
-
-
-def user_get_by_access_key(context, access_key):
-    """Get user by access key."""
-    return IMPL.user_get_by_access_key(context, access_key)
-
-
-def user_create(context, values):
-    """Create a new user."""
-    return IMPL.user_create(context, values)
-
-
-def user_delete(context, id):
-    """Delete a user."""
-    return IMPL.user_delete(context, id)
-
-
-def user_get_all(context):
-    """Create a new user."""
-    return IMPL.user_get_all(context)
-
-
-def user_add_role(context, user_id, role):
-    """Add another global role for user."""
-    return IMPL.user_add_role(context, user_id, role)
-
-
-def user_remove_role(context, user_id, role):
-    """Remove global role from user."""
-    return IMPL.user_remove_role(context, user_id, role)
-
-
-def user_get_roles(context, user_id):
-    """Get global roles for user."""
-    return IMPL.user_get_roles(context, user_id)
-
-
-def user_add_project_role(context, user_id, project_id, role):
-    """Add project role for user."""
-    return IMPL.user_add_project_role(context, user_id, project_id, role)
-
-
-def user_remove_project_role(context, user_id, project_id, role):
-    """Remove project role from user."""
-    return IMPL.user_remove_project_role(context, user_id, project_id, role)
-
-
-def user_get_roles_for_project(context, user_id, project_id):
-    """Return list of roles a user holds on project."""
-    return IMPL.user_get_roles_for_project(context, user_id, project_id)
-
-
-def user_update(context, user_id, values):
-    """Update user."""
-    return IMPL.user_update(context, user_id, values)
-
-
-###################
-
-
-def project_get(context, id):
-    """Get project by id."""
-    return IMPL.project_get(context, id)
-
-
-def project_create(context, values):
-    """Create a new project."""
-    return IMPL.project_create(context, values)
-
-
-def project_add_member(context, project_id, user_id):
-    """Add user to project."""
-    return IMPL.project_add_member(context, project_id, user_id)
-
-
-def project_get_all(context):
-    """Get all projects."""
-    return IMPL.project_get_all(context)
-
-
-def project_get_by_user(context, user_id):
-    """Get all projects of which the given user is a member."""
-    return IMPL.project_get_by_user(context, user_id)
-
-
-def project_remove_member(context, project_id, user_id):
-    """Remove the given user from the given project."""
-    return IMPL.project_remove_member(context, project_id, user_id)
-
-
-def project_update(context, project_id, values):
-    """Update Remove the given user from the given project."""
-    return IMPL.project_update(context, project_id, values)
-
-
-def project_delete(context, project_id):
-    """Delete project."""
-    return IMPL.project_delete(context, project_id)
 
 
 def project_get_networks(context, project_id, associate=True):
@@ -1969,3 +1849,52 @@ def get_instance_uuid_by_ec2_id(context, instance_id):
 def ec2_instance_create(context, instance_ec2_id):
     """Create the ec2 id to instance uuid mapping on demand"""
     return IMPL.ec2_instance_create(context, instance_ec2_id)
+
+
+####################
+
+
+def task_log_end_task(context, task_name,
+                        period_beginning,
+                        period_ending,
+                        host,
+                        errors,
+                        message=None,
+                        session=None):
+    """Mark a task as complete for a given host/time period"""
+    return IMPL.task_log_end_task(context, task_name,
+                                  period_beginning,
+                                  period_ending,
+                                  host,
+                                  errors,
+                                  message,
+                                  session)
+
+
+def task_log_begin_task(context, task_name,
+                        period_beginning,
+                        period_ending,
+                        host,
+                        task_items=None,
+                        message=None,
+                        session=None):
+    """Mark a task as started for a given host/time period"""
+    return IMPL.task_log_begin_task(context, task_name,
+                                    period_beginning,
+                                    period_ending,
+                                    host,
+                                    task_items,
+                                    message,
+                                    session)
+
+
+def task_log_get_all(context, task_name, period_beginning,
+                 period_ending, host=None, state=None, session=None):
+    return IMPL.task_log_get_all(context, task_name, period_beginning,
+                 period_ending, host, state, session)
+
+
+def task_log_get(context, task_name, period_beginning,
+                 period_ending, host, state=None, session=None):
+    return IMPL.task_log_get(context, task_name, period_beginning,
+                 period_ending, host, state, session)
