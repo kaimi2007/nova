@@ -53,8 +53,6 @@ class ComputeFilter(filters.BaseHostFilter):
         LOG.debug(_("op"))
         cap_extra_specs = capabilities.get('instance_type_extra_specs', {})
         for key, req in instance_type['extra_specs'].iteritems():
-            LOG.debug(_("key: %s, req:%s"), key, req)
-            LOG.debug(_("type:%s"), type(req))
             cap = cap_extra_specs.get(key, None)
             if cap is None:
                 return False
@@ -70,10 +68,8 @@ class ComputeFilter(filters.BaseHostFilter):
                     op = words[0]
                     method = op_methods.get(op)
                     new_req = words[1]
-                    LOG.debug(_("type: %s, va=%s"), type(words[1]), str(words[1]))
                     for i in range(2, len(words)):
                         new_req += words[i]
-                        LOG.debug(_("type: %s, va=%s"), type(words[i]), str(words[i]))
 
                     if op == '<or>':  # Ex: <or> v1 <or> v2 <or> v3
                         found = 0
