@@ -372,7 +372,7 @@ class LibvirtDriver(driver.ComputeDriver):
             global num_gpus
             global gpu_arch
             global gpu_info
-            context = nova.context.get_admin_context()
+            context = nova_context.get_admin_context()
 #            gpus_available = range(FLAGS.xpus)
             self._get_instance_type_extra_specs_capabilities(context)
             if 'gpus' in extra_specs:
@@ -393,6 +393,14 @@ class LibvirtDriver(driver.ComputeDriver):
 
         # NOTE(nsokolov): moved instance restarting to ComputeManager
         pass
+
+    def _get_instance_type_extra_specs_capabilities(self, context):
+        """Return additional capabilities to advertise for this compute host."""
+        for pair in FLAGS.instance_type_extra_specs:
+            keyval = pair.split(':', 1)
+            keyval[0] = keyval[0].strip()
+            keyval[1] = keyval[1].strip()
+            extra_specs[keyval[0]] = keyval[1]
 
     def _get_connection(self):
         if not self._wrapped_conn or not self._test_connection():
@@ -2556,7 +2564,7 @@ class LibvirtDriver(driver.ComputeDriver):
                'disk_available_least': self.get_disk_available_least()}
 
         compute_node_ref = service_ref['compute_node']
-        LOG.info(_('#### RLK: cpu_arch = %s ') % FLAGS.cpu_arch)
+#        LOG.info(_('#### RLK: cpu_arch = %s ') % FLAGS.cpu_arch)
         if not compute_node_ref:
             LOG.info(_('Compute_service record created for %s ') % host)
             db.compute_node_create(ctxt, dic)
