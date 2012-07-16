@@ -395,7 +395,7 @@ class LibvirtDriver(driver.ComputeDriver):
         pass
 
     def _get_instance_type_extra_specs_capabilities(self, context):
-        """Return additional capabilities to advertise for this compute host."""
+        """Return additional capabilities for this compute host."""
         for pair in FLAGS.instance_type_extra_specs:
             keyval = pair.split(':', 1)
             keyval[0] = keyval[0].strip()
