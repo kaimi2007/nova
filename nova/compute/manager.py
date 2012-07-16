@@ -139,27 +139,6 @@ compute_opts = [
                default=60,
                help="Number of seconds between instance info_cache self "
                         "healing updates"),
-    cfg.StrOpt("cpu_arch",
-               default="x86_64",
-               help="Architecture the instance runs on"),
-    cfg.StrOpt("xpu_arch",
-               default="",
-               help="Architecture the accelerator instance runs on"),
-    cfg.StrOpt("xpu_info",
-               default="",
-               help="Architecture info"),
-    cfg.IntOpt("xpus",
-               default=0,
-               help="Number of xpus"),
-    cfg.StrOpt("net_arch",
-               default="",
-               help="Architecture of the network"),
-    cfg.IntOpt("net_mbps",
-               default=256,
-               help="Network speed"),
-    cfg.StrOpt("net_info",
-               default="",
-               help="Network info"),
     cfg.ListOpt('additional_compute_capabilities',
                default=[],
                help='a list of additional capabilities for this compute '
@@ -167,15 +146,16 @@ compute_opts = [
                'this functionality will be replaced when HostAggregates '
                'become more funtional for general grouping in Folsom. (see: '
                'http://etherpad.openstack.org/FolsomNovaHostAggregates-v2)'),
+    cfg.BoolOpt('instance_usage_audit',
+               default=False,
+               help="Generate periodic compute.instance.exists notifications"),
     cfg.ListOpt('instance_type_extra_specs',
                default=[],
                help='a list of additional capabilities corresponding to '
                'instance_type_extra_specs for this compute '
                'host to advertise. Valid entries are name=value, pairs '
                'For example, "key1:val1, key2:val2"'),
-    cfg.BoolOpt('instance_usage_audit',
-               default=False,
-               help="Generate periodic compute.instance.exists notifications"),
+
     ]
 
 FLAGS = flags.FLAGS
@@ -769,9 +749,6 @@ class ComputeManager(manager.SchedulerDependentManager):
                 self.volume_api.detach(context, volume)
             except exception.DiskNotFound as exc:
                 LOG.warn(_('Ignoring DiskNotFound: %s') % exc,
-                         instance=instance)
-            except exception.VolumeNotFound as exc:
-                LOG.warn(_('Ignoring VolumeNotFound: %s') % exc,
                          instance=instance)
 
         self._notify_about_instance_usage(context, instance, "shutdown.end")
@@ -1933,10 +1910,9 @@ class ComputeManager(manager.SchedulerDependentManager):
     def create_shared_storage_test_file(self, context):
         """Makes tmpfile under FLAGS.instance_path.
 
-        This method creates a temporary file that acts as an indicator to
-        other compute nodes that utilize the same shared storage as this node.
-        (create|check|cleanup)_shared_storage_test_file() are a set and should
-        be run together.
+        This method enables compute nodes to recognize that they mounts
+        same shared storage. (create|check|creanup)_shared_storage_test_file()
+        is a pair.
 
         :param context: security context
         :returns: tmpfile name(basename)
@@ -1977,7 +1953,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         os.remove(tmp_file)
 
     def get_instance_disk_info(self, context, instance_name):
-        """Get information about instance's current disk.
+        """Getting infomation of instance's current disk.
 
         Implementation nova.virt.libvirt.connection.
 

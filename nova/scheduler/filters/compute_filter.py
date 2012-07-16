@@ -13,6 +13,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import operator
+
 from nova.openstack.common import log as logging
 from nova.scheduler import filters
 from nova import utils
@@ -30,12 +32,63 @@ class ComputeFilter(filters.BaseHostFilter):
         if 'extra_specs' not in instance_type:
             return True
 
-        # NOTE(lorinh): For now, we are just checking exact matching on the
-        # values. Later on, we want to handle numerical
-        # values so we can represent things like number of GPU cards
-        for key, value in instance_type['extra_specs'].iteritems():
-            if capabilities.get(key, None) != value:
+        LOG.debug(_("filter st"))
+
+        # The following operations are supported:
+        #   =, s==, s!=, s>=, s>, s<=, s<, <in>, <or>, ==, !=, >=, <=
+        #   Note that <or> is handled in a different way below.
+        op_methods = {'=': lambda x, y: (float(x) >= float(y)),
+                      '<in>': lambda x, y: (x.find(y) != -1),
+                      '==': lambda x, y: (float(x) == float(y)),
+                      '!=': lambda x, y: (float(x) != float(y)),
+                      '>=': lambda x, y: (float(x) >= float(y)),
+                      '<=': lambda x, y: (float(x) <= float(y)),
+                      's==': lambda x, y: operator.eq(x, y),
+                      's!=': lambda x, y: operator.ne(x, y),
+                      's<': lambda x, y: operator.lt(x, y),
+                      's<=': lambda x, y: operator.le(x, y),
+                      's>': lambda x, y: operator.gt(x, y),
+                      's>=': lambda x, y: operator.ge(x, y)}
+
+        LOG.debug(_("op"))
+        cap_extra_specs = capabilities.get('instance_type_extra_specs', {})
+        for key, req in instance_type['extra_specs'].iteritems():
+            LOG.debug(_("key: %s, req:%s"), key, req)
+            LOG.debug(_("type:%s"), type(req))
+            cap = cap_extra_specs.get(key, None)
+            if cap is None:
                 return False
+            if isinstance(req, (bool, int, long, float)):
+                    if cap != req:
+                        return False
+            else:
+                words = req.split()
+                if len(words) == 1:
+                    if cap != req:
+                        return False
+                else:
+                    op = words[0]
+                    method = op_methods.get(op)
+                    new_req = words[1]
+                    LOG.debug(_("type: %s, va=%s"), type(words[1]), str(words[1]))
+                    for i in range(2, len(words)):
+                        new_req += words[i]
+                        LOG.debug(_("type: %s, va=%s"), type(words[i]), str(words[i]))
+
+                    if op == '<or>':  # Ex: <or> v1 <or> v2 <or> v3
+                        found = 0
+                        for idx in range(1, len(words), 2):
+                            if words[idx] == cap:
+                                found = 1
+                                break
+                        if found == 0:
+                            return False
+                    elif method:
+                        if method(cap, new_req) == False:
+                            return False
+                    else:
+                        if cap != req:
+                            return False
         return True
 
     def host_passes(self, host_state, filter_properties):
