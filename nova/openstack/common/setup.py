@@ -139,8 +139,14 @@ def _get_git_next_version_suffix(branch_name):
     if not milestonever:
         milestonever = ""
     post_version = _get_git_post_version()
-    revno = post_version.split(".")[-1]
-    return "%s~%s.%s%s" % (milestonever, datestamp, revno_prefix, revno)
+    # post version should look like:
+    # 0.1.1.4.gcc9e28a
+    # where the bit after the last . is the short sha, and the bit between
+    # the last and second to last is the revno count
+    (revno, sha) = post_version.split(".")[-2:]
+    first_half = "%(milestonever)s~%(datestamp)s" % locals()
+    second_half = "%(revno_prefix)s%(revno)s.%(sha)s" % locals()
+    return ".".join((first_half, second_half))
 
 
 def _get_git_current_tag():
@@ -162,21 +168,26 @@ def _get_git_post_version():
             cmd = "git --no-pager log --oneline"
             out = _run_shell_command(cmd)
             revno = len(out.split("\n"))
+            sha = _run_shell_command("git describe --always")
         else:
             tag_infos = tag_info.split("-")
             base_version = "-".join(tag_infos[:-2])
-            revno = tag_infos[-2]
-        return "%s.%s" % (base_version, revno)
+            (revno, sha) = tag_infos[-2:]
+        return "%s.%s.%s" % (base_version, revno, sha)
 
 
 def write_git_changelog():
     """Write a changelog based on the git changelog."""
-    if os.path.isdir('.git'):
-        git_log_cmd = 'git log --stat'
-        changelog = _run_shell_command(git_log_cmd)
-        mailmap = parse_mailmap()
-        with open("ChangeLog", "w") as changelog_file:
-            changelog_file.write(canonicalize_emails(changelog, mailmap))
+    new_changelog = 'ChangeLog'
+    if not os.getenv('SKIP_WRITE_GIT_CHANGELOG'):
+        if os.path.isdir('.git'):
+            git_log_cmd = 'git log --stat'
+            changelog = _run_shell_command(git_log_cmd)
+            mailmap = parse_mailmap()
+            with open(new_changelog, "w") as changelog_file:
+                changelog_file.write(canonicalize_emails(changelog, mailmap))
+    else:
+        open(new_changelog, 'w').close()
 
 
 def generate_authors():
@@ -184,17 +195,21 @@ def generate_authors():
     jenkins_email = 'jenkins@review.openstack.org'
     old_authors = 'AUTHORS.in'
     new_authors = 'AUTHORS'
-    if os.path.isdir('.git'):
-        # don't include jenkins email address in AUTHORS file
-        git_log_cmd = ("git log --format='%aN <%aE>' | sort -u | "
-                       "grep -v " + jenkins_email)
-        changelog = _run_shell_command(git_log_cmd)
-        mailmap = parse_mailmap()
-        with open(new_authors, 'w') as new_authors_fh:
-            new_authors_fh.write(canonicalize_emails(changelog, mailmap))
-            if os.path.exists(old_authors):
-                with open(old_authors, "r") as old_authors_fh:
-                    new_authors_fh.write('\n' + old_authors_fh.read())
+    if not os.getenv('SKIP_GENERATE_AUTHORS'):
+        if os.path.isdir('.git'):
+            # don't include jenkins email address in AUTHORS file
+            git_log_cmd = ("git log --format='%aN <%aE>' | sort -u | "
+                           "grep -v " + jenkins_email)
+            changelog = _run_shell_command(git_log_cmd)
+            mailmap = parse_mailmap()
+            with open(new_authors, 'w') as new_authors_fh:
+                new_authors_fh.write(canonicalize_emails(changelog, mailmap))
+                if os.path.exists(old_authors):
+                    with open(old_authors, "r") as old_authors_fh:
+                        new_authors_fh.write('\n' + old_authors_fh.read())
+    else:
+        open(new_authors, 'w').close()
+
 
 _rst_template = """%(heading)s
 %(underline)s
@@ -313,7 +328,8 @@ def get_git_branchname():
 
 
 def get_pre_version(projectname, base_version):
-    """Return a version which is based"""
+    """Return a version which is leading up to a version that will
+       be released in the future."""
     if os.path.isdir('.git'):
         current_tag = _get_git_current_tag()
         if current_tag is not None:
@@ -325,10 +341,10 @@ def get_pre_version(projectname, base_version):
             version_suffix = _get_git_next_version_suffix(branch_name)
             version = "%s~%s" % (base_version, version_suffix)
         write_versioninfo(projectname, version)
-        return version.split('~')[0]
+        return version
     else:
         version = read_versioninfo(projectname)
-    return version.split('~')[0]
+    return version
 
 
 def get_post_version(projectname):

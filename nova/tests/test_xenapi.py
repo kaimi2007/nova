@@ -355,9 +355,9 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
         stubs.stubout_firewall_driver(self.stubs, self.conn)
         instance = self._create_instance()
 
-        name = "MySnapshot"
+        image_id = "my_snapshot_id"
         self.assertRaises(exception.NovaException, self.conn.snapshot,
-                          self.context, instance, name)
+                          self.context, instance, image_id)
 
     def test_instance_snapshot(self):
         stubs.stubout_instance_snapshot(self.stubs)
@@ -367,8 +367,8 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
         stubs.stubout_firewall_driver(self.stubs, self.conn)
         instance = self._create_instance()
 
-        name = "MySnapshot"
-        template_vm_ref = self.conn.snapshot(self.context, instance, name)
+        image_id = "my_snapshot_id"
+        self.conn.snapshot(self.context, instance, image_id)
 
         # Ensure VM was torn down
         vm_labels = []
@@ -435,7 +435,7 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
             tcpip_data = ast.literal_eval(xenstore_value)
             self.assertEquals(tcpip_data,
                               {'broadcast': '192.168.1.255',
-                               'dns': ['192.168.1.3', '192.168.1.4'],
+                               'dns': ['192.168.1.4', '192.168.1.3'],
                                'gateway': '192.168.1.1',
                                'gateway_v6': 'fe80::def',
                                'ip6s': [{'enabled': '1',

@@ -493,9 +493,9 @@ class FloatingIP(object):
         # make sure project ownz this floating ip (allocated)
         self._floating_ip_owned_by_project(context, floating_ip)
 
-        # make sure floating ip isn't already associated
+        # disassociate any already associated
         if floating_ip['fixed_ip_id']:
-            raise exception.FloatingIpAssociated(address=floating_address)
+            self.disassociate_floating_ip(context, floating_address)
 
         fixed_ip = self.db.fixed_ip_get_by_address(context, fixed_address)
 
@@ -1633,7 +1633,10 @@ class NetworkManager(manager.SchedulerDependentManager):
 
     @wrap_check_policy
     def get_all_networks(self, context):
-        networks = self.db.network_get_all(context)
+        try:
+            networks = self.db.network_get_all(context)
+        except exception.NoNetworksFound:
+            return []
         return [dict(network.iteritems()) for network in networks]
 
     @wrap_check_policy
@@ -1904,7 +1907,8 @@ class VlanManager(RPCAllocateFixedIP, FloatingIP, NetworkManager):
                   '%(num_networks)s. Network size is %(network_size)s') %
                   kwargs)
 
-        NetworkManager.create_networks(self, context, vpn=True, **kwargs)
+        return NetworkManager.create_networks(
+            self, context, vpn=True, **kwargs)
 
     def _setup_network_on_host(self, context, network):
         """Sets up network on this host."""

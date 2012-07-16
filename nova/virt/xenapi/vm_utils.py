@@ -98,6 +98,7 @@ SECTOR_SIZE = 512
 MBR_SIZE_SECTORS = 63
 MBR_SIZE_BYTES = MBR_SIZE_SECTORS * SECTOR_SIZE
 KERNEL_DIR = '/boot/guest'
+MAX_VDI_CHAIN_SIZE = 16
 
 
 class ImageType(object):
@@ -215,11 +216,39 @@ def create_vm(session, instance, kernel, ramdisk, use_pv_kernel=False):
     return vm_ref
 
 
+def destroy_vm(session, instance, vm_ref):
+    """Destroys a VM record."""
+    try:
+        session.call_xenapi('VM.destroy', vm_ref)
+    except session.XenAPI.Failure, exc:
+        LOG.exception(exc)
+        return
+
+    LOG.debug(_("VM destroyed"), instance=instance)
+
+
+def shutdown_vm(session, instance, vm_ref, hard=True):
+    vm_rec = session.call_xenapi("VM.get_record", vm_ref)
+    state = compile_info(vm_rec)['state']
+    if state == power_state.SHUTDOWN:
+        LOG.warn(_("VM already halted, skipping shutdown..."),
+                 instance=instance)
+        return
+
+    LOG.debug(_("Shutting down VM"), instance=instance)
+    try:
+        if hard:
+            session.call_xenapi('VM.hard_shutdown', vm_ref)
+        else:
+            session.call_xenapi('VM.clean_shutdown', vm_ref)
+    except session.XenAPI.Failure, exc:
+        LOG.exception(exc)
+
+
 def ensure_free_mem(session, instance):
     inst_type_id = instance.instance_type_id
     instance_type = instance_types.get_instance_type(inst_type_id)
     mem = long(instance_type['memory_mb']) * 1024 * 1024
-    #get free memory from host
     host = session.get_xenapi_host()
     host_free_mem = long(session.call_xenapi("host.compute_free_memory",
                                              host))
@@ -313,6 +342,15 @@ def destroy_vdi(session, vdi_ref):
         LOG.exception(exc)
         raise volume_utils.StorageError(
                 _('Unable to destroy VDI %s') % vdi_ref)
+
+
+def safe_destroy_vdis(session, vdi_refs):
+    """Destroys the requested VDIs, logging any StorageError exceptions."""
+    for vdi_ref in vdi_refs:
+        try:
+            destroy_vdi(session, vdi_ref)
+        except volume_utils.StorageError as exc:
+            LOG.error(exc)
 
 
 def create_vdi(session, sr_ref, info, disk_type, virtual_size,
@@ -429,14 +467,22 @@ def get_vdi_for_vm_safely(session, vm_ref):
                                   % locals())
 
 
-def create_snapshot(session, instance, vm_ref, label):
+@contextlib.contextmanager
+def snapshot_attached_here(session, instance, vm_ref, label):
     LOG.debug(_("Starting snapshot for VM"), instance=instance)
+
     try:
-        return _create_snapshot(session, instance, vm_ref, label)
+        template_vm_ref, vdi_uuids = _create_snapshot(
+                session, instance, vm_ref, label)
     except session.XenAPI.Failure, exc:
         LOG.error(_("Unable to Snapshot instance: %(exc)s"), locals(),
                   instance=instance)
         raise
+
+    try:
+        yield vdi_uuids
+    finally:
+        _destroy_snapshot(session, instance, template_vm_ref)
 
 
 def _create_snapshot(session, instance, vm_ref, label):
@@ -446,7 +492,6 @@ def _create_snapshot(session, instance, vm_ref, label):
               instance=instance)
 
     vm_vdi_ref, vm_vdi_rec = get_vdi_for_vm_safely(session, vm_ref)
-    sr_ref = vm_vdi_rec["SR"]
 
     original_parent_uuid = _get_vhd_parent_uuid(session, vm_vdi_ref)
 
@@ -457,13 +502,21 @@ def _create_snapshot(session, instance, vm_ref, label):
     LOG.debug(_('Created snapshot %(template_vm_ref)s'), locals(),
               instance=instance)
 
+    sr_ref = vm_vdi_rec["SR"]
     parent_uuid, base_uuid = _wait_for_vhd_coalesce(
             session, instance, sr_ref, vm_vdi_ref, original_parent_uuid)
 
-    template_vdi_uuids = {'base': base_uuid,
-                          'image': parent_uuid,
-                          'snap': template_vdi_uuid}
-    return template_vm_ref, template_vdi_uuids
+    vdi_uuids = [vdi_rec['uuid'] for vdi_rec in
+                 _walk_vdi_chain(session, template_vdi_uuid)]
+
+    return template_vm_ref, vdi_uuids
+
+
+def _destroy_snapshot(session, instance, vm_ref):
+    vdi_refs = lookup_vm_vdis(session, vm_ref)
+    safe_destroy_vdis(session, vdi_refs)
+
+    destroy_vm(session, instance, vm_ref)
 
 
 def get_sr_path(session):
@@ -856,8 +909,9 @@ def _fetch_vhd_image(context, session, instance, image_id):
     # which does not have the `uuid` module. To work around this,
     # we generate the uuids here (under Python 2.6+) and
     # pass them as arguments
+    uuid_stack = [str(uuid.uuid4()) for i in xrange(MAX_VDI_CHAIN_SIZE)]
     params = {'image_id': image_id,
-              'uuid_stack': [str(uuid.uuid4()) for i in xrange(3)],
+              'uuid_stack': uuid_stack,
               'sr_path': get_sr_path(session),
               'auth_token': getattr(context, 'auth_token', None)}
 
@@ -1874,10 +1928,10 @@ def _mounted_processing(device, key, net, metadata):
                 if not _find_guest_agent(tmpdir, FLAGS.xenapi_agent_path):
                     LOG.info(_('Manipulating interface files directly'))
                     # for xenapi, we don't 'inject' admin_password here,
-                    # it's handled at instance startup time
+                    # it's handled at instance startup time, nor do we
+                    # support injecting arbitrary files here.
                     disk.inject_data_into_fs(tmpdir,
-                                             key, net, metadata, None,
-                                             utils.execute)
+                                             key, net, metadata, None, None)
             finally:
                 utils.execute('umount', dev_path, run_as_root=True)
         else:
