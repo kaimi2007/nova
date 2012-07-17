@@ -1401,8 +1401,8 @@ class LibvirtDriver(driver.ComputeDriver):
                     except Exception as Exn:
                         LOG.error(_("Error in GPU assignment, overcommitted."))
                         self.destroy(instance, network_info, cleanup=True)
-                        db.instance_update( 
-                            nova_context.get_admin_context(), instance['uuid'], 
+                        db.instance_update(
+                            nova_context.get_admin_context(), instance['uuid'],
                             {'vm_state': vm_states.OVERCOMMIT})
                 LOG.info(_("Instance spawned successfully."),
                          instance=instance)
