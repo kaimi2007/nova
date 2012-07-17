@@ -26,7 +26,6 @@ import re
 import warnings
 
 from nova import block_device
-from nova.compute import aggregate_states
 from nova.compute import vm_states
 from nova import db
 from nova.db.sqlalchemy import models
@@ -283,7 +282,6 @@ class Constraint(object):
         self.conditions = conditions
 
     def apply(self, model, query):
-        clauses = []
         for key, condition in self.conditions.iteritems():
             for clause in condition.clauses(getattr(model, key)):
                 query = query.filter(clause)
@@ -4744,7 +4742,6 @@ def aggregate_create(context, values, metadata=None):
                                      values['name'],
                                      session=session,
                                      read_deleted='yes').first()
-    values.setdefault('operational_state', aggregate_states.CREATED)
     if not aggregate:
         aggregate = models.Aggregate()
         aggregate.update(values)
@@ -4820,7 +4817,6 @@ def aggregate_delete(context, aggregate_id):
     if query.first():
         query.update({'deleted': True,
                       'deleted_at': timeutils.utcnow(),
-                      'operational_state': aggregate_states.DISMISSED,
                       'updated_at': literal_column('updated_at')})
     else:
         raise exception.AggregateNotFound(aggregate_id=aggregate_id)
@@ -4946,13 +4942,10 @@ def aggregate_host_add(context, aggregate_id, host):
                                     read_deleted='yes').\
                                     filter_by(host=host).first()
     if not host_ref:
-        try:
-            host_ref = models.AggregateHost()
-            values = {"host": host, "aggregate_id": aggregate_id, }
-            host_ref.update(values)
-            host_ref.save(session=session)
-        except exception.DBError:
-            raise exception.AggregateHostConflict(host=host)
+        host_ref = models.AggregateHost()
+        values = {"host": host, "aggregate_id": aggregate_id, }
+        host_ref.update(values)
+        host_ref.save(session=session)
     elif host_ref.deleted:
         host_ref.update({'deleted': False, 'deleted_at': None})
         host_ref.save(session=session)

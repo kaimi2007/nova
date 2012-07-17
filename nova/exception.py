@@ -129,6 +129,8 @@ class NovaException(Exception):
 
     """
     message = _("An unknown exception occurred.")
+    code = 500
+    headers = {}
     safe = False
 
     def __init__(self, message=None, **kwargs):
@@ -995,6 +997,8 @@ class WillNotSchedule(NovaException):
 
 class QuotaError(NovaException):
     message = _("Quota exceeded") + ": code=%(code)s"
+    code = 413
+    headers = {'Retry-After': 0}
     safe = True
 
 
@@ -1055,10 +1059,6 @@ class AggregateHostNotFound(NotFound):
 class AggregateMetadataNotFound(NotFound):
     message = _("Aggregate %(aggregate_id)s has no metadata with "
                 "key %(metadata_key)s.")
-
-
-class AggregateHostConflict(Duplicate):
-    message = _("Host %(host)s already member of another aggregate.")
 
 
 class AggregateHostExists(Duplicate):

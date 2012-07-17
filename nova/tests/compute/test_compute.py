@@ -27,7 +27,6 @@ import mox
 
 import nova
 from nova import compute
-from nova.compute import aggregate_states
 from nova.compute import api as compute_api
 from nova.compute import instance_types
 from nova.compute import manager as compute_manager
@@ -867,7 +866,7 @@ class ComputeTestCase(BaseTestCase):
         self.compute.terminate_instance(self.context, instance_uuid)
 
     def test_run_instance_usage_notification(self):
-        """Ensure run instance generates apropriate usage notification"""
+        """Ensure run instance generates appropriate usage notification"""
         inst_ref = self._create_fake_instance()
         instance_uuid = inst_ref['uuid']
         self.compute.run_instance(self.context, instance_uuid)
@@ -896,7 +895,7 @@ class ComputeTestCase(BaseTestCase):
         self.compute.terminate_instance(self.context, instance_uuid)
 
     def test_terminate_usage_notification(self):
-        """Ensure terminate_instance generates apropriate usage notification"""
+        """Ensure terminate_instance generates correct usage notification"""
         old_time = datetime.datetime(2012, 4, 1)
         cur_time = datetime.datetime(2012, 12, 21, 12, 21)
         timeutils.set_time_override(old_time)
@@ -1380,19 +1379,114 @@ class ComputeTestCase(BaseTestCase):
         self.assertEqual(inst_ref['vm_state'], vm_states.ERROR)
         self.compute.terminate_instance(context, inst_ref['uuid'])
 
+    def test_check_can_live_migrate_source_works_correctly(self):
+        """Confirm check_can_live_migrate_source works on positive path"""
+        context = self.context.elevated()
+        inst_ref = self._create_fake_instance({'host': 'fake_host_2'})
+        inst_id = inst_ref["id"]
+        dest = "fake_host_1"
+
+        self.mox.StubOutWithMock(db, 'instance_get')
+        self.mox.StubOutWithMock(self.compute.driver,
+                                 'check_can_live_migrate_source')
+
+        dest_check_data = {"test": "data"}
+        db.instance_get(context, inst_id).AndReturn(inst_ref)
+        self.compute.driver.check_can_live_migrate_source(context,
+                                                          inst_ref,
+                                                          dest_check_data)
+
+        self.mox.ReplayAll()
+        self.compute.check_can_live_migrate_source(context, inst_id,
+                                                   dest_check_data)
+
+    def test_check_can_live_migrate_destination_works_correctly(self):
+        """Confirm check_can_live_migrate_destination works on positive path"""
+        context = self.context.elevated()
+        inst_ref = self._create_fake_instance({'host': 'fake_host_2'})
+        inst_id = inst_ref["id"]
+        dest = "fake_host_1"
+
+        self.mox.StubOutWithMock(db, 'instance_get')
+        self.mox.StubOutWithMock(self.compute.driver,
+                                 'check_can_live_migrate_destination')
+        self.mox.StubOutWithMock(self.compute.compute_rpcapi,
+                                 'check_can_live_migrate_source')
+        self.mox.StubOutWithMock(self.compute.driver,
+                                 'check_can_live_migrate_destination_cleanup')
+
+        db.instance_get(context, inst_id).AndReturn(inst_ref)
+        dest_check_data = {"test": "data"}
+        self.compute.driver.check_can_live_migrate_destination(context,
+                inst_ref, True, False).AndReturn(dest_check_data)
+        self.compute.compute_rpcapi.check_can_live_migrate_source(context,
+                inst_ref, dest_check_data)
+        self.compute.driver.check_can_live_migrate_destination_cleanup(
+                context, dest_check_data)
+
+        self.mox.ReplayAll()
+        self.compute.check_can_live_migrate_destination(context, inst_id,
+                                                        True, False)
+
+    def test_check_can_live_migrate_destination_fails_dest_check(self):
+        """Confirm check_can_live_migrate_destination works on positive path"""
+        context = self.context.elevated()
+        inst_ref = self._create_fake_instance({'host': 'fake_host_2'})
+        inst_id = inst_ref["id"]
+        dest = "fake_host_1"
+
+        self.mox.StubOutWithMock(db, 'instance_get')
+        self.mox.StubOutWithMock(self.compute.driver,
+                                 'check_can_live_migrate_destination')
+
+        db.instance_get(context, inst_id).AndReturn(inst_ref)
+        self.compute.driver.check_can_live_migrate_destination(context,
+                inst_ref, True, False).AndRaise(exception.Invalid())
+
+        self.mox.ReplayAll()
+        self.assertRaises(exception.Invalid,
+                          self.compute.check_can_live_migrate_destination,
+                          context, inst_id, True, False)
+
+    def test_check_can_live_migrate_destination_fails_source(self):
+        """Confirm check_can_live_migrate_destination works on positive path"""
+        context = self.context.elevated()
+        inst_ref = self._create_fake_instance({'host': 'fake_host_2'})
+        inst_id = inst_ref["id"]
+        dest = "fake_host_1"
+
+        self.mox.StubOutWithMock(db, 'instance_get')
+        self.mox.StubOutWithMock(self.compute.driver,
+                                 'check_can_live_migrate_destination')
+        self.mox.StubOutWithMock(self.compute.compute_rpcapi,
+                                 'check_can_live_migrate_source')
+        self.mox.StubOutWithMock(self.compute.driver,
+                                 'check_can_live_migrate_destination_cleanup')
+
+        db.instance_get(context, inst_id).AndReturn(inst_ref)
+        dest_check_data = {"test": "data"}
+        self.compute.driver.check_can_live_migrate_destination(context,
+                inst_ref, True, False).AndReturn(dest_check_data)
+        self.compute.compute_rpcapi.check_can_live_migrate_source(context,
+                inst_ref, dest_check_data).AndRaise(exception.Invalid())
+        self.compute.driver.check_can_live_migrate_destination_cleanup(
+                context, dest_check_data)
+
+        self.mox.ReplayAll()
+        self.assertRaises(exception.Invalid,
+                          self.compute.check_can_live_migrate_destination,
+                          context, inst_id, True, False)
+
     def test_pre_live_migration_instance_has_no_fixed_ip(self):
         """Confirm raising exception if instance doesn't have fixed_ip."""
         # creating instance testdata
-        inst_ref = self._create_fake_instance({'host': 'dummy'})
-        c = context.get_admin_context()
+        context = self.context.elevated()
+        inst_ref = self._create_fake_instance()
+        inst_id = inst_ref["id"]
 
-        # start test
-        self.stubs.Set(time, 'sleep', lambda t: None)
+        self.mox.ReplayAll()
         self.assertRaises(exception.FixedIpNotFoundForInstance,
-                          self.compute.pre_live_migration,
-                          c, inst_ref['id'])
-        # cleanup
-        db.instance_destroy(c, inst_ref['uuid'])
+                          self.compute.pre_live_migration, context, inst_id)
 
     def test_pre_live_migration_works_correctly(self):
         """Confirm setup_compute_volume is called when volume is mounted."""
@@ -1401,16 +1495,18 @@ class ComputeTestCase(BaseTestCase):
                                                           spectacular=True)
         self.stubs.Set(nova.compute.manager.ComputeManager,
                        '_get_instance_nw_info', stupid)
+
         # creating instance testdata
         inst_ref = self._create_fake_instance({'host': 'dummy'})
+        inst_id = inst_ref['id']
         c = context.get_admin_context()
+        nw_info = fake_network.fake_get_instance_nw_info(self.stubs)
 
         # creating mocks
         self.mox.StubOutWithMock(self.compute.driver, 'pre_live_migration')
-        self.compute.driver.pre_live_migration({'block_device_mapping': []})
-        nw_info = fake_network.fake_get_instance_nw_info(self.stubs)
-        self.mox.StubOutWithMock(self.compute.driver, 'plug_vifs')
-        self.compute.driver.plug_vifs(mox.IsA(inst_ref), nw_info)
+        self.compute.driver.pre_live_migration(mox.IsA(c), mox.IsA(inst_ref),
+                                               {'block_device_mapping': []},
+                                               mox.IgnoreArg())
         self.mox.StubOutWithMock(self.compute.driver,
                                  'ensure_filtering_rules_for_instance')
         self.compute.driver.ensure_filtering_rules_for_instance(
@@ -1418,7 +1514,7 @@ class ComputeTestCase(BaseTestCase):
 
         # start test
         self.mox.ReplayAll()
-        ret = self.compute.pre_live_migration(c, inst_ref['id'])
+        ret = self.compute.pre_live_migration(c, inst_id)
         self.assertEqual(ret, None)
 
         # cleanup
@@ -1428,13 +1524,15 @@ class ComputeTestCase(BaseTestCase):
         """Confirm exception when pre_live_migration fails."""
         # creating instance testdata
         inst_ref = self._create_fake_instance({'host': 'dummy'})
+        inst_uuid = inst_ref['uuid']
+        inst_id = inst_ref['id']
 
         c = context.get_admin_context()
         topic = rpc.queue_get_for(c, FLAGS.compute_topic, inst_ref['host'])
 
         # creating volume testdata
         volume_id = db.volume_create(c, {'size': 1})['id']
-        values = {'instance_uuid': inst_ref['uuid'], 'device_name': '/dev/vdc',
+        values = {'instance_uuid': inst_uuid, 'device_name': '/dev/vdc',
                   'delete_on_termination': False, 'volume_id': volume_id}
         db.block_device_mapping_create(c, values)
 
@@ -1442,60 +1540,60 @@ class ComputeTestCase(BaseTestCase):
         self.mox.StubOutWithMock(rpc, 'call')
         rpc.call(c, FLAGS.volume_topic,
                  {"method": "check_for_export",
-                  "args": {'instance_id': inst_ref['id']}})
+                  "args": {'instance_id': inst_id}})
 
-        self.mox.StubOutWithMock(self.compute.driver, 'get_instance_disk_info')
+        self.mox.StubOutWithMock(self.compute.driver,
+                                 'get_instance_disk_info')
         self.compute.driver.get_instance_disk_info(inst_ref.name)
 
-        rpc.call(c, topic,
-                 {"method": "pre_live_migration",
-                  "args": {'instance_id': inst_ref['id'],
-                           'block_migration': True,
-                           'disk': None},
-                  "version": compute_rpcapi.ComputeAPI.BASE_RPC_API_VERSION
-                 }, None).AndRaise(rpc.common.RemoteError('', '', ''))
+        self.mox.StubOutWithMock(self.compute.compute_rpcapi,
+                                 'pre_live_migration')
+        self.compute.compute_rpcapi.pre_live_migration(c, mox.IsA(inst_ref),
+            True, None, inst_ref['host']).AndRaise(
+                                        rpc.common.RemoteError('', '', ''))
 
         # mocks for rollback
         rpc.call(c, 'network', {'method': 'setup_networks_on_host',
-                                'args': {'instance_id': inst_ref['id'],
+                                'args': {'instance_id': inst_id,
                                          'host': self.compute.host,
                                          'teardown': False}})
         rpc.call(c, topic,
                 {"method": "remove_volume_connection",
-                 "args": {'instance_id': inst_ref['id'],
+                 "args": {'instance_id': inst_id,
                           'volume_id': volume_id},
-                 "version": compute_rpcapi.ComputeAPI.BASE_RPC_API_VERSION},
-                None)
-        rpc.cast(c, topic, {"method": "rollback_live_migration_at_destination",
-                            "args": {'instance_id': inst_ref['id']}})
+                 "version": "1.0"}, None)
+        rpc.cast(c, topic,
+                {"method": "rollback_live_migration_at_destination",
+                 "args": {'instance_id': inst_id},
+                 "version": "1.0"})
 
         # start test
         self.mox.ReplayAll()
         self.assertRaises(rpc_common.RemoteError,
                           self.compute.live_migration,
-                          c, inst_ref['id'], inst_ref['host'], True)
+                          c, inst_id, inst_ref['host'], True)
 
         # cleanup
         for bdms in db.block_device_mapping_get_all_by_instance(
-            c, inst_ref['uuid']):
+            c, inst_uuid):
             db.block_device_mapping_destroy(c, bdms['id'])
         db.volume_destroy(c, volume_id)
-        db.instance_destroy(c, inst_ref['uuid'])
+        db.instance_destroy(c, inst_uuid)
 
     def test_live_migration_works_correctly(self):
         """Confirm live_migration() works as expected correctly."""
         # creating instance testdata
-        instance = self._create_fake_instance({'host': 'dummy'})
-        instance_id = instance['id']
         c = context.get_admin_context()
-        inst_ref = db.instance_get(c, instance_id)
-        topic = rpc.queue_get_for(c, FLAGS.compute_topic, inst_ref['host'])
+        inst_ref = self._create_fake_instance({'host': 'dummy'})
+        inst_uuid = inst_ref['uuid']
+        inst_id = inst_ref['id']
 
         # create
         self.mox.StubOutWithMock(rpc, 'call')
+        topic = rpc.queue_get_for(c, FLAGS.compute_topic, inst_ref['host'])
         rpc.call(c, topic,
                 {"method": "pre_live_migration",
-                 "args": {'instance_id': instance_id,
+                 "args": {'instance_id': inst_id,
                           'block_migration': False,
                           'disk': None},
                  "version": compute_rpcapi.ComputeAPI.BASE_RPC_API_VERSION},
@@ -1503,11 +1601,11 @@ class ComputeTestCase(BaseTestCase):
 
         # start test
         self.mox.ReplayAll()
-        ret = self.compute.live_migration(c, inst_ref['id'], inst_ref['host'])
+        ret = self.compute.live_migration(c, inst_id, inst_ref['host'])
         self.assertEqual(ret, None)
 
         # cleanup
-        db.instance_destroy(c, instance['uuid'])
+        db.instance_destroy(c, inst_uuid)
 
     def test_post_live_migration_working_correctly(self):
         """Confirm post_live_migration() works as expected correctly."""
@@ -1516,40 +1614,40 @@ class ComputeTestCase(BaseTestCase):
 
         # creating testdata
         c = context.get_admin_context()
-        instance = self._create_fake_instance({
-                        'state_description': 'migrating',
-                        'state': power_state.PAUSED})
-        instance_id = instance['id']
-        i_ref = db.instance_get(c, instance_id)
-        db.instance_update(c, i_ref['uuid'],
+        inst_ref = self._create_fake_instance({
+                                'state_description': 'migrating',
+                                'state': power_state.PAUSED})
+        inst_uuid = inst_ref['uuid']
+        inst_id = inst_ref['id']
+
+        db.instance_update(c, inst_uuid,
                            {'task_state': task_states.MIGRATING,
                             'power_state': power_state.PAUSED})
-        v_ref = db.volume_create(c, {'size': 1, 'instance_id': instance_id})
+        v_ref = db.volume_create(c, {'size': 1, 'instance_id': inst_id})
         fix_addr = db.fixed_ip_create(c, {'address': '1.1.1.1',
-                                          'instance_id': instance_id})
+                                          'instance_id': inst_id})
         fix_ref = db.fixed_ip_get_by_address(c, fix_addr)
         db.floating_ip_create(c, {'address': flo_addr,
                                   'fixed_ip_id': fix_ref['id']})
 
         # creating mocks
         self.mox.StubOutWithMock(self.compute.driver, 'unfilter_instance')
-        self.compute.driver.unfilter_instance(i_ref, [])
+        self.compute.driver.unfilter_instance(inst_ref, [])
         self.mox.StubOutWithMock(rpc, 'call')
         rpc.call(c, rpc.queue_get_for(c, FLAGS.compute_topic, dest),
             {"method": "post_live_migration_at_destination",
-             "args": {'instance_id': i_ref['id'], 'block_migration': False},
-             "version": compute_rpcapi.ComputeAPI.BASE_RPC_API_VERSION},
-            None)
+             "args": {'instance_id': inst_id, 'block_migration': False},
+             "version": "1.0"}, None)
         self.mox.StubOutWithMock(self.compute.driver, 'unplug_vifs')
-        self.compute.driver.unplug_vifs(i_ref, [])
+        self.compute.driver.unplug_vifs(inst_ref, [])
         rpc.call(c, 'network', {'method': 'setup_networks_on_host',
-                                'args': {'instance_id': instance_id,
+                                'args': {'instance_id': inst_id,
                                          'host': self.compute.host,
                                          'teardown': True}})
 
         # start test
         self.mox.ReplayAll()
-        self.compute.post_live_migration(c, i_ref, dest)
+        self.compute.post_live_migration(c, inst_ref, dest)
 
         # make sure floating ips are rewritten to destinatioin hostname.
         flo_refs = db.floating_ip_get_all_by_host(c, dest)
@@ -1557,7 +1655,7 @@ class ComputeTestCase(BaseTestCase):
         self.assertEqual(flo_refs[0]['address'], flo_addr)
 
         # cleanup
-        db.instance_destroy(c, instance['uuid'])
+        db.instance_destroy(c, inst_uuid)
         db.volume_destroy(c, v_ref['id'])
         db.floating_ip_destroy(c, flo_addr)
 
@@ -3661,7 +3759,7 @@ def _create_service_entries(context, values={'avail_zone1': ['fake_host1',
     return values
 
 
-class ComputeAPIAggrTestCase(test.TestCase):
+class ComputeAPIAggrTestCase(BaseTestCase):
     """This is for unit coverage of aggregate-related methods
     defined in nova.compute.api."""
 
@@ -3679,6 +3777,7 @@ class ComputeAPIAggrTestCase(test.TestCase):
                           self.context, 'fake_aggr', 'fake_avail_zone')
 
     def test_update_aggregate_metadata(self):
+        """Ensure metadata can be updated"""
         _create_service_entries(self.context, {'fake_zone': ['fake_host']})
         aggr = self.api.create_aggregate(self.context, 'fake_aggregate',
                                          'fake_zone')
@@ -3699,8 +3798,8 @@ class ComputeAPIAggrTestCase(test.TestCase):
         self.api.delete_aggregate(self.context, aggr['id'])
         expected = db.aggregate_get(self.context.elevated(read_deleted='yes'),
                                     aggr['id'])
-        self.assertNotEqual(aggr['operational_state'],
-                            expected['operational_state'])
+        self.assertRaises(exception.AggregateNotFound,
+                          self.api.delete_aggregate, self.context, aggr['id'])
 
     def test_delete_non_empty_aggregate(self):
         """Ensure InvalidAggregateAction is raised when non empty aggregate."""
@@ -3721,7 +3820,7 @@ class ComputeAPIAggrTestCase(test.TestCase):
                                          'fake_aggregate', fake_zone)
         aggr = self.api.add_host_to_aggregate(self.context,
                                               aggr['id'], fake_host)
-        self.assertEqual(aggr['operational_state'], aggregate_states.CHANGING)
+        self.assertEqual(len(aggr['hosts']), 1)
 
     def test_add_host_to_aggregate_multiple(self):
         """Ensure we can add multiple hosts to an aggregate."""
@@ -3729,57 +3828,10 @@ class ComputeAPIAggrTestCase(test.TestCase):
         fake_zone = values.keys()[0]
         aggr = self.api.create_aggregate(self.context,
                                          'fake_aggregate', fake_zone)
-        # let's mock the fact that the aggregate is active already!
-        status = {'operational_state': aggregate_states.ACTIVE}
-        db.aggregate_update(self.context, aggr['id'], status)
         for host in values[fake_zone]:
             aggr = self.api.add_host_to_aggregate(self.context,
                                                   aggr['id'], host)
         self.assertEqual(len(aggr['hosts']), len(values[fake_zone]))
-        self.assertEqual(aggr['operational_state'],
-                         aggregate_states.ACTIVE)
-
-    def test_add_host_to_aggregate_invalid_changing_status(self):
-        """Ensure InvalidAggregateAction is raised when adding host while
-        aggregate is not ready."""
-        values = _create_service_entries(self.context)
-        fake_zone = values.keys()[0]
-        fake_host = values[fake_zone][0]
-        aggr = self.api.create_aggregate(self.context,
-                                         'fake_aggregate', fake_zone)
-        aggr = self.api.add_host_to_aggregate(self.context,
-                                              aggr['id'], fake_host)
-        self.assertEqual(aggr['operational_state'],
-                             aggregate_states.CHANGING)
-        self.assertRaises(exception.InvalidAggregateAction,
-                          self.api.add_host_to_aggregate, self.context,
-                          aggr['id'], fake_host)
-
-    def test_add_host_to_aggregate_invalid_dismissed_status(self):
-        """Ensure InvalidAggregateAction is raised when aggregate is
-        deleted."""
-        _create_service_entries(self.context, {'fake_zone': ['fake_host']})
-        aggr = self.api.create_aggregate(self.context,
-                                         'fake_aggregate', 'fake_zone')
-        # let's mock the fact that the aggregate is dismissed!
-        status = {'operational_state': aggregate_states.DISMISSED}
-        db.aggregate_update(self.context, aggr['id'], status)
-        self.assertRaises(exception.InvalidAggregateAction,
-                          self.api.add_host_to_aggregate, self.context,
-                          aggr['id'], 'fake_host')
-
-    def test_add_host_to_aggregate_invalid_error_status(self):
-        """Ensure InvalidAggregateAction is raised when aggregate is
-        in error."""
-        _create_service_entries(self.context, {'fake_zone': ['fake_host']})
-        aggr = self.api.create_aggregate(self.context,
-                                         'fake_aggregate', 'fake_zone')
-        # let's mock the fact that the aggregate is in error!
-        status = {'operational_state': aggregate_states.ERROR}
-        db.aggregate_update(self.context, aggr['id'], status)
-        self.assertRaises(exception.InvalidAggregateAction,
-                          self.api.add_host_to_aggregate, self.context,
-                          aggr['id'], 'fake_host')
 
     def test_add_host_to_aggregate_zones_mismatch(self):
         """Ensure InvalidAggregateAction is raised when zones don't match."""
@@ -3806,9 +3858,6 @@ class ComputeAPIAggrTestCase(test.TestCase):
         fake_zone = values.keys()[0]
         aggr = self.api.create_aggregate(self.context,
                                          'fake_aggregate', fake_zone)
-        # let's mock the fact that the aggregate is active already!
-        status = {'operational_state': aggregate_states.ACTIVE}
-        db.aggregate_update(self.context, aggr['id'], status)
         for host in values[fake_zone]:
             aggr = self.api.add_host_to_aggregate(self.context,
                                                   aggr['id'], host)
@@ -3816,55 +3865,6 @@ class ComputeAPIAggrTestCase(test.TestCase):
                                                        aggr['id'],
                                                        values[fake_zone][0])
         self.assertEqual(len(aggr['hosts']) - 1, len(expected['hosts']))
-        self.assertEqual(expected['operational_state'],
-                         aggregate_states.ACTIVE)
-
-    def test_remove_host_from_aggregate_error(self):
-        """Ensure we can remove a host from an aggregate even if in error."""
-        values = _create_service_entries(self.context)
-        fake_zone = values.keys()[0]
-        aggr = self.api.create_aggregate(self.context,
-                                         'fake_aggregate', fake_zone)
-        # let's mock the fact that the aggregate is ready!
-        status = {'operational_state': aggregate_states.ACTIVE}
-        db.aggregate_update(self.context, aggr['id'], status)
-        for host in values[fake_zone]:
-            aggr = self.api.add_host_to_aggregate(self.context,
-                                                  aggr['id'], host)
-        # let's mock the fact that the aggregate is in error!
-        status = {'operational_state': aggregate_states.ERROR}
-        expected = self.api.remove_host_from_aggregate(self.context,
-                                                       aggr['id'],
-                                                       values[fake_zone][0])
-        self.assertEqual(len(aggr['hosts']) - 1, len(expected['hosts']))
-        self.assertEqual(expected['operational_state'],
-                         aggregate_states.ACTIVE)
-
-    def test_remove_host_from_aggregate_invalid_dismissed_status(self):
-        """Ensure InvalidAggregateAction is raised when aggregate is
-        deleted."""
-        _create_service_entries(self.context, {'fake_zone': ['fake_host']})
-        aggr = self.api.create_aggregate(self.context,
-                                         'fake_aggregate', 'fake_zone')
-        # let's mock the fact that the aggregate is dismissed!
-        status = {'operational_state': aggregate_states.DISMISSED}
-        db.aggregate_update(self.context, aggr['id'], status)
-        self.assertRaises(exception.InvalidAggregateAction,
-                          self.api.remove_host_from_aggregate, self.context,
-                          aggr['id'], 'fake_host')
-
-    def test_remove_host_from_aggregate_invalid_changing_status(self):
-        """Ensure InvalidAggregateAction is raised when aggregate is
-        changing."""
-        _create_service_entries(self.context, {'fake_zone': ['fake_host']})
-        aggr = self.api.create_aggregate(self.context,
-                                         'fake_aggregate', 'fake_zone')
-        # let's mock the fact that the aggregate is changing!
-        status = {'operational_state': aggregate_states.CHANGING}
-        db.aggregate_update(self.context, aggr['id'], status)
-        self.assertRaises(exception.InvalidAggregateAction,
-                          self.api.remove_host_from_aggregate, self.context,
-                          aggr['id'], 'fake_host')
 
     def test_remove_host_from_aggregate_raise_not_found(self):
         """Ensure ComputeHostNotFound is raised when removing invalid host."""
@@ -3884,7 +3884,7 @@ class ComputeAggrTestCase(BaseTestCase):
         super(ComputeAggrTestCase, self).setUp()
         self.context = context.get_admin_context()
         values = {'name': 'test_aggr',
-                  'availability_zone': 'test_zone', }
+                  'availability_zone': 'test_zone'}
         self.aggr = db.aggregate_create(self.context, values)
 
     def test_add_aggregate_host(self):
@@ -3897,24 +3897,6 @@ class ComputeAggrTestCase(BaseTestCase):
         self.compute.add_aggregate_host(self.context, self.aggr.id, "host")
         self.assertTrue(fake_driver_add_to_aggregate.called)
 
-    def test_add_aggregate_host_raise_err(self):
-        """Ensure the undo operation works correctly on add."""
-        def fake_driver_add_to_aggregate(context, aggregate, host):
-            raise exception.AggregateError
-        self.stubs.Set(self.compute.driver, "add_to_aggregate",
-                       fake_driver_add_to_aggregate)
-
-        state = {'operational_state': aggregate_states.ACTIVE}
-        db.aggregate_update(self.context, self.aggr.id, state)
-        db.aggregate_host_add(self.context, self.aggr.id, 'fake_host')
-
-        self.assertRaises(exception.AggregateError,
-                          self.compute.add_aggregate_host,
-                          self.context, self.aggr.id, "fake_host")
-        excepted = db.aggregate_get(self.context, self.aggr.id)
-        self.assertEqual(excepted.operational_state, aggregate_states.ERROR)
-        self.assertEqual(excepted.hosts, [])
-
     def test_remove_aggregate_host(self):
         def fake_driver_remove_from_aggregate(context, aggregate, host):
             fake_driver_remove_from_aggregate.called = True
@@ -3925,23 +3907,6 @@ class ComputeAggrTestCase(BaseTestCase):
 
         self.compute.remove_aggregate_host(self.context, self.aggr.id, "host")
         self.assertTrue(fake_driver_remove_from_aggregate.called)
-
-    def test_remove_aggregate_host_raise_err(self):
-        """Ensure the undo operation works correctly on remove."""
-        def fake_driver_remove_from_aggregate(context, aggregate, host):
-            raise exception.AggregateError
-        self.stubs.Set(self.compute.driver, "remove_from_aggregate",
-                       fake_driver_remove_from_aggregate)
-
-        state = {'operational_state': aggregate_states.ACTIVE}
-        db.aggregate_update(self.context, self.aggr.id, state)
-
-        self.assertRaises(exception.AggregateError,
-                          self.compute.remove_aggregate_host,
-                          self.context, self.aggr.id, "fake_host")
-        excepted = db.aggregate_get(self.context, self.aggr.id)
-        self.assertEqual(excepted.operational_state, aggregate_states.ERROR)
-        self.assertEqual(excepted.hosts, ['fake_host'])
 
 
 class ComputePolicyTestCase(BaseTestCase):

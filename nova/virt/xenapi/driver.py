@@ -410,10 +410,6 @@ class XenAPIDriver(driver.ComputeDriver):
             LOG.info(_('Compute_service record updated for %s ') % host)
             db.compute_node_update(ctxt, compute_node_ref[0]['id'], dic)
 
-    def compare_cpu(self, xml):
-        """This method is supported only by libvirt."""
-        raise NotImplementedError('This method is supported only by libvirt.')
-
     def ensure_filtering_rules_for_instance(self, instance_ref, network_info):
         """This method is supported only libvirt."""
         # NOTE(salvatore-orlando): it enforces security groups on
@@ -492,6 +488,12 @@ class XenAPIDriver(driver.ComputeDriver):
         """Remove a compute host from an aggregate."""
         return self._pool.remove_from_aggregate(context,
                                                 aggregate, host, **kwargs)
+
+    def undo_aggregate_operation(self, context, op, aggregate_id,
+                                  host, set_error=True):
+        """Undo aggregate operation when pool error raised"""
+        return self._pool.undo_aggregate_operation(context, op,
+                aggregate_id, host, set_error)
 
     def legacy_nwinfo(self):
         """
