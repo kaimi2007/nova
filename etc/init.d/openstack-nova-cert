@@ -1,0 +1,105 @@
+#!/bin/bash
+
+#
+# nova-cert  OpenStack Nova Cert Worker
+#
+# chkconfig: 2345 98 04
+# description:
+#
+# config: /etc/nova/nova.conf
+# pidfile: /var/run/nova/nova-compute.pid
+
+### BEGIN INIT INFO
+# Provides: nova-cert
+# Required-Start: $local_fs $network $syslog
+# Required-Stop: $local_fs $syslog
+# Should-Start: $syslog
+# Should-Stop: $network $syslog
+# Default-Start: 3 4 5
+# Default-Stop: 0 2 1 6
+# Short-Description: OpenStack Nova Cert Worker
+#
+### END INIT INFO
+
+# Source function library.
+. /etc/init.d/functions
+
+prog="OpenStack Nova Cert Worker"
+suffix="cert"
+flgfile=/etc/nova/nova.conf
+logfile=/var/log/nova/nova-$suffix.log
+pidfile=/var/run/nova/nova-$suffix.pid
+lckfile=/var/lock/subsys/nova-$suffix
+binfile=/usr/local/nova/bin/nova-$suffix
+
+start() {
+    __pids_var_run "$binfile" "$pidfile"
+    retval=$?
+    if [ $retval -eq 0 ]; then
+        cmd=${binfile##*/}
+        echo -n "$cmd is already running (pid $pid)";
+        passed
+        echo
+        return
+    fi
+
+    echo -n "Starting $prog: "
+    cd /var/lib/nova
+    /sbin/start-stop-daemon --start -b -c nova:nobody --make-pidfile --pidfile $pidfile --exec $binfile -- --flagfile=$flgfile --logfile=$logfile
+    sleep 1
+
+    __pids_var_run "$binfile" "$pidfile"
+    retval=$?
+    if [ $retval -eq 0 ]; then
+        touch $lckfile
+        success
+    else
+        failure
+    fi
+    echo
+}
+
+stop() {
+    echo -n "Stopping $prog: "
+    killproc -p $pidfile $binfile
+    retval=$?
+    echo
+    [ $retval -eq 0 ] && rm -f $lckfile $pidfile
+}
+
+restart() {
+    stop
+    start
+}
+
+case "$1" in
+    start)
+        start
+    ;;
+    stop)
+        stop
+    ;;
+    status)
+        status -p $pidfile $binfile
+        retval=$?
+        if [ $retval -eq 3 -a -f $lckfile ]; then
+            retval=2
+        fi
+    ;;
+    restart)
+        restart
+    ;;
+    force-reload)
+        restart
+    ;;
+    condrestart)
+        if [ -n "`pidofproc-p$pidfile$binfile`" ]; then
+            restart
+        fi
+    ;;
+    *)
+        echo "Usage: service nova-$suffix{start|stop|status|restart|force-reload|condrestart}"
+        exit 1
+    ;;
+esac
+exit $retval

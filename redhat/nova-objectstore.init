@@ -1,0 +1,87 @@
+#!/bin/bash
+
+#
+# nova-objectstore      OpenStack Nova Object Storage
+#
+# chkconfig: 2345 96 04
+# description: Implementation of an S3-like storage server based on local files.
+#
+# config: /etc/nova/nova.conf
+# pidfile: /var/run/nova/nova-objectstore.pid
+
+### BEGIN INIT INFO
+# Provides: nova-objectstore
+# Required-Start: $local_fs $network $syslog
+# Required-Stop: $local_fs $syslog
+# Should-Start: $syslog
+# Should-Stop: $network $syslog
+# Default-Start: 3 4 5
+# Default-Stop: 0 2 1 6
+# Short-Description: OpenStack Nova Object Storage
+# Description: Implementation of an S3-like storage server based on local files.
+### END INIT INFO
+
+# Source function library.
+. /etc/init.d/functions
+
+prog="OpenStack Nova Object Storage"
+suffix="objectstore"
+flgfile=/etc/nova/nova.conf
+logfile=/var/log/nova/nova-$suffix.log
+pidfile=/var/run/nova/nova-$suffix.pid
+lockfile=/var/lock/subsys/nova-$suffix
+binfile=/usr/bin/nova-$suffix
+daemonuser=nova
+
+start() {
+    echo -n "Starting $prog: "
+    start-stop-daemon --start --oknodo --background --chuid $daemonuser --make-pidfile --pidfile $pidfile --startas $binfile --
+    retval=$?
+    [ $retval -eq 0 ] && success || failure
+    echo
+    [ $retval -eq 0 ] && touch $lockfile
+    return $retval
+}
+
+stop() {
+    echo -n "Stopping $prog: "
+    start-stop-daemon --stop --oknodo --pidfile $pidfile
+    retval=$?
+    [ $retval -eq 0 ] && success || failure
+    echo
+    [ $retval -eq 0 ] && rm -f $lockfile $pidfile
+    return $?
+}
+
+rh_status() {
+    status -p $pidfile $binfile
+}
+
+restart() {
+    stop
+    start
+}
+
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    status)
+        rh_status
+        ;;
+    restart)
+        restart
+        ;;
+    condrestart|try-restart)
+        [ -f $lockfile ] && restart
+        ;;
+    *)
+        echo "Usage: service $(basename $0) {start|stop|status|restart|condrestart|try-restart}"
+        exit 1
+        ;;
+esac
+
+exit $?
