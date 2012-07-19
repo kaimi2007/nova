@@ -1,5 +1,5 @@
 copy: redhat/*
-copy: nova.conf
+#copy: nova.conf
 copy: etc/init.d/*
 copy: patches/* 
 tar.gz: . name=nova-@version@
