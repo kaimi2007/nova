@@ -85,7 +85,7 @@ BuildRequires:    python-sqlalchemy
 BuildRequires:    python-tornado
 BuildRequires:    python-webob
 BuildRequires:    intltool
-BuildRequires:    python-distutils-extra >= 1:2.29
+#BuildRequires:    python-distutils-extra >= 1:2.29
 
 Requires:         python-nova  = %{epoch}:%{version}-%{release}
 Requires:         sudo
