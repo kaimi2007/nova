@@ -672,10 +672,10 @@ class LibvirtConnection(driver.ComputeDriver):
         target = os.path.join(FLAGS.instances_path, instance['name'])
         LOG.info(_('Deleting instance files %(target)s') % locals(),
                  instance=instance)
-        if FLAGS.libvirt_type == 'lxc':
-            disk.destroy_container(self.container)
         if FLAGS.connection_type == 'gpu':
             self.deassign_gpus(instance)
+            #disk.destroy_container(self.container)
+        if FLAGS.libvirt_type == 'lxc':
             disk.destroy_container(self.container)
         if os.path.exists(target):
             shutil.rmtree(target)
