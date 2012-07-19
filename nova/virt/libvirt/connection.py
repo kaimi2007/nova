@@ -1031,14 +1031,35 @@ class LibvirtConnection(driver.ComputeDriver):
         # Find the disk
         xml_desc = virt_dom.XMLDesc(0)
         domain = ElementTree.fromstring(xml_desc)
-        source = domain.find('devices/disk/source')
-        disk_path = source.get('file')
+        (state, _max_mem, _mem, _cpus, _t) = virt_dom.info()
+        if FLAGS.libvirt_type != 'lxc' or FLAGS.use_cow_images == True:
+            source = domain.find('devices/disk/source')
+            disk_path = source.get('file')
+            if state == power_state.RUNNING:
+                virt_dom.managedSave(0)
 
         snapshot_name = uuid.uuid4().hex
 
-        (state, _max_mem, _mem, _cpus, _t) = virt_dom.info()
-        if state == power_state.RUNNING:
-            virt_dom.managedSave(0)
+
+        if FLAGS.libvirt_type == 'lxc' and FLAGS.use_cow_images == False:
+            source = domain.find('devices/filesystem/source')
+            disk_path = source.get('dir')
+            disk_path = disk_path[0:disk_path.rfind('rootfs')]
+            LOG.info(_('dkang: disk_path = %s '), disk_path)
+            # hacking because snapshot is not supported for raw image
+            if FLAGS.use_cow_images == False:
+                qemu_img_cmd = ('qemu-img',
+                                'convert',
+                                '-f',
+                                'raw',
+                                '-O',
+                                'qcow2',
+                                disk_path + 'disk',
+                                disk_path + 'disk.qcow2')
+                libvirt_utils.execute(*qemu_img_cmd, run_as_root=True) 
+                disk_path = disk_path + 'disk.qcow2'
+                source_format = 'qcow2'
+
         # Make the snapshot
         libvirt_utils.create_snapshot(disk_path, snapshot_name)
 
@@ -1051,8 +1072,9 @@ class LibvirtConnection(driver.ComputeDriver):
                                                image_format)
             finally:
                 libvirt_utils.delete_snapshot(disk_path, snapshot_name)
-                if state == power_state.RUNNING:
-                    virt_dom.create()
+                if FLAGS.libvirt_type != 'lxc' or FLAGS.use_cow_images == True:
+                    if state == power_state.RUNNING:
+                        virt_dom.create()
 
             # Upload that image to the image service
             with libvirt_utils.file_open(out_path) as image_file:
