@@ -382,6 +382,7 @@ install -d -m 755 %{buildroot}%{_sharedstatedir}/nova/tmp
 install -d -m 755 %{buildroot}%{_localstatedir}/log/nova
 cp -rp nova/CA %{buildroot}%{_sharedstatedir}/nova
 #AP: move the /etc/rc.d/init.d scirpts 
+install -d -m 755 %{buildroot}%{_initrddir}
 install -p -D -m 755 etc/rc.d/init.d/* %{buildroot}%{_initrddir}/
 rm -rf %{buildroot}%{_initrddir}/openstack-nova-ajax-console-proxy
 
