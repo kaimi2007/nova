@@ -39,7 +39,8 @@ Source19:         %{prj}-xvpvncproxy.init
 Source20:         openstack-nova-sudoers
 Source21:         %{short_name}-polkit.pkla
 Source22:         %{short_name}-rhel-ifc-template
-Source23:         nova.conf
+#AP: moved nova.conf to ./etc/nova/ in the repo
+#Source23:         nova.conf
 Source25:         %{prj}-api-os-compute.init
 Source26:         %{prj}-api-os-volume.init
 #Source28:         api-paste.ini
@@ -367,8 +368,10 @@ install -d -m 755 %{buildroot}%{_localstatedir}/run/nova
 install -d -m 755 %{buildroot}%{_localstatedir}/lock/nova
 
 install -d -m 755 %{buildroot}%{_sysconfdir}/nova
-install -p -D -m 600 etc/nova/* %{SOURCE23} %{buildroot}%{_sysconfdir}/nova/
-
+#AP: since we moved nova.conf to inside of ./etc/nova/ inside the repository,
+#no need to move SOURCE23 explicitly anymore
+#install -p -D -m 600 etc/nova/* %{SOURCE23} %{buildroot}%{_sysconfdir}/nova/
+install -p -D -m 600 etc/nova/* %{buildroot}%{_sysconfdir}/nova/
 install -d -m 755 %{buildroot}%{_sharedstatedir}/nova
 install -d -m 755 %{buildroot}%{_sharedstatedir}/nova/images
 install -d -m 755 %{buildroot}%{_sharedstatedir}/nova/instances
@@ -437,7 +440,9 @@ install -p -D -m 644 nova/virt/libvirt.xml.template %{buildroot}%{_datarootdir}/
 
 #KDS install nova.conf
 #KDS change permissions from 600
-install -p -D -m 644 %{SOURCE23} %{buildroot}%{_sysconfdir}/nova/nova.conf
+#AP: using chmod
+#install -p -D -m 644 %{SOURCE23} %{buildroot}%{_sysconfdir}/nova/nova.conf
+chmod 644  %{buildroot}%{_sysconfdir}/nova/nova.conf
 
 # Network configuration templates for injection engine
 install -d -m 755 %{buildroot}%{_datarootdir}/nova/interfaces
