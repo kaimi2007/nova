@@ -176,7 +176,7 @@ def checks_instance_lock(function):
                  context=context, instance_uuid=instance_uuid)
         LOG.info(_("check_instance_lock: arguments: |%(self)s| |%(context)s|")
                  % locals(), context=context, instance_uuid=instance_uuid)
-        locked = self.get_lock(context, instance_uuid)
+        locked = self._get_lock(context, instance_uuid)
         admin = context.is_admin
         LOG.info(_("check_instance_lock: locked: |%s|"), locked,
                  context=context, instance_uuid=instance_uuid)
@@ -249,6 +249,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         if not compute_driver:
             compute_driver = FLAGS.compute_driver
 
+        LOG.info(_("Loading compute driver '%s'") % compute_driver)
         try:
             self.driver = utils.check_isinstance(
                     importutils.import_object_ns('nova.virt', compute_driver),
@@ -1688,7 +1689,7 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @wrap_instance_fault
-    def get_lock(self, context, instance_uuid):
+    def _get_lock(self, context, instance_uuid):
         """Return the boolean state of the given instance's lock."""
         context = context.elevated()
         instance_ref = self.db.instance_get_by_uuid(context, instance_uuid)
