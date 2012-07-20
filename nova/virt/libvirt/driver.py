@@ -1113,6 +1113,8 @@ class LibvirtDriver(driver.ComputeDriver):
         if 'container_format' in base:
             metadata['container_format'] = base['container_format']
 
+        snapshot_name = uuid.uuid4().hex
+
         # Find the disk
         xml_desc = virt_dom.XMLDesc(0)
         domain = etree.fromstring(xml_desc)
@@ -1138,7 +1140,6 @@ class LibvirtDriver(driver.ComputeDriver):
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 x = p.communicate()
 
-        snapshot_name = uuid.uuid4().hex
 
         (state, _max_mem, _mem, _cpus, _t) = virt_dom.info()
         state = LIBVIRT_POWER_STATE[state]
