@@ -141,44 +141,44 @@ def _populate_instance_type_extra_specs(instance_types):
                    (name == 'm1.medium') or \
                    (name == 'm1.large') or \
                    (name == 'm1.xlarge'):
-                    extra_specs = dict(cpu_arch='s==x86_64',
-                                       hypervisor_type='s==QEMU')
+                    extra_specs = dict(cpu_arch='s== x86_64',
+                                       hypervisor_type='s== QEMU')
             elif (name == 'cg1.small'):
                     extra_specs = dict(
-                                      cpu_arch='s==x86_64',
-                                      gpu_arch='s==fermi',
-                                      gpus='=1',
-                                      hypervisor_type='s==LXC')
+                                      cpu_arch='s== x86_64',
+                                      gpu_arch='s== fermi',
+                                      gpus='= 1',
+                                      hypervisor_type='s== LXC')
             elif (name == 'cg1.medium'):
                     extra_specs = dict(
-                                      cpu_arch='s==x86_64',
-                                      gpu_arch='s==fermi',
-                                      gpus='=2',
-                                      hypervisor_type='s==LXC')
+                                      cpu_arch='s== x86_64',
+                                      gpu_arch='s== fermi',
+                                      gpus='= 2',
+                                      hypervisor_type='s== LXC')
             elif (name == 'cg1.large'):
                     extra_specs = dict(
-                                      cpu_arch='s==x86_64',
-                                      gpu_arch='s==fermi',
-                                      gpus='=3',
-                                      hypervisor_type='s==LXC')
+                                      cpu_arch='s== x86_64',
+                                      gpu_arch='s== fermi',
+                                      gpus='= 3',
+                                      hypervisor_type='s== LXC')
             elif (name == 'cg1.xlarge'):
                     extra_specs = dict(
-                                      cpu_arch='s==x86_64',
-                                      gpu_arch='s==fermi',
-                                      gpus='=4',
-                                      hypervisor_type='s==LXC')
+                                      cpu_arch='s== x86_64',
+                                      gpu_arch='s== fermi',
+                                      gpus='= 4',
+                                      hypervisor_type='s== LXC')
             elif (name == 'cg1.2xlarge'):
                     extra_specs = dict(
-                                      cpu_arch='s==x86_64',
-                                      gpu_arch='s==fermi',
-                                      gpus='=4',
-                                      hypervisor_type='s==LXC')
+                                      cpu_arch='s== x86_64',
+                                      gpu_arch='s== fermi',
+                                      gpus='= 4',
+                                      hypervisor_type='s== LXC')
             elif (name == 'cg1.4xlarge'):
                     extra_specs = dict(
-                                      cpu_arch='s==x86_64',
-                                      gpu_arch='s==fermi',
-                                      gpus='=4',
-                                      hypervisor_type='s==LXC')
+                                      cpu_arch='s== x86_64',
+                                      gpu_arch='s== fermi',
+                                      gpus='= 4',
+                                      hypervisor_type='s== LXC')
             elif (name == 'sh1.small') or  \
                      (name == 'sh1.medium') or \
                      (name == 'sh1.large') or \
@@ -189,13 +189,13 @@ def _populate_instance_type_extra_specs(instance_types):
                      (name == 'sh1.16xlarge') or \
                      (name == 'sh1.32xlarge'):
                     extra_specs = dict(
-                                      cpu_arch='s==x86_64',
-                                      system_type='s==UV',
-                                      hypervisor_type='s==QEMU')
+                                      cpu_arch='s== x86_64',
+                                      system_type='s== UV',
+                                      hypervisor_type='s== QEMU')
             elif (name == 'tp64.8x8'):
                     extra_specs = dict(
-                                      cpu_arch='s==tilepro64',
-                                      hypervisor_type='s==tilera_hv',
+                                      cpu_arch='s== tilepro64',
+                                      hypervisor_type='s== tilera_hv',
                                       vcores='=64')
 
             db.instance_type_extra_specs_update_or_create(

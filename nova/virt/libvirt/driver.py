@@ -367,14 +367,14 @@ class LibvirtDriver(driver.ComputeDriver):
             LOG.error(_('Nova requires libvirt version '
                         '%(major)i.%(minor)i.%(micro)i or greater.') %
                         locals())
+        context = nova_context.get_admin_context()
+        self._get_instance_type_extra_specs_capabilities(context)
         if FLAGS.connection_type == 'gpu':
             global gpus_available
             global num_gpus
             global gpu_arch
             global gpu_info
-            context = nova_context.get_admin_context()
 #            gpus_available = range(FLAGS.xpus)
-            self._get_instance_type_extra_specs_capabilities(context)
             if 'gpus' in extra_specs:
                 num_gpus = extra_specs['gpus']
                 gpus_available = range(int(extra_specs['gpus']))
@@ -3375,7 +3375,7 @@ class HostState(object):
                 extra_specs["gpus"] = int(len(gpus_available))
                 extra_specs["hypervisor_type"] = \
                           self.connection.get_hypervisor_type()
-            data.update({"instance_type_extra_specs": extra_specs})
+        data.update({"instance_type_extra_specs": extra_specs})
         data["disk_used"] = self.connection.get_local_gb_used()
         data["disk_available"] = data["disk_total"] - data["disk_used"]
         data["host_memory_total"] = self.connection.get_memory_mb_total()
