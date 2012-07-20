@@ -47,18 +47,19 @@ Source26:         %{prj}-api-os-volume.init
 Source29:         %{prj}-cert.init
 
 #KDS ISI's service files
-Source30:       openstack-nova-ajax-console-proxy
-Source31:       openstack-nova-api
-Source32:       openstack-nova-compute
-Source33:       openstack-nova-db-setup
-Source34:       openstack-nova-direct-api
-Source35:       openstack-nova-network
-Source36:       openstack-nova-objectstore
-Source37:       openstack-nova-scheduler
-#Source38:       openstack-nova-vncproxy
-Source39:       openstack-nova-volume
-Source40:	openstack-nova-cert
-#Source41:	dhcp_release
+#AP: these files have been moved inside repo, not required
+##Source30:       openstack-nova-ajax-console-proxy
+##Source31:       openstack-nova-api
+##Source32:       openstack-nova-compute
+##Source33:       openstack-nova-db-setup
+##Source34:       openstack-nova-direct-api
+##Source35:       openstack-nova-network
+##Source36:       openstack-nova-objectstore
+##Source37:       openstack-nova-scheduler
+##Source38:       openstack-nova-vncproxy
+##Source39:       openstack-nova-volume
+##Source40:	openstack-nova-cert
+##Source41:	dhcp_release
 
 #KDS
 %define usrlocaldir /usr/local
@@ -380,7 +381,9 @@ install -d -m 755 %{buildroot}%{_sharedstatedir}/nova/networks
 install -d -m 755 %{buildroot}%{_sharedstatedir}/nova/tmp
 install -d -m 755 %{buildroot}%{_localstatedir}/log/nova
 cp -rp nova/CA %{buildroot}%{_sharedstatedir}/nova
-
+#AP: move the /etc/rc.d/init.d scirpts 
+cp -rp etc/rc.init.d/* %{buildroot}%{_initrddir}/
+rm -rf %{buildroot}%{_initrddir}/openstack-nova-ajax-console-proxy
 
 #KDS use /usr/local/nova for installation
 install -d -m 755 %{buildroot}%{usrlocaldir}/nova
@@ -412,16 +415,17 @@ install -p -D -m 755 %{SOURCE19} %{buildroot}%{_initrddir}/%{prj}-xvpvncproxy
 
 #KDS Also copy ISI's files to /etc/init.d
 #install -p -D -m 755 %{SOURCE30} %{buildroot}%{_initrddir}/openstack-nova-ajax-console-proxy
-install -p -D -m 755 %{SOURCE31} %{buildroot}%{_initrddir}/openstack-nova-api
-install -p -D -m 755 %{SOURCE32} %{buildroot}%{_initrddir}/openstack-nova-compute
-install -p -D -m 755 %{SOURCE33} %{buildroot}%{_initrddir}/openstack-nova-db-setup
-install -p -D -m 755 %{SOURCE34} %{buildroot}%{_initrddir}/openstack-nova-direct-api
-install -p -D -m 755 %{SOURCE35} %{buildroot}%{_initrddir}/openstack-nova-network
-install -p -D -m 755 %{SOURCE36} %{buildroot}%{_initrddir}/openstack-nova-objectstore
-install -p -D -m 755 %{SOURCE37} %{buildroot}%{_initrddir}/openstack-nova-scheduler
+#AP: the init files have been moved to /etc/rc.d/init.d directory in the repo, these are not required
+##install -p -D -m 755 %{SOURCE31} %{buildroot}%{_initrddir}/openstack-nova-api
+##install -p -D -m 755 %{SOURCE32} %{buildroot}%{_initrddir}/openstack-nova-compute
+##install -p -D -m 755 %{SOURCE33} %{buildroot}%{_initrddir}/openstack-nova-db-setup
+##install -p -D -m 755 %{SOURCE34} %{buildroot}%{_initrddir}/openstack-nova-direct-api
+##install -p -D -m 755 %{SOURCE35} %{buildroot}%{_initrddir}/openstack-nova-network
+##install -p -D -m 755 %{SOURCE36} %{buildroot}%{_initrddir}/openstack-nova-objectstore
+##install -p -D -m 755 %{SOURCE37} %{buildroot}%{_initrddir}/openstack-nova-scheduler
 #install -p -D -m 755 %{SOURCE38} %{buildroot}%{_initrddir}/openstack-nova-vncproxy
-install -p -D -m 755 %{SOURCE39} %{buildroot}%{_initrddir}/openstack-nova-volume
-install -p -D -m 755 %{SOURCE40} %{buildroot}%{_initrddir}/openstack-nova-cert
+##install -p -D -m 755 %{SOURCE39} %{buildroot}%{_initrddir}/openstack-nova-volume
+##install -p -D -m 755 %{SOURCE40} %{buildroot}%{_initrddir}/openstack-nova-cert
 #KDS copy dhcp_release to /usr/bin
 #install -p -D -m 755 %{SOURCE41} %{buildroot}%{_bindir}/dhcp_release
 #cp -p %{SOURCE41} %{buildroot}%{_bindir}/
