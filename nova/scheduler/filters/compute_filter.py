@@ -1,4 +1,4 @@
-# Copyright (c) 2011 OpenStack, LLC.
+# Copyright (c) 2012 OpenStack, LLC.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -88,7 +88,7 @@ class ComputeFilter(filters.BaseHostFilter):
         return True
 
     def host_passes(self, host_state, filter_properties):
-        """Return a list of hosts that can create instance_type."""
+        """Returns True for only active compute nodes"""
         instance_type = filter_properties.get('instance_type')
         if host_state.topic != 'compute' or not instance_type:
             return True
@@ -100,10 +100,7 @@ class ComputeFilter(filters.BaseHostFilter):
                     "heard from in a while"), locals())
             return False
         if not capabilities.get("enabled", True):
-            LOG.debug(_("%(host_state)s is disabled via capabs"), locals())
-            return False
-        if not self._satisfies_extra_specs(capabilities, instance_type):
-            LOG.debug(_("%(host_state)s fails instance_type extra_specs "
-                    "requirements"), locals())
+            LOG.debug(_("%(host_state)s is disabled via capabilities"),
+                    locals())
             return False
         return True

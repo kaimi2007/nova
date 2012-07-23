@@ -651,6 +651,7 @@ class FloatingIpNotFoundForHost(FloatingIpNotFound):
 
 class NoMoreFloatingIps(FloatingIpNotFound):
     message = _("Zero floating ips available.")
+    safe = True
 
 
 class FloatingIpAssociated(NovaException):
@@ -1037,6 +1038,10 @@ class OnsetFileContentLimitExceeded(QuotaError):
 
 class KeypairLimitExceeded(QuotaError):
     message = _("Maximum number of key pairs exceeded")
+
+
+class SecurityGroupLimitExceeded(QuotaError):
+    message = _("Maximum number of security groups or rules exceeded")
 
 
 class AggregateError(NovaException):
