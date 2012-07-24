@@ -487,10 +487,8 @@ def snapshot_attached_here(session, instance, vm_ref, label):
 
 def _create_snapshot(session, instance, vm_ref, label):
     """Creates Snapshot (Template) VM, Snapshot VBD, Snapshot VDI,
-    Snapshot VHD"""
-    LOG.debug(_("Snapshotting with label '%(label)s'"), locals(),
-              instance=instance)
-
+    Snapshot VHD
+    """
     vm_vdi_ref, vm_vdi_rec = get_vdi_for_vm_safely(session, vm_ref)
 
     original_parent_uuid = _get_vhd_parent_uuid(session, vm_vdi_ref)
@@ -499,10 +497,15 @@ def _create_snapshot(session, instance, vm_ref, label):
     template_vdi_rec = get_vdi_for_vm_safely(session, template_vm_ref)[1]
     template_vdi_uuid = template_vdi_rec["uuid"]
 
-    LOG.debug(_('Created snapshot %(template_vm_ref)s'), locals(),
-              instance=instance)
+    LOG.debug(_("Created snapshot %(template_vdi_uuid)s with label"
+                " '%(label)s'"), locals(), instance=instance)
 
     sr_ref = vm_vdi_rec["SR"]
+
+    # NOTE(sirp): This rescan is necessary to ensure the VM's `sm_config`
+    # matches the underlying VHDs.
+    _scan_sr(session, sr_ref)
+
     parent_uuid, base_uuid = _wait_for_vhd_coalesce(
             session, instance, sr_ref, vm_vdi_ref, original_parent_uuid)
 
@@ -567,12 +570,16 @@ def upload_image(context, session, instance, vdi_uuids, image_id):
 
     glance_host, glance_port = glance.pick_glance_api_server()
 
+    # TODO(sirp): this inherit-image-property code should probably go in
+    # nova/compute/manager so it can be shared across hypervisors
     sys_meta = db.instance_system_metadata_get(context, instance['uuid'])
     properties = {}
     prefix = 'image_'
     for key, value in sys_meta.iteritems():
         if key.startswith(prefix):
             key = key[len(prefix):]
+        if key in FLAGS.non_inheritable_image_properties:
+            continue
         properties[key] = value
     properties['auto_disk_config'] = instance.auto_disk_config
     properties['os_type'] = instance.os_type or FLAGS.default_os_type
@@ -707,8 +714,7 @@ def generate_ephemeral(session, instance, vm_ref, userdevice, size_gb):
                    size_gb * 1024, FLAGS.default_ephemeral_format)
 
 
-def create_kernel_image(context, session, instance, image_id, user_id,
-                        project_id, image_type):
+def create_kernel_image(context, session, instance, image_id, image_type):
     """Creates kernel/ramdisk file from the image stored in the cache.
     If the image is not present in the cache, it streams it from glance.
 

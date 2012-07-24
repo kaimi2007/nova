@@ -689,6 +689,30 @@ def compute_node_utilization_set(context, host, free_ram_mb=None,
     return compute_node
 
 
+def compute_node_statistics(context):
+    """Compute statistics over all compute nodes."""
+    result = model_query(context,
+                         func.count(models.ComputeNode.id),
+                         func.sum(models.ComputeNode.vcpus),
+                         func.sum(models.ComputeNode.memory_mb),
+                         func.sum(models.ComputeNode.local_gb),
+                         func.sum(models.ComputeNode.vcpus_used),
+                         func.sum(models.ComputeNode.memory_mb_used),
+                         func.sum(models.ComputeNode.local_gb_used),
+                         func.sum(models.ComputeNode.free_ram_mb),
+                         func.sum(models.ComputeNode.free_disk_gb),
+                         func.sum(models.ComputeNode.current_workload),
+                         func.sum(models.ComputeNode.running_vms),
+                         func.sum(models.ComputeNode.disk_available_least),
+                         read_deleted="no").first()
+
+    # Build a dict of the info--making no assumptions about result
+    fields = ('count', 'vcpus', 'memory_mb', 'local_gb', 'vcpus_used',
+              'memory_mb_used', 'local_gb_used', 'free_ram_mb', 'free_disk_gb',
+              'current_workload', 'running_vms', 'disk_available_least')
+    return dict((field, result[idx] or 0) for idx, field in enumerate(fields))
+
+
 ###################
 
 
@@ -2020,20 +2044,12 @@ def key_pair_count_by_user(context, user_id):
 
 
 @require_admin_context
-def network_associate(context, project_id, force=False):
+def network_associate(context, project_id):
     """Associate a project with a network.
 
     called by project_get_networks under certain conditions
-    and network manager add_network_to_project()
 
     only associate if the project doesn't already have a network
-    or if force is True
-
-    force solves race condition where a fresh project has multiple instance
-    builds simultaneously picked up by multiple network hosts which attempt
-    to associate the project with multiple networks
-    force should only be used as a direct consequence of user request
-    all automated requests should not use force
     """
     session = get_session()
     with session.begin():
@@ -2045,13 +2061,10 @@ def network_associate(context, project_id, force=False):
                            with_lockmode('update').\
                            first()
 
-        if not force:
-            # find out if project has a network
-            network_ref = network_query(project_id)
-
-        if force or not network_ref:
-            # in force mode or project doesn't have a network so associate
-            # with a new network
+        # find out if project has a network
+        network_ref = network_query(project_id)
+        if not network_ref:
+            # project doesn't have a network so associate with a new network
 
             # get new network
             network_ref = network_query(None)

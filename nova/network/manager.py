@@ -1343,14 +1343,13 @@ class NetworkManager(manager.SchedulerDependentManager):
         subnets_v4 = []
         subnets_v6 = []
 
-        subnet_bits = int(math.ceil(math.log(network_size, 2)))
-
         if kwargs.get('ipam'):
             if cidr_v6:
                 subnets_v6 = [netaddr.IPNetwork(cidr_v6)]
             if cidr:
                 subnets_v4 = [netaddr.IPNetwork(cidr)]
         else:
+            subnet_bits = int(math.ceil(math.log(network_size, 2)))
             if cidr_v6:
                 fixed_net_v6 = netaddr.IPNetwork(cidr_v6)
                 prefixlen_v6 = 128 - subnet_bits
@@ -1873,11 +1872,6 @@ class VlanManager(RPCAllocateFixedIP, FloatingIP, NetworkManager):
         self.db.fixed_ip_update(context, address, values)
         self._setup_network_on_host(context, network)
         return address
-
-    @wrap_check_policy
-    def add_network_to_project(self, context, project_id):
-        """Force adds another network to a project."""
-        self.db.network_associate(context, project_id, force=True)
 
     def _get_networks_for_instance(self, context, instance_id, project_id,
                                    requested_networks=None):
