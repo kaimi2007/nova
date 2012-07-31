@@ -67,28 +67,6 @@ class SchedulerManagerTestCase(test.TestCase):
         manager = self.manager
         self.assertTrue(isinstance(manager.driver, self.driver_cls))
 
-    def test_get_host_list(self):
-        expected = 'fake_hosts'
-
-        self.mox.StubOutWithMock(self.manager.driver, 'get_host_list')
-        self.manager.driver.get_host_list().AndReturn(expected)
-
-        self.mox.ReplayAll()
-        result = self.manager.get_host_list(self.context)
-        self.assertEqual(result, expected)
-
-    def test_get_service_capabilities(self):
-        expected = 'fake_service_capabs'
-
-        self.mox.StubOutWithMock(self.manager.driver,
-                'get_service_capabilities')
-        self.manager.driver.get_service_capabilities().AndReturn(
-                expected)
-
-        self.mox.ReplayAll()
-        result = self.manager.get_service_capabilities(self.context)
-        self.assertEqual(result, expected)
-
     def test_update_service_capabilities(self):
         service_name = 'fake_service'
         host = 'fake_host'
@@ -325,28 +303,6 @@ class SchedulerTestCase(test.TestCase):
         self.context = context.RequestContext('fake_user', 'fake_project')
         self.topic = 'fake_topic'
 
-    def test_get_host_list(self):
-        expected = 'fake_hosts'
-
-        self.mox.StubOutWithMock(self.driver.host_manager, 'get_host_list')
-        self.driver.host_manager.get_host_list().AndReturn(expected)
-
-        self.mox.ReplayAll()
-        result = self.driver.get_host_list()
-        self.assertEqual(result, expected)
-
-    def test_get_service_capabilities(self):
-        expected = 'fake_service_capabs'
-
-        self.mox.StubOutWithMock(self.driver.host_manager,
-                'get_service_capabilities')
-        self.driver.host_manager.get_service_capabilities().AndReturn(
-                expected)
-
-        self.mox.ReplayAll()
-        result = self.driver.get_service_capabilities()
-        self.assertEqual(result, expected)
-
     def test_update_service_capabilities(self):
         service_name = 'fake_service'
         host = 'fake_host'
@@ -494,7 +450,7 @@ class SchedulerTestCase(test.TestCase):
         dest = 'fake_host2'
         block_migration = True
         disk_over_commit = True
-        instance = self._live_migration_instance()
+        instance = jsonutils.to_primitive(self._live_migration_instance())
         instance_id = instance['id']
         instance_uuid = instance['uuid']
         db.instance_get(self.context,
@@ -528,10 +484,10 @@ class SchedulerTestCase(test.TestCase):
 
         rpc.call(self.context, "compute.fake_host2",
                    {"method": 'check_can_live_migrate_destination',
-                    "args": {'instance_id': instance_id,
+                    "args": {'instance': instance,
                              'block_migration': block_migration,
                              'disk_over_commit': disk_over_commit},
-                    "version": "1.2"},
+                    "version": "1.10"},
                  None)
 
         db.instance_update_and_get_original(self.context, instance_uuid,

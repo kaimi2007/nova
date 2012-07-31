@@ -1,4 +1,3 @@
-#!/usr/bin/python
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
 # Copyright 2012 Grid Dynamics
@@ -236,21 +235,21 @@ class LvmTestCase(_ImageTestCase):
 
     def prepare_mocks(self):
         fn = self.mox.CreateMockAnything()
-        self.mox.StubOutWithMock(self.disk, 'get_image_virtual_size')
         self.mox.StubOutWithMock(self.disk, 'resize2fs')
         self.mox.StubOutWithMock(self.libvirt_utils, 'create_lvm_image')
+        self.mox.StubOutWithMock(self.disk, 'get_disk_size')
         self.mox.StubOutWithMock(self.utils, 'execute')
         return fn
 
     def _create_image(self, sparse):
         fn = self.prepare_mocks()
         fn(target=self.TEMPLATE_PATH)
-        self.disk.get_image_virtual_size(self.TEMPLATE_PATH
-                                         ).AndReturn(self.TEMPLATE_SIZE)
         self.libvirt_utils.create_lvm_image(self.VG,
                                             self.LV,
                                             self.TEMPLATE_SIZE,
                                             sparse=sparse)
+        self.disk.get_disk_size(self.TEMPLATE_PATH
+                                         ).AndReturn(self.TEMPLATE_SIZE)
         cmd = ('dd', 'if=%s' % self.TEMPLATE_PATH,
                'of=%s' % self.PATH, 'bs=4M')
         self.utils.execute(*cmd, run_as_root=True)
@@ -277,10 +276,10 @@ class LvmTestCase(_ImageTestCase):
     def _create_image_resize(self, sparse):
         fn = self.prepare_mocks()
         fn(target=self.TEMPLATE_PATH)
-        self.disk.get_image_virtual_size(self.TEMPLATE_PATH
-                                         ).AndReturn(self.TEMPLATE_SIZE)
         self.libvirt_utils.create_lvm_image(self.VG, self.LV,
                                             self.SIZE, sparse=sparse)
+        self.disk.get_disk_size(self.TEMPLATE_PATH
+                                         ).AndReturn(self.TEMPLATE_SIZE)
         cmd = ('dd', 'if=%s' % self.TEMPLATE_PATH,
                'of=%s' % self.PATH, 'bs=4M')
         self.utils.execute(*cmd, run_as_root=True)
@@ -316,13 +315,13 @@ class LvmTestCase(_ImageTestCase):
     def test_create_image_negative(self):
         fn = self.prepare_mocks()
         fn(target=self.TEMPLATE_PATH)
-        self.disk.get_image_virtual_size(self.TEMPLATE_PATH
-                                         ).AndReturn(self.TEMPLATE_SIZE)
         self.libvirt_utils.create_lvm_image(self.VG,
                                             self.LV,
                                             self.SIZE,
                                             sparse=False
                                             ).AndRaise(RuntimeError())
+        self.disk.get_disk_size(self.TEMPLATE_PATH
+                                         ).AndReturn(self.TEMPLATE_SIZE)
         self.mox.StubOutWithMock(self.libvirt_utils, 'remove_logical_volumes')
         self.libvirt_utils.remove_logical_volumes(self.PATH)
         self.mox.ReplayAll()

@@ -223,12 +223,10 @@ def trycmd(*args, **kwargs):
         failed = False
     except exception.ProcessExecutionError, exn:
         out, err = '', str(exn)
-        LOG.debug(err)
         failed = True
 
     if not failed and discard_warnings and err:
         # Handle commands that output to stderr but otherwise succeed
-        LOG.debug(err)
         err = ''
 
     return out, err
@@ -720,7 +718,7 @@ def cleanup_file_locks():
         return
 
     hostname = socket.gethostname()
-    sentinel_re = hostname + r'\..*-(\d+$)'
+    sentinel_re = hostname + r'-.*\.(\d+$)'
     lockfile_re = r'nova-.*\.lock'
     files = os.listdir(FLAGS.lock_path)
 
@@ -859,6 +857,24 @@ def subset_dict(dict_, keys):
     """Return a dict that only contains a subset of keys."""
     subset = partition_dict(dict_, keys)[0]
     return subset
+
+
+def diff_dict(orig, new):
+    """
+    Return a dict describing how to change orig to new.  The keys
+    correspond to values that have changed; the value will be a list
+    of one or two elements.  The first element of the list will be
+    either '+' or '-', indicating whether the key was updated or
+    deleted; if the key was updated, the list will contain a second
+    element, giving the updated value.
+    """
+    # Figure out what keys went away
+    result = dict((k, ['-']) for k in set(orig.keys()) - set(new.keys()))
+    # Compute the updates
+    for key, value in new.items():
+        if key not in orig or value != orig[key]:
+            result[key] = ['+', value]
+    return result
 
 
 def check_isinstance(obj, cls):

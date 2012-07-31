@@ -31,27 +31,6 @@ from nova import utils
 FLAGS = flags.FLAGS
 
 
-def _setup_networking(instance_id, ip='1.2.3.4', flo_addr='1.2.1.2'):
-    ctxt = context.get_admin_context()
-    network_ref = db.project_get_networks(ctxt,
-                                           'fake',
-                                           associate=True)[0]
-    vif = {'address': '56:12:12:12:12:12',
-           'network_id': network_ref['id'],
-           'instance_id': instance_id}
-    vif_ref = db.virtual_interface_create(ctxt, vif)
-
-    fixed_ip = {'address': ip,
-                'network_id': network_ref['id'],
-                'virtual_interface_id': vif_ref['id'],
-                'allocated': True,
-                'instance_id': instance_id}
-    db.fixed_ip_create(ctxt, fixed_ip)
-    fix_ref = db.fixed_ip_get_by_address(ctxt, ip)
-    db.floating_ip_create(ctxt, {'address': flo_addr,
-                                 'fixed_ip_id': fix_ref['id']})
-
-
 class DbApiTestCase(test.TestCase):
     def setUp(self):
         super(DbApiTestCase, self).setUp()
@@ -81,26 +60,42 @@ class DbApiTestCase(test.TestCase):
         else:
             self.assertTrue(result[1].deleted)
 
-    def test_migration_get_all_unconfirmed(self):
+    def test_migration_get_unconfirmed_by_dest_compute(self):
         ctxt = context.get_admin_context()
 
         # Ensure no migrations are returned.
-        results = db.migration_get_all_unconfirmed(ctxt, 10)
+        results = db.migration_get_unconfirmed_by_dest_compute(ctxt, 10,
+                'fake_host')
+        self.assertEqual(0, len(results))
+
+        # Ensure no migrations are returned.
+        results = db.migration_get_unconfirmed_by_dest_compute(ctxt, 10,
+                'fake_host2')
+        self.assertEqual(0, len(results))
+
+        updated_at = datetime.datetime(2000, 01, 01, 12, 00, 00)
+        values = {"status": "finished", "updated_at": updated_at,
+                "dest_compute": "fake_host2"}
+        migration = db.migration_create(ctxt, values)
+
+        # Ensure different host is not returned
+        results = db.migration_get_unconfirmed_by_dest_compute(ctxt, 10,
+                'fake_host')
         self.assertEqual(0, len(results))
 
         # Ensure one migration older than 10 seconds is returned.
-        updated_at = datetime.datetime(2000, 01, 01, 12, 00, 00)
-        values = {"status": "finished", "updated_at": updated_at}
-        migration = db.migration_create(ctxt, values)
-        results = db.migration_get_all_unconfirmed(ctxt, 10)
+        results = db.migration_get_unconfirmed_by_dest_compute(ctxt, 10,
+                'fake_host2')
         self.assertEqual(1, len(results))
         db.migration_update(ctxt, migration.id, {"status": "CONFIRMED"})
 
         # Ensure the new migration is not returned.
         updated_at = timeutils.utcnow()
-        values = {"status": "finished", "updated_at": updated_at}
+        values = {"status": "finished", "updated_at": updated_at,
+                "dest_compute": "fake_host2"}
         migration = db.migration_create(ctxt, values)
-        results = db.migration_get_all_unconfirmed(ctxt, 10)
+        results = db.migration_get_unconfirmed_by_dest_compute(ctxt, 10,
+                "fake_host2")
         self.assertEqual(0, len(results))
         db.migration_update(ctxt, migration.id, {"status": "CONFIRMED"})
 
@@ -329,19 +324,19 @@ class DbApiTestCase(test.TestCase):
         ctxt = context.get_admin_context()
         values = {'host': 'foo', 'hostname': 'myname'}
         instance = db.instance_create(ctxt, values)
-        values = {'address': 'bar', 'instance_id': instance['id']}
+        values = {'address': 'bar', 'instance_uuid': instance['uuid']}
         vif = db.virtual_interface_create(ctxt, values)
         values = {'address': 'baz',
                   'network_id': 1,
                   'allocated': True,
-                  'instance_id': instance['id'],
+                  'instance_uuid': instance['uuid'],
                   'virtual_interface_id': vif['id']}
         fixed_address = db.fixed_ip_create(ctxt, values)
         data = db.network_get_associated_fixed_ips(ctxt, 1)
         self.assertEqual(len(data), 1)
         record = data[0]
         self.assertEqual(record['address'], fixed_address)
-        self.assertEqual(record['instance_id'], instance['id'])
+        self.assertEqual(record['instance_uuid'], instance['uuid'])
         self.assertEqual(record['network_id'], 1)
         self.assertEqual(record['instance_created'], instance['created_at'])
         self.assertEqual(record['instance_updated'], instance['updated_at'])
@@ -360,25 +355,25 @@ class DbApiTestCase(test.TestCase):
         new = time = timeout + datetime.timedelta(seconds=5)
         # should deallocate
         values = {'allocated': False,
-                  'instance_id': instance['id'],
+                  'instance_uuid': instance['uuid'],
                   'network_id': net['id'],
                   'updated_at': old}
         db.fixed_ip_create(ctxt, values)
         # still allocated
         values = {'allocated': True,
-                  'instance_id': instance['id'],
+                  'instance_uuid': instance['uuid'],
                   'network_id': net['id'],
                   'updated_at': old}
         db.fixed_ip_create(ctxt, values)
         # wrong network
         values = {'allocated': False,
-                  'instance_id': instance['id'],
+                  'instance_uuid': instance['uuid'],
                   'network_id': None,
                   'updated_at': old}
         db.fixed_ip_create(ctxt, values)
         # too new
         values = {'allocated': False,
-                  'instance_id': instance['id'],
+                  'instance_uuid': instance['uuid'],
                   'network_id': None,
                   'updated_at': new}
         db.fixed_ip_create(ctxt, values)
@@ -830,27 +825,27 @@ class TestIpAllocation(test.TestCase):
     def test_fixed_ip_associate_fails_if_ip_not_in_network(self):
         self.assertRaises(exception.FixedIpNotFoundForNetwork,
                           db.fixed_ip_associate,
-                          self.ctxt, None, None)
+                          self.ctxt, None, self.instance.uuid)
 
     def test_fixed_ip_associate_fails_if_ip_in_use(self):
-        address = self.create_fixed_ip(instance_id=self.instance.id)
+        address = self.create_fixed_ip(instance_uuid=self.instance.uuid)
         self.assertRaises(exception.FixedIpAlreadyInUse,
                           db.fixed_ip_associate,
-                          self.ctxt, address, self.instance.id)
+                          self.ctxt, address, self.instance.uuid)
 
     def test_fixed_ip_associate_succeeds(self):
         address = self.create_fixed_ip(network_id=self.network.id)
-        db.fixed_ip_associate(self.ctxt, address, self.instance.id,
+        db.fixed_ip_associate(self.ctxt, address, self.instance.uuid,
                               network_id=self.network.id)
         fixed_ip = db.fixed_ip_get_by_address(self.ctxt, address)
-        self.assertEqual(fixed_ip.instance_id, self.instance.id)
+        self.assertEqual(fixed_ip.instance_uuid, self.instance.uuid)
 
     def test_fixed_ip_associate_succeeds_and_sets_network(self):
         address = self.create_fixed_ip()
-        db.fixed_ip_associate(self.ctxt, address, self.instance.id,
+        db.fixed_ip_associate(self.ctxt, address, self.instance.uuid,
                               network_id=self.network.id)
         fixed_ip = db.fixed_ip_get_by_address(self.ctxt, address)
-        self.assertEqual(fixed_ip.instance_id, self.instance.id)
+        self.assertEqual(fixed_ip.instance_uuid, self.instance.uuid)
         self.assertEqual(fixed_ip.network_id, self.network.id)
 
 

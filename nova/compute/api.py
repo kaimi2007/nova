@@ -130,6 +130,15 @@ class API(base.Base):
         self.compute_rpcapi = compute_rpcapi.ComputeAPI()
         super(API, self).__init__(**kwargs)
 
+    def _instance_update(self, context, instance_uuid, **kwargs):
+        """Update an instance in the database using kwargs as value."""
+
+        (old_ref, instance_ref) = self.db.instance_update_and_get_original(
+                context, instance_uuid, kwargs)
+        notifications.send_update(context, old_ref, instance_ref)
+
+        return instance_ref
+
     def _check_injected_file_quota(self, context, injected_files):
         """Enforce quota limits on injected files.
 
@@ -322,6 +331,7 @@ class API(base.Base):
             return value
 
         options_from_image = {'os_type': prop('os_type'),
+                              'architecture': prop('arch'),
                               'vm_mode': prop('vm_mode')}
 
         # If instance doesn't have auto_disk_config overridden by request, use
@@ -824,8 +834,7 @@ class API(base.Base):
         return dict(instance_ref.iteritems())
 
     @wrap_check_policy
-    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.STOPPED,
-                                    vm_states.ERROR])
+    @check_instance_state(vm_state=None, task_state=None)
     def soft_delete(self, context, instance):
         """Terminate an instance."""
         LOG.debug(_('Going to try to soft delete instance'),
@@ -1160,7 +1169,7 @@ class API(base.Base):
 
         notifications.send_update_with_states(context, instance, old_vm_state,
                 instance["vm_state"], old_task_state, instance["task_state"],
-                service="api")
+                service="api", verify_states=True)
 
         properties = {
             'instance_uuid': instance_uuid,
@@ -1339,8 +1348,6 @@ class API(base.Base):
 
         self.db.migration_update(context, migration_ref['id'],
                 {'status': 'confirmed'})
-        self.db.instance_update(context, instance['uuid'],
-                {'host': migration_ref['dest_compute'], })
 
     @wrap_check_policy
     @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.STOPPED],
@@ -1532,12 +1539,18 @@ class API(base.Base):
     @wrap_check_policy
     def lock(self, context, instance):
         """Lock the given instance."""
-        self.compute_rpcapi.lock_instance(context, instance=instance)
+        context = context.elevated()
+        instance_uuid = instance['uuid']
+        LOG.debug(_('Locking'), context=context, instance_uuid=instance_uuid)
+        self._instance_update(context, instance_uuid, locked=True)
 
     @wrap_check_policy
     def unlock(self, context, instance):
         """Unlock the given instance."""
-        self.compute_rpcapi.unlock_instance(context, instance=instance)
+        context = context.elevated()
+        instance_uuid = instance['uuid']
+        LOG.debug(_('Unlocking'), context=context, instance_uuid=instance_uuid)
+        self._instance_update(context, instance_uuid, locked=False)
 
     @wrap_check_policy
     def get_lock(self, context, instance):
@@ -1595,6 +1608,9 @@ class API(base.Base):
     def delete_instance_metadata(self, context, instance, key):
         """Delete the given metadata item from an instance."""
         self.db.instance_metadata_delete(context, instance['uuid'], key)
+        self.compute_rpcapi.change_instance_metadata(context,
+                                                     instance=instance,
+                                                     diff={key: ['-']})
 
     @wrap_check_policy
     def update_instance_metadata(self, context, instance,
@@ -1605,15 +1621,20 @@ class API(base.Base):
         `metadata` argument will be deleted.
 
         """
+        orig = self.get_instance_metadata(context, instance)
         if delete:
             _metadata = metadata
         else:
-            _metadata = self.get_instance_metadata(context, instance)
+            _metadata = orig.copy()
             _metadata.update(metadata)
 
         self._check_metadata_properties_quota(context, _metadata)
         self.db.instance_metadata_update(context, instance['uuid'],
                                          _metadata, True)
+        diff = utils.diff_dict(orig, _metadata)
+        self.compute_rpcapi.change_instance_metadata(context,
+                                                     instance=instance,
+                                                     diff=diff)
         return _metadata
 
     def get_instance_faults(self, context, instances):

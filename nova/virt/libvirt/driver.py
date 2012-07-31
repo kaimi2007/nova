@@ -48,6 +48,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
 from xml.dom import minidom
 from xml.etree import ElementTree
@@ -61,6 +62,7 @@ from nova import block_device
 from nova.compute import instance_types
 from nova.compute import power_state
 from nova.compute import vm_states
+from nova.compute import vm_mode
 from nova import context as nova_context
 from nova import db
 from nova import exception
@@ -921,15 +923,18 @@ class LibvirtDriver(driver.ComputeDriver):
             try:
                 virt_dom.attachDevice(conf.to_xml())
             except Exception, ex:
-                self.volume_driver_method('disconnect_volume',
-                                           connection_info,
-                                           mount_device)
-
                 if isinstance(ex, libvirt.libvirtError):
                     errcode = ex.get_error_code()
                     if errcode == libvirt.VIR_ERR_OPERATION_FAILED:
+                        self.volume_driver_method('disconnect_volume',
+                                                  connection_info,
+                                                  mount_device)
                         raise exception.DeviceIsBusy(device=mount_device)
-                raise
+
+                with excutils.save_and_reraise_exception():
+                    self.volume_driver_method('disconnect_volume',
+                                               connection_info,
+                                               mount_device)
 
         # TODO(danms) once libvirt has support for LXC hotplug,
         # replace this re-define with use of the
@@ -2074,20 +2079,34 @@ class LibvirtDriver(driver.ComputeDriver):
                 nova_context.get_admin_context(), instance['uuid'],
                 {'root_device_name': '/dev/' + self.default_root_device})
 
+        guest.os_type = vm_mode.get_from_instance(instance)
+
+        if guest.os_type is None:
+            if FLAGS.libvirt_type == "lxc":
+                guest.os_type = vm_mode.EXE
+            elif FLAGS.libvirt_type == "uml":
+                guest.os_type = vm_mode.UML
+            elif FLAGS.libvirt_type == "xen":
+                guest.os_type = vm_mode.XEN
+            else:
+                guest.os_type = vm_mode.HVM
+
+        if FLAGS.libvirt_type == "xen" and guest.os_type == vm_mode.HVM:
+            guest.os_loader = '/usr/lib/xen/boot/hvmloader'
+
         if FLAGS.libvirt_type == "lxc":
-            guest.os_type = "exe"
+            guest.os_type = vm_mode.EXE
             guest.os_init_path = "/sbin/init"
             guest.os_cmdline = "console=ttyS0"
         elif FLAGS.libvirt_type == "uml":
-            guest.os_type = "uml"
+            guest.os_type = vm_mode.UML
             guest.os_kernel = "/usr/bin/linux"
             guest.os_root = root_device_name or "/dev/ubda"
         else:
             if FLAGS.libvirt_type == "xen":
-                guest.os_type = "linux"
                 guest.os_root = root_device_name or "/dev/xvda"
             else:
-                guest.os_type = "hvm"
+                guest.os_type = vm_mode.HVM
 
             if rescue:
                 if rescue.get('kernel_id'):
@@ -2169,7 +2188,7 @@ class LibvirtDriver(driver.ComputeDriver):
             guest.add_device(consolepty)
 
         if FLAGS.vnc_enabled and FLAGS.libvirt_type not in ('lxc', 'uml'):
-            if FLAGS.use_usb_tablet:
+            if FLAGS.use_usb_tablet and guest.os_type == vm_mode.HVM:
                 tablet = config.LibvirtConfigGuestInput()
                 tablet.type = "tablet"
                 tablet.bus = "usb"
@@ -3036,15 +3055,8 @@ class LibvirtDriver(driver.ComputeDriver):
 
             disk_type = driver_nodes[cnt].get('type')
             if disk_type == "qcow2":
-                out, err = utils.execute('qemu-img', 'info', path)
-
-                # virtual size:
-                size = [i.split('(')[1].split()[0] for i in out.split('\n')
-                    if i.strip().find('virtual size') >= 0]
-                virt_size = int(size[0])
-
-                # backing file:(actual path:)
                 backing_file = libvirt_utils.get_disk_backing_file(path)
+                virt_size = disk.get_disk_size(path)
             else:
                 backing_file = ""
                 virt_size = 0

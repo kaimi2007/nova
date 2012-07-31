@@ -274,9 +274,9 @@ class FixedIpCommands(object):
             sys.exit(2)
 
         instances = db.instance_get_all(context.get_admin_context())
-        instances_by_id = {}
+        instances_by_uuid = {}
         for instance in instances:
-            instances_by_id[instance['id']] = instance
+            instances_by_uuid[instance['uuid']] = instance
 
         print "%-18s\t%-15s\t%-15s\t%s" % (_('network'),
                                               _('IP address'),
@@ -304,8 +304,8 @@ class FixedIpCommands(object):
             network = all_networks.get(fixed_ip['network_id'])
             if network:
                 has_ip = True
-                if fixed_ip.get('instance_id'):
-                    instance = instances_by_id.get(fixed_ip['instance_id'])
+                if fixed_ip.get('instance_uuid'):
+                    instance = instances_by_uuid.get(fixed_ip['instance_uuid'])
                     if instance:
                         hostname = instance['hostname']
                         host = instance['host']
@@ -414,16 +414,11 @@ class FloatingIpCommands(object):
             instance_id = None
             if floating_ip['fixed_ip_id']:
                 fixed_ip = db.fixed_ip_get(ctxt, floating_ip['fixed_ip_id'])
-                try:
-                    instance = db.instance_get(ctxt, fixed_ip['instance_id'])
-                    instance_id = instance.get('uuid', "none")
-                except exception.InstanceNotFound:
-                    msg = _('Missing instance %s')
-                    instance_id = msg % fixed_ip['instance_id']
+                instance_uuid = fixed_ip['instance_uuid']
 
             print "%s\t%s\t%s\t%s\t%s" % (floating_ip['project_id'],
                                           floating_ip['address'],
-                                          instance_id,
+                                          instance_uuid,
                                           floating_ip['pool'],
                                           floating_ip['interface'])
 
@@ -915,10 +910,10 @@ class InstanceTypeCommands(object):
     def _print_instance_types(self, name, val):
         deleted = ('', ', inactive')[val["deleted"] == 1]
         print ("%s: Memory: %sMB, VCPUS: %s, Root: %sGB, Ephemeral: %sGb, "
-            "FlavorID: %s, Swap: %sMB, RXTX Factor: %s") % (
+            "FlavorID: %s, Swap: %sMB, RXTX Factor: %s, ExtraSpecs %s") % (
             name, val["memory_mb"], val["vcpus"], val["root_gb"],
             val["ephemeral_gb"], val["flavorid"], val["swap"],
-            val["rxtx_factor"])
+            val["rxtx_factor"], val["extra_specs"])
 
     @args('--name', dest='name', metavar='<name>',
             help='Name of instance type/flavor')
@@ -990,6 +985,51 @@ class InstanceTypeCommands(object):
                 self._print_instance_types(k, v)
         else:
             self._print_instance_types(name, inst_types)
+
+    @args('--name', dest='name', metavar='<name>',
+           help='Name of instance type/flavor')
+    @args('--key', dest='key', metavar='<key>',
+           help='The key of the key/value pair')
+    @args('--value', dest='value', metavar='<value>',
+           help='The value of the key/value pair')
+    def set_key(self, name, key, value=None):
+        """Add key/value pair to specified instance type's extra_specs"""
+        try:
+            try:
+                inst_type = instance_types.get_instance_type_by_name(name)
+            except exception.InstanceTypeNotFoundByName, e:
+                print e
+                sys.exit(2)
+
+            ctxt = context.get_admin_context()
+            ext_spec = {key: value}
+            db.instance_type_extra_specs_update_or_create(ctxt,
+                                                          inst_type["id"],
+                                                          ext_spec)
+            print _("Key %(key)s set to %(value)s on instance"
+                            " type %(name)s") % locals()
+        except exception.DBError, e:
+            _db_error(e)
+
+    @args('--name', dest='name', metavar='<name>',
+           help='Name of instance type/flavor')
+    @args('--key', dest='key', metavar='<key>',
+           help='The key to be deleted')
+    def unset_key(self, name, key):
+        """Delete the specified extra spec for instance type"""
+        try:
+            try:
+                inst_type = instance_types.get_instance_type_by_name(name)
+            except exception.InstanceTypeNotFoundByName, e:
+                print e
+                sys.exit(2)
+
+            ctxt = context.get_admin_context()
+            db.instance_type_extra_specs_delete(ctxt, inst_type["id"], key)
+
+            print _("Key %(key)s on instance type %(name)s unset") % locals()
+        except exception.DBError, e:
+            _db_error(e)
 
 
 class StorageManagerCommands(object):

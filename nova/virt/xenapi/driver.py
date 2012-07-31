@@ -65,23 +65,23 @@ xenapi_opts = [
     cfg.StrOpt('xenapi_connection_url',
                default=None,
                help='URL for connection to XenServer/Xen Cloud Platform. '
-                    'Required if connection_type=xenapi.'),
+                    'Required if compute_driver=xenapi.XenAPIDriver'),
     cfg.StrOpt('xenapi_connection_username',
                default='root',
                help='Username for connection to XenServer/Xen Cloud Platform. '
-                    'Used only if connection_type=xenapi.'),
+                    'Used only if compute_driver=xenapi.XenAPIDriver'),
     cfg.StrOpt('xenapi_connection_password',
                default=None,
                help='Password for connection to XenServer/Xen Cloud Platform. '
-                    'Used only if connection_type=xenapi.'),
+                    'Used only if compute_driver=xenapi.XenAPIDriver'),
     cfg.IntOpt('xenapi_connection_concurrent',
                default=5,
                help='Maximum number of concurrent XenAPI connections. '
-                    'Used only if connection_type=xenapi.'),
+                    'Used only if compute_driver=xenapi.XenAPIDriver'),
     cfg.FloatOpt('xenapi_vhd_coalesce_poll_interval',
                  default=5.0,
                  help='The interval used for polling of coalescing vhds. '
-                      'Used only if connection_type=xenapi.'),
+                      'Used only if compute_driver=xenapi.XenAPIDriver'),
     cfg.BoolOpt('xenapi_check_host',
                 default=True,
                 help='Ensure compute service is running on host XenAPI '
@@ -89,13 +89,14 @@ xenapi_opts = [
     cfg.IntOpt('xenapi_vhd_coalesce_max_attempts',
                default=5,
                help='Max number of times to poll for VHD to coalesce. '
-                    'Used only if connection_type=xenapi.'),
+                    'Used only if compute_driver=xenapi.XenAPIDriver'),
     cfg.StrOpt('xenapi_agent_path',
                default='usr/sbin/xe-update-networking',
                help='Specifies the path in which the xenapi guest agent '
                     'should be located. If the agent is present, network '
                     'configuration is not injected into the image. '
-                    'Used if connection_type=xenapi and flat_injected=True'),
+                    'Used if compute_driver=xenapi.XenAPIDriver and '
+                    ' flat_injected=True'),
     cfg.StrOpt('xenapi_sr_base_path',
                default='/var/run/sr-mount',
                help='Base path to the storage repository'),
@@ -140,7 +141,7 @@ class XenAPIDriver(driver.ComputeDriver):
             raise Exception(_('Must specify xenapi_connection_url, '
                               'xenapi_connection_username (optionally), and '
                               'xenapi_connection_password to use '
-                              'connection_type=xenapi'))
+                              'compute_driver=xenapi.XenAPIDriver'))
 
         self._session = XenAPISession(url, username, password)
         self._volumeops = volumeops.VolumeOps(self._session)
@@ -212,6 +213,10 @@ class XenAPIDriver(driver.ComputeDriver):
         should be base64-encoded.
         """
         self._vmops.inject_file(instance, b64_path, b64_contents)
+
+    def change_instance_metadata(self, context, instance, diff):
+        """Apply a diff to the instance metadata."""
+        self._vmops.change_instance_metadata(instance, diff)
 
     def destroy(self, instance, network_info, block_device_info=None):
         """Destroy VM instance"""
@@ -589,7 +594,8 @@ class XenAPISession(object):
         url = self._create_first_session(url, user, pw, exception)
         self._populate_session_pool(url, user, pw, exception)
         self.host_uuid = self._get_host_uuid()
-        self.product_version = self._get_product_version()
+        self.product_version, self.product_brand = \
+            self._get_product_version_and_brand()
 
     def _create_first_session(self, url, user, pw, exception):
         try:
@@ -631,13 +637,16 @@ class XenAPISession(object):
                 host_ref = session.xenapi.session.get_this_host(session.handle)
                 return session.xenapi.host.get_uuid(host_ref)
 
-    def _get_product_version(self):
-        """Return a tuple of (major, minor, rev) for the host version"""
+    def _get_product_version_and_brand(self):
+        """Return a tuple of (major, minor, rev) for the host version and
+        a string of the product brand"""
         host = self.get_xenapi_host()
         software_version = self.call_xenapi('host.get_software_version',
                                             host)
-        product_version = software_version['product_version']
-        return tuple(int(part) for part in product_version.split('.'))
+        product_version = tuple(int(part) for part in
+                                software_version['product_version'].split('.'))
+        product_brand = software_version['product_brand']
+        return product_version, product_brand
 
     def get_session_id(self):
         """Return a string session_id.  Used for vnc consoles."""

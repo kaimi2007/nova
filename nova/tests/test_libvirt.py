@@ -32,6 +32,7 @@ from nova.compute import instance_types
 from nova.compute import power_state
 from nova.compute import rpcapi as compute_rpcapi
 from nova.compute import utils as compute_utils
+from nova.compute import vm_mode
 from nova.compute import vm_states
 from nova import context
 from nova import db
@@ -45,6 +46,7 @@ from nova.tests import fake_libvirt_utils
 from nova.tests import fake_network
 import nova.tests.image.fake
 from nova import utils
+from nova.virt.disk import api as disk
 from nova.virt import driver
 from nova.virt import firewall as base_firewall
 from nova.virt import images
@@ -509,7 +511,7 @@ class LibvirtConnTestCase(test.TestCase):
         self.assertEquals(cfg.acpi, True)
         self.assertEquals(cfg.memory, 1024 * 1024 * 2)
         self.assertEquals(cfg.vcpus, 1)
-        self.assertEquals(cfg.os_type, "hvm")
+        self.assertEquals(cfg.os_type, vm_mode.HVM)
         self.assertEquals(cfg.os_boot_dev, "hd")
         self.assertEquals(cfg.os_root, None)
         self.assertEquals(len(cfg.devices), 7)
@@ -553,7 +555,7 @@ class LibvirtConnTestCase(test.TestCase):
         self.assertEquals(cfg.acpi, True)
         self.assertEquals(cfg.memory, 1024 * 1024 * 2)
         self.assertEquals(cfg.vcpus, 1)
-        self.assertEquals(cfg.os_type, "hvm")
+        self.assertEquals(cfg.os_type, vm_mode.HVM)
         self.assertEquals(cfg.os_boot_dev, "hd")
         self.assertEquals(cfg.os_root, None)
         self.assertEquals(len(cfg.devices), 8)
@@ -799,6 +801,19 @@ class LibvirtConnTestCase(test.TestCase):
         instance_data = dict(self.test_instance)
         self._check_xml_and_uri(instance_data,
                                 expect_kernel=False, expect_ramdisk=False)
+
+    def test_xml_and_uri_no_ramdisk_no_kernel_xen_hvm(self):
+        instance_data = dict(self.test_instance)
+        instance_data.update({'vm_mode': vm_mode.HVM})
+        self._check_xml_and_uri(instance_data, expect_kernel=False,
+                                expect_ramdisk=False, expect_xen_hvm=True)
+
+    def test_xml_and_uri_no_ramdisk_no_kernel_xen_pv(self):
+        instance_data = dict(self.test_instance)
+        instance_data.update({'vm_mode': vm_mode.XEN})
+        self._check_xml_and_uri(instance_data, expect_kernel=False,
+                                expect_ramdisk=False, expect_xen_hvm=False,
+                                xen_only=True)
 
     def test_xml_and_uri_no_ramdisk(self):
         instance_data = dict(self.test_instance)
@@ -1356,7 +1371,7 @@ class LibvirtConnTestCase(test.TestCase):
                          instance_ref['uuid'])
 
     def _check_xml_and_uri(self, instance, expect_ramdisk, expect_kernel,
-                           rescue=None):
+                           rescue=None, expect_xen_hvm=False, xen_only=False):
         user_context = context.RequestContext(self.user_id, self.project_id)
         instance_ref = db.instance_create(user_context, instance)
         network_ref = db.project_get_networks(context.get_admin_context(),
@@ -1364,21 +1379,37 @@ class LibvirtConnTestCase(test.TestCase):
 
         type_uri_map = {'qemu': ('qemu:///system',
                              [(lambda t: t.find('.').get('type'), 'qemu'),
-                              (lambda t: t.find('./os/type').text, 'hvm'),
+                              (lambda t: t.find('./os/type').text,
+                               vm_mode.HVM),
                               (lambda t: t.find('./devices/emulator'), None)]),
                         'kvm': ('qemu:///system',
                              [(lambda t: t.find('.').get('type'), 'kvm'),
-                              (lambda t: t.find('./os/type').text, 'hvm'),
+                              (lambda t: t.find('./os/type').text,
+                               vm_mode.HVM),
                               (lambda t: t.find('./devices/emulator'), None)]),
                         'uml': ('uml:///system',
                              [(lambda t: t.find('.').get('type'), 'uml'),
-                              (lambda t: t.find('./os/type').text, 'uml')]),
+                              (lambda t: t.find('./os/type').text,
+                               vm_mode.UML)]),
                         'xen': ('xen:///',
                              [(lambda t: t.find('.').get('type'), 'xen'),
-                              (lambda t: t.find('./os/type').text, 'linux')]),
-                              }
+                              (lambda t: t.find('./os/type').text,
+                               vm_mode.XEN)])}
 
-        for hypervisor_type in ['qemu', 'kvm', 'xen']:
+        if expect_xen_hvm or xen_only:
+            hypervisors_to_check = ['xen']
+        else:
+            hypervisors_to_check = ['qemu', 'kvm', 'xen']
+
+        if expect_xen_hvm:
+            type_uri_map = {}
+            type_uri_map['xen'] = ('xen:///',
+                                   [(lambda t: t.find('.').get('type'),
+                                       'xen'),
+                                    (lambda t: t.find('./os/type').text,
+                                        vm_mode.HVM)])
+
+        for hypervisor_type in hypervisors_to_check:
             check_list = type_uri_map[hypervisor_type][1]
 
             if rescue:
@@ -1733,7 +1764,6 @@ class LibvirtConnTestCase(test.TestCase):
         db.instance_destroy(self.context, instance_ref['uuid'])
 
     def test_pre_live_migration_works_correctly_mocked(self):
-        """Confirms pre_block_migration works correctly."""
         # Creating testdata
         vol = {'block_device_mapping': [
                   {'connection_info': 'dummy', 'mount_device': '/dev/sda'},
@@ -1765,7 +1795,6 @@ class LibvirtConnTestCase(test.TestCase):
         self.assertEqual(result, None)
 
     def test_pre_block_migration_works_correctly(self):
-        """Confirms pre_block_migration works correctly."""
         # Replace instances_path since this testcase creates tmpfile
         with utils.tempdir() as tmpdir:
             self.flags(instances_path=tmpdir)
@@ -1789,7 +1818,6 @@ class LibvirtConnTestCase(test.TestCase):
         db.instance_destroy(self.context, instance_ref['uuid'])
 
     def test_get_instance_disk_info_works_correctly(self):
-        """Confirms pre_block_migration works correctly."""
         # Test data
         instance_ref = db.instance_create(self.context, self.test_instance)
         dummyxml = ("<domain type='kvm'><name>instance-0000000a</name>"
@@ -1801,13 +1829,6 @@ class LibvirtConnTestCase(test.TestCase):
                     "<source file='/test/disk.local'/>"
                     "<target dev='vdb' bus='virtio'/></disk>"
                     "</devices></domain>")
-
-        ret = ("image: /test/disk\n"
-               "file format: raw\n"
-               "virtual size: 20G (21474836480 bytes)\n"
-               "disk size: 3.1G\n"
-               "cluster_size: 2097152\n"
-               "backing file: /test/dummy (actual path: /backing/file)\n")
 
         # Preparing mocks
         vdmock = self.mox.CreateMock(libvirt.virDomain)
@@ -1826,12 +1847,18 @@ class LibvirtConnTestCase(test.TestCase):
 
         self.mox.StubOutWithMock(os.path, "getsize")
         os.path.getsize('/test/disk').AndReturn((10737418240))
+        os.path.getsize('/test/disk.local').AndReturn((21474836480))
+
+        ret = ("image: /test/disk\n"
+               "file format: raw\n"
+               "virtual size: 20G (21474836480 bytes)\n"
+               "disk size: 3.1G\n"
+               "cluster_size: 2097152\n"
+               "backing file: /test/dummy (actual path: /backing/file)\n")
 
         self.mox.StubOutWithMock(utils, "execute")
-        utils.execute('qemu-img', 'info',
+        utils.execute('env', 'LC_ALL=C', 'LANG=C', 'qemu-img', 'info',
                       '/test/disk.local').AndReturn((ret, ''))
-
-        os.path.getsize('/test/disk.local').AndReturn((21474836480))
 
         self.mox.ReplayAll()
         conn = libvirt_driver.LibvirtDriver(False)
@@ -2150,12 +2177,12 @@ class LibvirtConnTestCase(test.TestCase):
             caps.host.cpu = cpu
 
             guest = config.LibvirtConfigGuest()
-            guest.ostype = "hvm"
+            guest.ostype = vm_mode.HVM
             guest.arch = "x86_64"
             caps.guests.append(guest)
 
             guest = config.LibvirtConfigGuest()
-            guest.ostype = "hvm"
+            guest.ostype = vm_mode.HVM
             guest.arch = "i686"
             caps.guests.append(guest)
 
@@ -3188,10 +3215,22 @@ class LibvirtUtilsTestCase(test.TestCase):
         self.mox.ReplayAll()
         libvirt_utils.create_cow_image('/some/path', '/the/new/cow')
 
+    def test_pick_disk_driver_name(self):
+        type_map = {'kvm': ([True, 'qemu'], [False, 'qemu'], [None, 'qemu']),
+                    'qemu': ([True, 'qemu'], [False, 'qemu'], [None, 'qemu']),
+                    'xen': ([True, 'phy'], [False, 'tap'], [None, 'tap']),
+                    'uml': ([True, None], [False, None], [None, None]),
+                    'lxc': ([True, None], [False, None], [None, None])}
+
+        for (libvirt_type, checks) in type_map.iteritems():
+            self.flags(libvirt_type=libvirt_type)
+            for (is_block_dev, expected_result) in checks:
+                result = libvirt_utils.pick_disk_driver_name(is_block_dev)
+                self.assertEquals(result, expected_result)
+
     def test_get_disk_size(self):
         self.mox.StubOutWithMock(utils, 'execute')
-        utils.execute('qemu-img',
-                      'info',
+        utils.execute('env', 'LC_ALL=C', 'LANG=C', 'qemu-img', 'info',
                       '/some/path').AndReturn(('''image: 00000001
 file format: raw
 virtual size: 4.4M (4592640 bytes)
@@ -3199,7 +3238,7 @@ disk size: 4.4M''', ''))
 
         # Start test
         self.mox.ReplayAll()
-        self.assertEquals(libvirt_utils.get_disk_size('/some/path'), 4592640)
+        self.assertEquals(disk.get_disk_size('/some/path'), 4592640)
 
     def test_copy_image(self):
         dst_fd, dst_path = tempfile.mkstemp()
@@ -3265,15 +3304,24 @@ disk size: 4.4M''', ''))
         self.mox.ReplayAll()
         libvirt_utils.chown('/some/path', 'soren')
 
-    def test_extract_snapshot(self):
+    def _do_test_extract_snapshot(self, dest_format='raw', out_format='raw'):
         self.mox.StubOutWithMock(utils, 'execute')
-        utils.execute('qemu-img', 'convert', '-f', 'qcow2', '-O', 'raw',
+        utils.execute('qemu-img', 'convert', '-f', 'qcow2', '-O', out_format,
                       '-s', 'snap1', '/path/to/disk/image', '/extracted/snap')
 
         # Start test
         self.mox.ReplayAll()
         libvirt_utils.extract_snapshot('/path/to/disk/image', 'qcow2',
-                                       'snap1', '/extracted/snap', 'raw')
+                                       'snap1', '/extracted/snap', dest_format)
+
+    def test_extract_snapshot_raw(self):
+        self._do_test_extract_snapshot()
+
+    def test_extract_snapshot_iso(self):
+        self._do_test_extract_snapshot(dest_format='iso')
+
+    def test_extract_snapshot_qcow2(self):
+        self._do_test_extract_snapshot(dest_format='qcow2', out_format='qcow2')
 
     def test_load_file(self):
         dst_fd, dst_path = tempfile.mkstemp()
@@ -3347,15 +3395,13 @@ disk size: 4.4M''', ''))
 
         def fake_execute(*args, **kwargs):
             if with_actual_path:
-                return ("some\n"
-                        "output\n"
+                return ("some: output\n"
                         "backing file: /foo/bar/baz (actual path: /a/b/c)\n"
-                        "...\n"), ''
+                        "...: ...\n"), ''
             else:
-                return ("some\n"
-                        "output\n"
+                return ("some: output\n"
                         "backing file: /foo/bar/baz\n"
-                        "...\n"), ''
+                        "...: ...\n"), ''
 
         self.stubs.Set(utils, 'execute', fake_execute)
 
