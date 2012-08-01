@@ -108,6 +108,10 @@ class ComputeAPI(nova.openstack.common.rpc.proxy.RpcProxy):
                set_admin_password()
         1.34 - Remove instance_uuid, add instance argument to
                snapshot_instance()
+        1.35 - Remove instance_uuid, add instance argument to
+               unrescue_instance()
+        1.36 - Remove instance_uuid, add instance argument to
+               change_instance_metadata()
     '''
 
     BASE_RPC_API_VERSION = '1.0'
@@ -144,6 +148,13 @@ class ComputeAPI(nova.openstack.common.rpc.proxy.RpcProxy):
                 mountpoint=mountpoint),
                 topic=_compute_topic(self.topic, ctxt, None, instance),
                 version='1.9')
+
+    def change_instance_metadata(self, ctxt, instance, diff):
+        instance_p = jsonutils.to_primitive(instance)
+        self.cast(ctxt, self.make_msg('change_instance_metadata',
+                  instance=instance_p, diff=diff),
+                  topic=_compute_topic(self.topic, ctxt, None, instance),
+                  version='1.36')
 
     def check_can_live_migrate_destination(self, ctxt, instance, destination,
             block_migration, disk_over_commit):
@@ -460,15 +471,11 @@ class ComputeAPI(nova.openstack.common.rpc.proxy.RpcProxy):
                 version='1.5')
 
     def unrescue_instance(self, ctxt, instance):
+        instance_p = jsonutils.to_primitive(instance)
         self.cast(ctxt, self.make_msg('unrescue_instance',
-                instance_uuid=instance['uuid']),
-                topic=_compute_topic(self.topic, ctxt, None, instance))
-
-    def change_instance_metadata(self, ctxt, instance, diff):
-        self.cast(ctxt, self.make_msg('change_instance_metadata',
-                  instance_uuid=instance['uuid'], diff=diff),
-                  topic=_compute_topic(self.topic, ctxt, None, instance),
-                  version='1.3')
+                instance=instance_p),
+                topic=_compute_topic(self.topic, ctxt, None, instance),
+                version='1.35')
 
 
 class SecurityGroupAPI(nova.openstack.common.rpc.proxy.RpcProxy):

@@ -444,10 +444,20 @@ class ComputeTestCase(BaseTestCase):
         instance = jsonutils.to_primitive(self._create_fake_instance())
         instance_uuid = instance['uuid']
         self.compute.run_instance(self.context, instance_uuid)
+
+        # Make sure these methods work with both instance and instance_uuid
+
         self.compute.rescue_instance(self.context, instance=instance)
         self.assertTrue(called['rescued'])
-        self.compute.unrescue_instance(self.context, instance_uuid)
+        self.compute.unrescue_instance(self.context, instance=instance)
         self.assertTrue(called['unrescued'])
+
+        self.compute.rescue_instance(self.context, instance_uuid=instance_uuid)
+        self.assertTrue(called['rescued'])
+        self.compute.unrescue_instance(self.context,
+                                       instance_uuid=instance_uuid)
+        self.assertTrue(called['unrescued'])
+
         self.compute.terminate_instance(self.context, instance_uuid)
 
     def test_power_on(self):
@@ -1150,9 +1160,10 @@ class ComputeTestCase(BaseTestCase):
 
         instance = db.instance_get_by_uuid(self.context, inst_ref['uuid'])
 
-        self.compute._rebuild_instance(self.context.elevated(),
-                jsonutils.to_primitive(instance),
-                image_ref, new_image_ref, dict(new_pass=password))
+        self.compute.rebuild_instance(self.context.elevated(),
+                image_ref, new_image_ref,
+                instance=jsonutils.to_primitive(instance),
+                new_pass=password)
 
         instance = db.instance_get_by_uuid(self.context, inst_ref['uuid'])
 
@@ -3386,7 +3397,8 @@ class ComputeAPITestCase(BaseTestCase):
     def test_instance_metadata(self):
         meta_changes = [None]
 
-        def fake_change_instance_metadata(inst, ctxt, instance, diff):
+        def fake_change_instance_metadata(inst, ctxt, diff, instance=None,
+                                          instance_uuid=None):
             meta_changes[0] = diff
         self.stubs.Set(compute_rpcapi.ComputeAPI, 'change_instance_metadata',
                        fake_change_instance_metadata)
