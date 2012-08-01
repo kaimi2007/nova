@@ -376,7 +376,6 @@ class LibvirtDriver(driver.ComputeDriver):
             global num_gpus
             global gpu_arch
             global gpu_info
-#            gpus_available = range(FLAGS.xpus)
             if 'gpus' in extra_specs:
                 num_gpus = extra_specs['gpus']
                 gpus_available = range(int(extra_specs['gpus']))
