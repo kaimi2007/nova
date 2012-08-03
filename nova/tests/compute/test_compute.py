@@ -3724,7 +3724,7 @@ class ComputeAPITestCase(BaseTestCase):
         self.assertRaises(exception.InvalidDevicePath,
                 self.compute_api.attach_volume,
                 self.context,
-                None,
+                {'locked': False},
                 None,
                 '/dev/invalid')
 
