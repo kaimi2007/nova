@@ -22,7 +22,6 @@ from nova import exception
 from nova import flags
 from nova.openstack.common import jsonutils
 from nova.openstack.common import rpc
-from nova.openstack.common.rpc import common as rpc_common
 import nova.openstack.common.rpc.proxy
 
 
@@ -112,6 +111,8 @@ class ComputeAPI(nova.openstack.common.rpc.proxy.RpcProxy):
                unrescue_instance()
         1.36 - Remove instance_uuid, add instance argument to
                change_instance_metadata()
+        1.37 - Remove instance_uuid, add instance argument to
+               terminate_instance()
     '''
 
     BASE_RPC_API_VERSION = '1.0'
@@ -459,9 +460,11 @@ class ComputeAPI(nova.openstack.common.rpc.proxy.RpcProxy):
                 version='1.6')
 
     def terminate_instance(self, ctxt, instance):
+        instance_p = jsonutils.to_primitive(instance)
         self.cast(ctxt, self.make_msg('terminate_instance',
-                instance_uuid=instance['uuid']),
-                topic=_compute_topic(self.topic, ctxt, None, instance))
+                instance=instance_p),
+                topic=_compute_topic(self.topic, ctxt, None, instance),
+                version='1.37')
 
     def unpause_instance(self, ctxt, instance):
         instance_p = jsonutils.to_primitive(instance)

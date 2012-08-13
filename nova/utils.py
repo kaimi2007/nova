@@ -37,7 +37,6 @@ import sys
 import tempfile
 import threading
 import time
-import types
 import uuid
 from xml.sax import saxutils
 
@@ -49,6 +48,7 @@ from eventlet import semaphore
 import lockfile
 import netaddr
 
+from nova.common import deprecated
 from nova import exception
 from nova import flags
 from nova.openstack.common import cfg
@@ -64,6 +64,12 @@ FLAGS = flags.FLAGS
 FLAGS.register_opt(
     cfg.BoolOpt('disable_process_locking', default=False,
                 help='Whether to disable inter-process locks'))
+
+if FLAGS.rootwrap_config is None or FLAGS.root_helper != 'sudo':
+    deprecated.warn(_('The root_helper option (which lets you specify a '
+                      'root wrapper different from nova-rootwrap, and '
+                      'defaults to using sudo) is now deprecated. You '
+                      'should use the rootwrap_config option instead.'))
 
 
 def vpn_ping(address, port, timeout=0.05, session_id=None):
@@ -118,7 +124,7 @@ def execute(*cmd, **kwargs):
     """Helper method to execute command with optional retry.
 
     If you add a run_as_root=True command, don't forget to add the
-    corresponding filter to nova.rootwrap !
+    corresponding filter to etc/nova/rootwrap.d !
 
     :param cmd:                Passed to subprocess.Popen.
     :param process_input:      Send to opened process.
@@ -159,7 +165,10 @@ def execute(*cmd, **kwargs):
                                         'to utils.execute: %r') % kwargs)
 
     if run_as_root:
-        cmd = shlex.split(FLAGS.root_helper) + list(cmd)
+        if (FLAGS.rootwrap_config is not None):
+            cmd = ['sudo', 'nova-rootwrap', FLAGS.rootwrap_config] + list(cmd)
+        else:
+            cmd = shlex.split(FLAGS.root_helper) + list(cmd)
     cmd = map(str, cmd)
 
     while attempts > 0:

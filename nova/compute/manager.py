@@ -37,10 +37,8 @@ terminating it.
 import contextlib
 import functools
 import inspect
-import os
 import socket
 import sys
-import tempfile
 import time
 import traceback
 
@@ -166,7 +164,10 @@ def checks_instance_lock(function):
     # and the function may get either an instance_uuid or an instance.
     def _checks_instance_lock_core(self, cb, context, *args, **kwargs):
         instance_uuid = kwargs['instance_uuid']
-        locked = self._get_lock(context, instance_uuid)
+        if context.instance_lock_checked:
+            locked = False  # Implied, since we wouldn't be here otherwise
+        else:
+            locked = self._get_lock(context, instance_uuid)
         admin = context.is_admin
 
         LOG.info(_("check_instance_lock: locked: |%s|"), locked,
@@ -272,7 +273,7 @@ def _get_image_meta(context, image_ref):
 class ComputeManager(manager.SchedulerDependentManager):
     """Manages the running instances from creation to destruction."""
 
-    RPC_API_VERSION = '1.36'
+    RPC_API_VERSION = '1.37'
 
     def __init__(self, compute_driver=None, *args, **kwargs):
         """Load configuration options and connect to the hypervisor."""
@@ -567,7 +568,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         except Exception:
             rescheduled = False
             LOG.exception(_("Error trying to reschedule"),
-                    instance_uuid=instance_uuid)
+                          instance_uuid=instance_uuid)
 
         if rescheduled:
             # log the original build error
@@ -584,19 +585,19 @@ class ComputeManager(manager.SchedulerDependentManager):
         if not retry:
             # no retry information, do not reschedule.
             LOG.debug(_("Retry info not present, will not reschedule"),
-                    instance_uuid=instance_uuid)
+                      instance_uuid=instance_uuid)
             return
 
         request_spec = kwargs.get('request_spec', None)
         if not request_spec:
             LOG.debug(_("No request spec, will not reschedule"),
-                    instance_uuid=instance_uuid)
+                      instance_uuid=instance_uuid)
             return
 
         request_spec['num_instances'] = 1
 
         LOG.debug(_("Re-scheduling instance: attempt %d"),
-                retry['num_attempts'], instance_uuid=instance_uuid)
+                  retry['num_attempts'], instance_uuid=instance_uuid)
         self.scheduler_rpcapi.run_instance(context, FLAGS.compute_topic,
                 request_spec, admin_password, injected_files,
                 requested_networks, is_first_time, filter_properties,
@@ -879,6 +880,7 @@ class ComputeManager(manager.SchedulerDependentManager):
     def _delete_instance(self, context, instance):
         """Delete an instance on this host."""
         instance_uuid = instance['uuid']
+        self.db.instance_info_cache_delete(context, instance_uuid)
         self._notify_about_instance_usage(context, instance, "delete.start")
         self._shutdown_instance(context, instance)
         self._cleanup_volumes(context, instance_uuid)
@@ -896,21 +898,23 @@ class ComputeManager(manager.SchedulerDependentManager):
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
     @wrap_instance_fault
-    def terminate_instance(self, context, instance_uuid):
+    def terminate_instance(self, context, instance=None, instance_uuid=None):
         """Terminate an instance on this host."""
         @utils.synchronized(instance_uuid)
-        def do_terminate_instance():
+        def do_terminate_instance(instance, instance_uuid):
             elevated = context.elevated()
-            instance = self.db.instance_get_by_uuid(elevated, instance_uuid)
+            if not instance:
+                instance = self.db.instance_get_by_uuid(elevated,
+                                                        instance_uuid)
             try:
                 self._delete_instance(context, instance)
             except exception.InstanceTerminationFailure as error:
                 msg = _('%s. Setting instance vm_state to ERROR')
-                LOG.error(msg % error, instance_uuid=instance_uuid)
-                self._set_instance_error_state(context, instance_uuid)
+                LOG.error(msg % error, instance=instance)
+                self._set_instance_error_state(context, instance['uuid'])
             except exception.InstanceNotFound as e:
-                LOG.warn(e, instance_uuid=instance_uuid)
-        do_terminate_instance()
+                LOG.warn(e, instance=instance)
+        do_terminate_instance(instance, instance_uuid)
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
@@ -1126,7 +1130,7 @@ class ComputeManager(manager.SchedulerDependentManager):
                               power_state=current_power_state)
 
         LOG.audit(_('instance snapshotting'), context=context,
-                  instance_uuid=instance_uuid)
+                  instance=instance)
 
         if instance['power_state'] != power_state.RUNNING:
             state = instance['power_state']
@@ -1134,7 +1138,7 @@ class ComputeManager(manager.SchedulerDependentManager):
             LOG.warn(_('trying to snapshot a non-running '
                        'instance: (state: %(state)s '
                        'expected: %(running)s)') % locals(),
-                     instance_uuid=instance_uuid)
+                     instance=instance)
 
         self._notify_about_instance_usage(
                 context, instance, "snapshot.start")
@@ -1149,7 +1153,7 @@ class ComputeManager(manager.SchedulerDependentManager):
             raise exception.ImageRotationNotAllowed()
 
         elif image_type == 'backup' and rotation:
-            self.rotate_backups(context, instance_uuid, backup_type, rotation)
+            self._rotate_backups(context, instance, backup_type, rotation)
 
         elif image_type == 'backup':
             raise exception.RotationRequiredForBackup()
@@ -1158,7 +1162,7 @@ class ComputeManager(manager.SchedulerDependentManager):
                 context, instance, "snapshot.end")
 
     @wrap_instance_fault
-    def rotate_backups(self, context, instance_uuid, backup_type, rotation):
+    def _rotate_backups(self, context, instance, backup_type, rotation):
         """Delete excess backups associated to an instance.
 
         Instances are allowed a fixed number of backups (the rotation number);
@@ -1166,7 +1170,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         threshold.
 
         :param context: security context
-        :param instance_uuid: string representing uuid of instance
+        :param instance: Instance dict
         :param backup_type: daily | weekly
         :param rotation: int representing how many backups to keep around;
             None if rotation shouldn't be used (as in the case of snapshots)
@@ -1187,23 +1191,23 @@ class ComputeManager(manager.SchedulerDependentManager):
         image_service = glance.get_default_image_service()
         filters = {'property-image_type': 'backup',
                    'property-backup_type': backup_type,
-                   'property-instance_uuid': instance_uuid}
+                   'property-instance_uuid': instance['uuid']}
 
         images = fetch_images()
         num_images = len(images)
         LOG.debug(_("Found %(num_images)d images (rotation: %(rotation)d)")
-                  % locals(), instance_uuid=instance_uuid)
+                  % locals(), instance=instance)
         if num_images > rotation:
             # NOTE(sirp): this deletes all backups that exceed the rotation
             # limit
             excess = len(images) - rotation
             LOG.debug(_("Rotating out %d backups") % excess,
-                      instance_uuid=instance_uuid)
+                      instance=instance)
             for i in xrange(excess):
                 image = images.pop()
                 image_id = image['id']
                 LOG.debug(_("Deleting image %s") % image_id,
-                          instance_uuid=instance_uuid)
+                          instance=instance)
                 image_service.delete(context, image_id)
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
@@ -1296,24 +1300,6 @@ class ComputeManager(manager.SchedulerDependentManager):
         LOG.audit(_('injecting file to %(path)s') % locals(),
                     instance=instance)
         self.driver.inject_file(instance, path, file_contents)
-
-    @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
-    @checks_instance_lock
-    @wrap_instance_fault
-    def agent_update(self, context, instance_uuid, url, md5hash):
-        """Update agent running on an instance on this host."""
-        context = context.elevated()
-        instance_ref = self.db.instance_get_by_uuid(context, instance_uuid)
-        current_power_state = self._get_power_state(context, instance_ref)
-        expected_state = power_state.RUNNING
-        if current_power_state != expected_state:
-            LOG.warn(_('trying to update agent on a non-running '
-                    '(state: %(current_power_state)s '
-                    'expected: %(expected_state)s)') % locals(),
-                     instance=instance_ref)
-        LOG.audit(_('updating agent to %(url)s') % locals(),
-                    instance=instance_ref)
-        self.driver.agent_update(instance_ref, url, md5hash)
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
@@ -1767,7 +1753,7 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @wrap_instance_fault
-    def get_diagnostics(self, context, instance_uuid=None, instance=None):
+    def get_diagnostics(self, context, instance=None, instance_uuid=None):
         """Retrieve diagnostics for an instance on this host."""
         if not instance:
             instance = self.db.instance_get_by_uuid(context, instance_uuid)
@@ -2473,7 +2459,7 @@ class ComputeManager(manager.SchedulerDependentManager):
             # force an update to the instance's info_cache
             self.network_api.get_instance_nw_info(context, instance)
             LOG.debug(_('Updated the info_cache for instance'),
-                    instance=instance)
+                      instance=instance)
         except Exception:
             # We don't care about any failures
             pass
@@ -2735,7 +2721,8 @@ class ComputeManager(manager.SchedulerDependentManager):
                         # time and retried.
                         # For example, there might be another task scheduled.
                         LOG.exception(_("error during stop() in "
-                                        "sync_power_state."))
+                                        "sync_power_state."),
+                                      instance=db_instance)
                 elif vm_power_state in (power_state.PAUSED,
                                         power_state.SUSPENDED):
                     LOG.warn(_("Instance is paused or suspended "
@@ -2745,7 +2732,8 @@ class ComputeManager(manager.SchedulerDependentManager):
                         self.compute_api.stop(context, db_instance)
                     except Exception:
                         LOG.exception(_("error during stop() in "
-                                        "sync_power_state."))
+                                        "sync_power_state."),
+                                      instance=db_instance)
             elif vm_state == vm_states.STOPPED:
                 if vm_power_state not in (power_state.NOSTATE,
                                           power_state.SHUTDOWN,
@@ -2758,7 +2746,8 @@ class ComputeManager(manager.SchedulerDependentManager):
                         self.compute_api.stop(context, db_instance)
                     except Exception:
                         LOG.exception(_("error during stop() in "
-                                        "sync_power_state."))
+                                        "sync_power_state."),
+                                      instance=db_instance)
             elif vm_state in (vm_states.SOFT_DELETED,
                               vm_states.DELETED):
                 if vm_power_state not in (power_state.NOSTATE,

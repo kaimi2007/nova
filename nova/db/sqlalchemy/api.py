@@ -1603,7 +1603,7 @@ def instance_get_all_by_filters(context, filters, sort_key, sort_dir):
             v = getattr(instance, filter_name)
         except AttributeError:
             return True
-        if v and filter_re.match(str(v)):
+        if v and filter_re.match(unicode(v)):
             return True
         return False
 
@@ -1971,8 +1971,11 @@ def instance_info_cache_update(context, instance_uuid, values,
     session = session or get_session()
     info_cache = instance_info_cache_get(context, instance_uuid,
                                          session=session)
-
     if info_cache:
+        # NOTE(tr3buchet): let's leave it alone if it's already deleted
+        if info_cache['deleted']:
+            return info_cache
+
         info_cache.update(values)
         info_cache.save(session=session)
     else:
