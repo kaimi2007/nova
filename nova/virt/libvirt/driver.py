@@ -61,8 +61,8 @@ from xml.dom import minidom
 from nova import block_device
 from nova.compute import instance_types
 from nova.compute import power_state
-from nova.compute import vm_states
 from nova.compute import vm_mode
+from nova.compute import vm_states
 from nova import context as nova_context
 from nova import db
 from nova import exception
