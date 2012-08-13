@@ -31,13 +31,6 @@ LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
 
 
-class InstanceInfo(object):
-    def __init__(self, name, state):
-        self.name = name
-        assert state in power_state.valid_states(), "Bad state: %s" % state
-        self.state = state
-
-
 def block_device_info_get_root(block_device_info):
     block_device_info = block_device_info or {}
     return block_device_info.get('root_device_name')
@@ -153,11 +146,6 @@ class ComputeDriver(object):
         Return the names of all the instances known to the virtualization
         layer, as a list.
         """
-        # TODO(Vek): Need to pass context in for access to auth_token
-        raise NotImplementedError()
-
-    def list_instances_detail(self):
-        """Return a list of InstanceInfo for all registered VMs"""
         # TODO(Vek): Need to pass context in for access to auth_token
         raise NotImplementedError()
 
@@ -499,6 +487,14 @@ class ComputeDriver(object):
         """
         # TODO(Vek): Need to pass context in for access to auth_token
         raise NotImplementedError()
+
+    def filter_defer_apply_on(self):
+        """Defer application of IPTables rules"""
+        pass
+
+    def filter_defer_apply_off(self):
+        """Turn off deferral of IPTables rules and apply the rules now"""
+        pass
 
     def unfilter_instance(self, instance, network_info):
         """Stop filtering instance"""

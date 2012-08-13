@@ -41,11 +41,6 @@ LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
 
 
-class SecurityGroupsTemplateElement(xmlutil.TemplateElement):
-    def will_render(self, datum):
-        return 'security_groups' in datum
-
-
 def make_fault(elem):
     fault = xmlutil.SubTemplateElement(elem, 'fault', selector='fault')
     fault.set('code')
@@ -89,13 +84,6 @@ def make_server(elem, detailed=False):
 
         # Attach addresses node
         elem.append(ips.AddressesTemplate())
-
-        # Attach security groups node
-        secgrps = SecurityGroupsTemplateElement('security_groups')
-        elem.append(secgrps)
-        secgrp = xmlutil.SubTemplateElement(secgrps, 'security_group',
-                                            selector='security_groups')
-        secgrp.set('name')
 
     xmlutil.make_links(elem, 'links')
 
@@ -360,9 +348,10 @@ class Controller(wsgi.Controller):
         # Convenience return
         return robj
 
-    def __init__(self, **kwargs):
+    def __init__(self, ext_mgr=None, **kwargs):
         super(Controller, self).__init__(**kwargs)
         self.compute_api = compute.API()
+        self.ext_mgr = ext_mgr
 
     @wsgi.serializers(xml=MinimalServersTemplate)
     def index(self, req):
@@ -385,13 +374,6 @@ class Controller(wsgi.Controller):
         except exception.NotFound as err:
             raise exc.HTTPNotFound()
         return servers
-
-    def _get_block_device_mapping(self, data):
-        """Get block_device_mapping from 'server' dictionary.
-
-        Overridden by volumes controller.
-        """
-        return None
 
     def _add_instance_faults(self, ctxt, instances):
         faults = self.compute_api.get_instance_faults(ctxt, instances)
@@ -622,25 +604,32 @@ class Controller(wsgi.Controller):
         image_href = self._image_uuid_from_href(image_href)
 
         personality = server_dict.get('personality')
-        config_drive = server_dict.get('config_drive')
+        config_drive = None
+        if self.ext_mgr.is_loaded('os-config-drive'):
+            config_drive = server_dict.get('config_drive')
 
         injected_files = []
         if personality:
             injected_files = self._get_injected_files(personality)
 
         sg_names = []
-        security_groups = server_dict.get('security_groups')
-        if security_groups is not None:
-            sg_names = [sg['name'] for sg in security_groups if sg.get('name')]
+        if self.ext_mgr.is_loaded('os-security-groups'):
+            security_groups = server_dict.get('security_groups')
+            if security_groups is not None:
+                sg_names = [sg['name'] for sg in security_groups
+                            if sg.get('name')]
         if not sg_names:
             sg_names.append('default')
 
         sg_names = list(set(sg_names))
 
-        requested_networks = server_dict.get('networks')
+        requested_networks = None
+        if self.ext_mgr.is_loaded('os-networks'):
+            requested_networks = server_dict.get('networks')
+
         if requested_networks is not None:
             requested_networks = self._get_requested_networks(
-                                                    requested_networks)
+                requested_networks)
 
         (access_ip_v4, ) = server_dict.get('accessIPv4'),
         if access_ip_v4 is not None:
@@ -657,18 +646,30 @@ class Controller(wsgi.Controller):
             raise exc.HTTPBadRequest(explanation=msg)
 
         # optional openstack extensions:
-        key_name = server_dict.get('key_name')
-        user_data = server_dict.get('user_data')
+        key_name = None
+        if self.ext_mgr.is_loaded('os-keypairs'):
+            key_name = server_dict.get('key_name')
+
+        user_data = None
+        if self.ext_mgr.is_loaded('os-user-data'):
+            user_data = server_dict.get('user_data')
         self._validate_user_data(user_data)
 
-        availability_zone = server_dict.get('availability_zone')
+        availability_zone = None
+        if self.ext_mgr.is_loaded('os-availability-zone'):
+            availability_zone = server_dict.get('availability_zone')
 
-        block_device_mapping = self._get_block_device_mapping(server_dict)
+        block_device_mapping = None
+        if self.ext_mgr.is_loaded('os-volumes'):
+            block_device_mapping = server_dict.get('block_device_mapping')
 
-        ret_resv_id = server_dict.get('return_reservation_id', False)
-
-        min_count = server_dict.get('min_count')
-        max_count = server_dict.get('max_count')
+        ret_resv_id = False
+        min_count = None
+        max_count = None
+        if self.ext_mgr.is_loaded('os-multiple-create'):
+            ret_resv_id = server_dict.get('return_reservation_id', False)
+            min_count = server_dict.get('min_count')
+            max_count = server_dict.get('max_count')
         # min_count and max_count are optional.  If they exist, they come
         # in as strings.  We want to default 'min_count' to 1, and default
         # 'max_count' to be 'min_count'.
@@ -677,8 +678,13 @@ class Controller(wsgi.Controller):
         if min_count > max_count:
             min_count = max_count
 
-        auto_disk_config = server_dict.get('auto_disk_config')
-        scheduler_hints = server_dict.get('scheduler_hints', {})
+        auto_disk_config = False
+        if self.ext_mgr.is_loaded('OS-DCF'):
+            auto_disk_config = server_dict.get('auto_disk_config')
+
+        scheduler_hints = {}
+        if self.ext_mgr.is_loaded('os-scheduler-hints'):
+            scheduler_hints = server_dict.get('scheduler_hints', {})
 
         try:
             _get_inst_type = instance_types.get_instance_type_by_flavor_id
@@ -1160,8 +1166,8 @@ class Controller(wsgi.Controller):
                 'changes-since')
 
 
-def create_resource():
-    return wsgi.Resource(Controller())
+def create_resource(ext_mgr):
+    return wsgi.Resource(Controller(ext_mgr))
 
 
 def remove_invalid_options(context, search_options, allowed_search_options):

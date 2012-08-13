@@ -21,6 +21,7 @@
 built on top of pep8.py
 """
 
+import fnmatch
 import inspect
 import logging
 import os
@@ -47,6 +48,52 @@ logging.disable('LOG')
 IMPORT_EXCEPTIONS = ['sqlalchemy', 'migrate', 'nova.db.sqlalchemy.session']
 DOCSTRING_TRIPLE = ['"""', "'''"]
 VERBOSE_MISSING_IMPORT = False
+
+
+# Monkey patch broken excluded filter in pep8
+def filename_match(filename, patterns, default=True):
+    """
+    Check if patterns contains a pattern that matches filename.
+    If patterns is unspecified, this always returns True.
+    """
+    if not patterns:
+        return default
+    return any(fnmatch.fnmatch(filename, pattern) for pattern in patterns)
+
+
+def excluded(filename):
+    """
+    Check if options.exclude contains a pattern that matches filename.
+    """
+    basename = os.path.basename(filename)
+    return any((filename_match(filename, pep8.options.exclude,
+                               default=False),
+                filename_match(basename, pep8.options.exclude,
+                               default=False)))
+
+
+def input_dir(dirname, runner=None):
+    """
+    Check all Python source files in this directory and all subdirectories.
+    """
+    dirname = dirname.rstrip('/')
+    if excluded(dirname):
+        return
+    if runner is None:
+        runner = pep8.input_file
+    for root, dirs, files in os.walk(dirname):
+        if pep8.options.verbose:
+            print('directory ' + root)
+        pep8.options.counters['directories'] += 1
+        dirs.sort()
+        for subdir in dirs[:]:
+            if excluded(os.path.join(root, subdir)):
+                dirs.remove(subdir)
+        files.sort()
+        for filename in files:
+            if pep8.filename_match(filename) and not excluded(filename):
+                pep8.options.counters['files'] += 1
+                runner(os.path.join(root, filename))
 
 
 def is_import_exception(mod):
@@ -384,6 +431,7 @@ def once_git_check_commit_title():
     nova HACKING recommends not referencing a bug or blueprint in first line,
     it should provide an accurate description of the change
     N801
+    N802 Title limited to 50 chars
     """
     #Get title of most recent commit
 
@@ -406,6 +454,9 @@ def once_git_check_commit_title():
         print ("N801: git commit title ('%s') should provide an accurate "
                "description of the change, not just a reference to a bug "
                "or blueprint" % title.strip())
+    if len(title.decode('utf-8')) > 72:
+        print ("N802: git commit title ('%s') should be under 50 chars"
+                % title.strip())
 
 if __name__ == "__main__":
     #include nova path
@@ -417,6 +468,8 @@ if __name__ == "__main__":
     add_nova()
     pep8.current_file = current_file
     pep8.readlines = readlines
+    pep8.excluded = excluded
+    pep8.input_dir = input_dir
     try:
         pep8._main()
     finally:

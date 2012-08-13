@@ -913,6 +913,22 @@ class LibvirtConnTestCase(test.TestCase):
         # Only one should be listed, since domain with ID 0 must be skiped
         self.assertEquals(len(instances), 1)
 
+    def test_list_instances_when_instance_deleted(self):
+
+        def fake_lookup(instance_name):
+            raise libvirt.libvirtError("we deleted an instance!")
+
+        self.mox.StubOutWithMock(libvirt_driver.LibvirtDriver, '_conn')
+        libvirt_driver.LibvirtDriver._conn.lookupByID = fake_lookup
+        libvirt_driver.LibvirtDriver._conn.numOfDomains = lambda: 1
+        libvirt_driver.LibvirtDriver._conn.listDomainsID = lambda: [0, 1]
+
+        self.mox.ReplayAll()
+        conn = libvirt_driver.LibvirtDriver(False)
+        instances = conn.list_instances()
+        # None should be listed, since we fake deleted the last one
+        self.assertEquals(len(instances), 0)
+
     def test_get_all_block_devices(self):
         xml = [
             # NOTE(vish): id 0 is skipped
@@ -1550,7 +1566,7 @@ class LibvirtConnTestCase(test.TestCase):
                            fake_none)
             conn.ensure_filtering_rules_for_instance(instance_ref,
                                                      network_info,
-                                                     time=fake_timer)
+                                                     time_module=fake_timer)
         except exception.NovaException, e:
             c1 = (0 <= str(e).find('Timeout migrating for'))
         self.assertTrue(c1)
@@ -1913,9 +1929,9 @@ class LibvirtConnTestCase(test.TestCase):
             conn.spawn(self.context, instance, None, network_info)
         except Exception, e:
             # assert that no exception is raised due to sha1 receiving an int
-            self.assertEqual(-1, str(e.message).find('must be string or buffer'
-                                                     ', not int'))
-            count = (0 <= str(e.message).find('Unexpected method call'))
+            self.assertEqual(-1, unicode(e).find('must be string or buffer'
+                                                 ', not int'))
+            self.assertNotIn('Unexpected method call', unicode(e))
 
         path = os.path.join(FLAGS.instances_path, instance.name)
         if os.path.isdir(path):

@@ -22,6 +22,7 @@ import copy
 import datetime
 import functools
 import os
+import shutil
 import string
 import tempfile
 
@@ -92,7 +93,9 @@ def get_instances_with_cached_ips(orig_func, *args, **kwargs):
 class CloudTestCase(test.TestCase):
     def setUp(self):
         super(CloudTestCase, self).setUp()
+        vol_tmpdir = tempfile.mkdtemp()
         self.flags(compute_driver='nova.virt.fake.FakeDriver',
+                   volumes_dir=vol_tmpdir,
                    stub_network=True)
 
         def fake_show(meh, context, id):
@@ -146,6 +149,10 @@ class CloudTestCase(test.TestCase):
                                '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6')
 
     def tearDown(self):
+        try:
+            shutil.rmtree(FLAGS.volumes_dir)
+        except OSError, e:
+            pass
         super(CloudTestCase, self).tearDown()
         fake.FakeImageService_reset()
 
@@ -609,8 +616,8 @@ class CloudTestCase(test.TestCase):
 
     def test_describe_volumes(self):
         """Makes sure describe_volumes works and filters results."""
-        vol1 = db.volume_create(self.context, {})
-        vol2 = db.volume_create(self.context, {})
+        vol1 = db.volume_create(self.context, {'project_id': self.project_id})
+        vol2 = db.volume_create(self.context, {'project_id': self.project_id})
         result = self.cloud.describe_volumes(self.context)
         self.assertEqual(len(result['volumeSet']), 2)
         volume_id = ec2utils.id_to_ec2_vol_id(vol2['id'])
@@ -646,7 +653,8 @@ class CloudTestCase(test.TestCase):
 
     def test_create_volume_from_snapshot(self):
         """Makes sure create_volume works when we specify a snapshot."""
-        vol = db.volume_create(self.context, {'size': 1})
+        vol = db.volume_create(self.context, {'size': 1,
+                                              'project_id': self.project_id})
         snap = db.snapshot_create(self.context, {'volume_id': vol['id'],
                                                  'volume_size': vol['size'],
                                                  'status': "available"})
@@ -683,8 +691,10 @@ class CloudTestCase(test.TestCase):
     def test_describe_snapshots(self):
         """Makes sure describe_snapshots works and filters results."""
         vol = db.volume_create(self.context, {})
-        snap1 = db.snapshot_create(self.context, {'volume_id': vol['id']})
-        snap2 = db.snapshot_create(self.context, {'volume_id': vol['id']})
+        snap1 = db.snapshot_create(self.context,
+                {'volume_id': vol['id'], 'project_id': self.project_id})
+        snap2 = db.snapshot_create(self.context,
+                {'volume_id': vol['id'], 'project_id': self.project_id})
         result = self.cloud.describe_snapshots(self.context)
         self.assertEqual(len(result['snapshotSet']), 2)
         snapshot_id = ec2utils.id_to_ec2_snap_id(snap2['id'])
@@ -1239,7 +1249,7 @@ class CloudTestCase(test.TestCase):
                 if 'snapshot_id' in bdm:
                     snap = db.snapshot_create(self.context,
                                               {'id': bdm['snapshot_id'],
-                                               'volume_id': 76543210,
+                                               'volume_id': 01234567,
                                                'status': "available",
                                                'volume_size': 1})
                     snapshots.append(snap['id'])
@@ -1809,7 +1819,7 @@ class CloudTestCase(test.TestCase):
                         {'instanceId': 'i-00000001',
                          'previousState': {'code': 80,
                                            'name': 'stopped'},
-                         'shutdownState': {'code': 48,
+                         'currentState': {'code': 48,
                                            'name': 'terminated'}}]}
         result = self.cloud.terminate_instances(self.context, [instance_id])
         self.assertEqual(result, expected)
@@ -1830,7 +1840,7 @@ class CloudTestCase(test.TestCase):
                         {'instanceId': 'i-00000001',
                          'previousState': {'code': 16,
                                            'name': 'running'},
-                         'shutdownState': {'code': 48,
+                         'currentState': {'code': 48,
                                            'name': 'terminated'}}]}
         result = self.cloud.terminate_instances(self.context, [instance_id])
         self.assertEqual(result, expected)
@@ -1849,7 +1859,7 @@ class CloudTestCase(test.TestCase):
                         {'instanceId': 'i-00000001',
                          'previousState': {'code': 80,
                                            'name': 'stopped'},
-                         'shutdownState': {'code': 48,
+                         'currentState': {'code': 48,
                                            'name': 'terminated'}}]}
         result = self.cloud.terminate_instances(self.context, [instance_id])
         self.assertEqual(result, expected)
@@ -1870,7 +1880,7 @@ class CloudTestCase(test.TestCase):
                         {'instanceId': 'i-00000001',
                          'previousState': {'code': 16,
                                            'name': 'running'},
-                         'shutdownState': {'code': 48,
+                         'currentState': {'code': 48,
                                            'name': 'terminated'}}]}
         result = self.cloud.terminate_instances(self.context, [instance_id])
         self.assertEqual(result, expected)
@@ -1902,7 +1912,7 @@ class CloudTestCase(test.TestCase):
                         {'instanceId': 'i-00000001',
                          'previousState': {'code': 16,
                                            'name': 'running'},
-                         'shutdownState': {'code': 16,
+                         'currentState': {'code': 16,
                                            'name': 'running'}}]}
         result = self.cloud.terminate_instances(self.context, [instance_id])
         self.assertEqual(result, expected)
@@ -1914,7 +1924,7 @@ class CloudTestCase(test.TestCase):
                         {'instanceId': 'i-00000001',
                          'previousState': {'code': 16,
                                            'name': 'running'},
-                         'shutdownState': {'code': 48,
+                         'currentState': {'code': 48,
                                            'name': 'terminated'}}]}
         result = self.cloud.terminate_instances(self.context, [instance_id])
         self.assertEqual(result, expected)
@@ -1934,12 +1944,12 @@ class CloudTestCase(test.TestCase):
                         {'instanceId': 'i-00000001',
                          'previousState': {'code': 80,
                                            'name': 'stopped'},
-                         'shutdownState': {'code': 48,
+                         'currentState': {'code': 48,
                                            'name': 'terminated'}},
                         {'instanceId': 'i-00000002',
                          'previousState': {'code': 16,
                                            'name': 'running'},
-                         'shutdownState': {'code': 48,
+                         'currentState': {'code': 48,
                                            'name': 'terminated'}}]}
         result = self.cloud.terminate_instances(self.context, [inst1, inst2])
         self.assertEqual(result, expected)
@@ -2460,7 +2470,7 @@ class CloudTestCase(test.TestCase):
                             {'instanceId': instance_id,
                              'previousState': {'code': 16,
                                                'name': 'running'},
-                             'shutdownState': {'code': 48,
+                             'currentState': {'code': 48,
                                                'name': 'terminated'}}]}
             result = self.cloud.terminate_instances(self.context,
                                                     [instance_id])

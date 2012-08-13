@@ -51,8 +51,10 @@ class FilterScheduler(driver.Scheduler):
         msg = _("No host selection for %s defined.") % topic
         raise exception.NoValidHost(reason=msg)
 
-    def schedule_run_instance(self, context, request_spec, reservations,
-                              *args, **kwargs):
+    def schedule_run_instance(self, context, request_spec,
+                              admin_password, injected_files,
+                              requested_networks, is_first_time,
+                              filter_properties, reservations):
         """This method is called from nova.compute.api to provision
         an instance.  We first create a build plan (a list of WeightedHosts)
         and then provision.
@@ -68,9 +70,8 @@ class FilterScheduler(driver.Scheduler):
         notifier.notify(context, notifier.publisher_id("scheduler"),
                         'scheduler.run_instance.start', notifier.INFO, payload)
 
-        filter_properties = kwargs.pop('filter_properties', {})
         weighted_hosts = self._schedule(context, "compute", request_spec,
-                filter_properties, *args, **kwargs)
+                                        filter_properties)
 
         if not weighted_hosts:
             raise exception.NoValidHost(reason="")
@@ -89,7 +90,10 @@ class FilterScheduler(driver.Scheduler):
 
             instance = self._provision_resource(elevated, weighted_host,
                                                 request_spec, reservations,
-                                                filter_properties, kwargs)
+                                                filter_properties,
+                                                requested_networks,
+                                                injected_files, admin_password,
+                                                is_first_time)
             # scrub retry host list in case we're scheduling multiple
             # instances:
             retry = filter_properties.get('retry', {})
@@ -103,7 +107,8 @@ class FilterScheduler(driver.Scheduler):
 
         return instances
 
-    def schedule_prep_resize(self, context, request_spec, *args, **kwargs):
+    def schedule_prep_resize(self, context, image, request_spec,
+                             filter_properties, instance, instance_type):
         """Select a target for resize.
 
         Selects a target host for the instance, post-resize, and casts
@@ -111,21 +116,18 @@ class FilterScheduler(driver.Scheduler):
         """
 
         hosts = self._schedule(context, 'compute', request_spec,
-                               *args, **kwargs)
+                               filter_properties)
         if not hosts:
             raise exception.NoValidHost(reason="")
         host = hosts.pop(0)
 
-        # NOTE(comstud): Make sure we do not pass this through.  It
-        # contains an instance of RpcContext that cannot be serialized.
-        kwargs.pop('filter_properties', None)
-
         # Forward off to the host
-        driver.cast_to_compute_host(context, host.host_state.host,
-                'prep_resize', **kwargs)
+        self.compute_rpcapi.prep_resize(context, image, instance,
+                instance_type, host.host_state.host)
 
     def _provision_resource(self, context, weighted_host, request_spec,
-            reservations, filter_properties, kwargs):
+            reservations, filter_properties, requested_networks,
+            injected_files, admin_password, is_first_time):
         """Create the requested resource in this Zone."""
         instance = self.create_instance_db_entry(context, request_spec,
                                                  reservations)
@@ -140,11 +142,17 @@ class FilterScheduler(driver.Scheduler):
                         'scheduler.run_instance.scheduled', notifier.INFO,
                         payload)
 
-        driver.cast_to_compute_host(context, weighted_host.host_state.host,
-                'run_instance', instance_uuid=instance['uuid'],
+        updated_instance = driver.instance_update_db(context, instance['uuid'],
+                weighted_host.host_state.host)
+
+        self.compute_rpcapi.run_instance(context, instance=updated_instance,
+                host=weighted_host.host_state.host,
                 request_spec=request_spec, filter_properties=filter_properties,
-                **kwargs)
-        inst = driver.encode_instance(instance, local=True)
+                requested_networks=requested_networks,
+                injected_files=injected_files,
+                admin_password=admin_password, is_first_time=is_first_time)
+
+        inst = driver.encode_instance(updated_instance, local=True)
 
         # So if another instance is created, create_instance_db_entry will
         # actually create a new entry, instead of assume it's been created
@@ -207,8 +215,7 @@ class FilterScheduler(driver.Scheduler):
             msg = _("Exceeded max scheduling attempts %d ") % max_attempts
             raise exception.NoValidHost(msg, instance_uuid=uuid)
 
-    def _schedule(self, context, topic, request_spec, filter_properties, *args,
-            **kwargs):
+    def _schedule(self, context, topic, request_spec, filter_properties):
         """Returns a list of hosts that meet the required specs,
         ordered by their fitness.
         """

@@ -40,8 +40,9 @@ class SchedulerRpcAPITestCase(test.TestCase):
         ctxt = context.RequestContext('fake_user', 'fake_project')
         rpcapi = scheduler_rpcapi.SchedulerAPI()
         expected_retval = 'foo' if method == 'call' else None
+        expected_version = kwargs.pop('version', rpcapi.BASE_RPC_API_VERSION)
         expected_msg = rpcapi.make_msg(method, **kwargs)
-        expected_msg['version'] = rpcapi.BASE_RPC_API_VERSION
+        expected_msg['version'] = expected_version
         if rpc_method == 'cast' and method == 'run_instance':
             kwargs['call'] = False
 
@@ -65,26 +66,26 @@ class SchedulerRpcAPITestCase(test.TestCase):
 
     def test_run_instance_call(self):
         self._test_scheduler_api('run_instance', rpc_method='call',
-                topic='fake_topic', request_spec='fake_request_spec',
+                request_spec='fake_request_spec',
                 admin_password='pw', injected_files='fake_injected_files',
                 requested_networks='fake_requested_networks',
                 is_first_time=True, filter_properties='fake_filter_properties',
-                reservations=None)
+                reservations=None, version='1.2')
 
     def test_run_instance_cast(self):
         self._test_scheduler_api('run_instance', rpc_method='cast',
-                topic='fake_topic', request_spec='fake_request_spec',
+                request_spec='fake_request_spec',
                 admin_password='pw', injected_files='fake_injected_files',
                 requested_networks='fake_requested_networks',
                 is_first_time=True, filter_properties='fake_filter_properties',
-                reservations=None)
+                reservations=None, version='1.2')
 
     def test_prep_resize(self):
         self._test_scheduler_api('prep_resize', rpc_method='cast',
-                topic='fake_topic', instance_uuid='fake_uuid',
-                instance_type_id='fake_type_id', image='fake_image',
-                update_db='fake_update_db', request_spec='fake_request_spec',
-                filter_properties='fake_props')
+                instance='fake_instance',
+                instance_type='fake_type', image='fake_image',
+                request_spec='fake_request_spec',
+                filter_properties='fake_props', version='1.4')
 
     def test_show_host_resources(self):
         self._test_scheduler_api('show_host_resources', rpc_method='call',
@@ -94,7 +95,8 @@ class SchedulerRpcAPITestCase(test.TestCase):
         self._test_scheduler_api('live_migration', rpc_method='call',
                 block_migration='fake_block_migration',
                 disk_over_commit='fake_disk_over_commit',
-                instance_id='fake_id', dest='fake_dest', topic='fake_topic')
+                instance='fake_instance', dest='fake_dest', topic='fake_topic',
+                version='1.3')
 
     def test_update_service_capabilities(self):
         self._test_scheduler_api('update_service_capabilities',

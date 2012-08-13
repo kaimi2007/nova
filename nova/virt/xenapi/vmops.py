@@ -30,6 +30,7 @@ import netaddr
 from nova.compute import api as compute
 from nova.compute import power_state
 from nova.compute import vm_mode
+from nova.compute import vm_states
 from nova import context as nova_context
 from nova import db
 from nova import exception
@@ -44,6 +45,7 @@ from nova import utils
 from nova.virt import driver
 from nova.virt.xenapi import agent
 from nova.virt.xenapi import firewall
+from nova.virt.xenapi import pool_states
 from nova.virt.xenapi import vm_utils
 from nova.virt.xenapi import volume_utils
 
@@ -167,21 +169,6 @@ class VMOps(object):
             name_labels.append(vm_rec["name_label"])
 
         return name_labels
-
-    def list_instances_detail(self):
-        """List VM instances, returning InstanceInfo objects."""
-        details = []
-        for vm_ref, vm_rec in vm_utils.list_vms(self._session):
-            name = vm_rec["name_label"]
-
-            # TODO(justinsb): This a roundabout way to map the state
-            openstack_format = vm_utils.compile_info(vm_rec)
-            state = openstack_format['state']
-
-            instance_info = driver.InstanceInfo(name, state)
-            details.append(instance_info)
-
-        return details
 
     def confirm_migration(self, migration, instance, network_info):
         name_label = self._get_orig_vm_name_label(instance)
@@ -507,7 +494,6 @@ class VMOps(object):
 
         # Update agent, if necessary
         # This also waits until the agent starts
-        LOG.debug(_("Querying agent version"), instance=instance)
         version = agent.get_agent_version(self._session, instance, vm_ref)
         if version:
             LOG.info(_('Instance agent version: %s'), version,
@@ -515,17 +501,14 @@ class VMOps(object):
 
         if (version and agent_build and
             cmp_version(version, agent_build['version']) < 0):
-            LOG.info(_('Updating Agent to %s'), agent_build['version'],
-                     instance=instance)
-            agent.agent_update(self._session, instance, vm_ref,
-                               agent_build['url'], agent_build['md5hash'])
+            agent.agent_update(self._session, instance, vm_ref, agent_build)
 
         # if the guest agent is not available, configure the
         # instance, but skip the admin password configuration
         no_agent = version is None
 
         # Inject files, if necessary
-        injected_files = instance['injected_files']
+        injected_files = instance.get("injected_files")
         if injected_files:
             # Check if this is a JSON-encoded string and convert if needed.
             if isinstance(injected_files, basestring):
@@ -537,20 +520,16 @@ class VMOps(object):
                     injected_files = []
             # Inject any files, if specified
             for path, contents in instance['injected_files']:
-                LOG.debug(_("Injecting file path: '%s'") % path,
-                          instance=instance)
                 agent.inject_file(self._session, instance, vm_ref,
                                   path, contents)
 
         admin_password = instance['admin_pass']
         # Set admin password, if necessary
         if admin_password and not no_agent:
-            LOG.debug(_("Setting admin password"), instance=instance)
             agent.set_admin_password(self._session, instance, vm_ref,
                                      admin_password)
 
         # Reset network config
-        LOG.debug(_("Resetting network"), instance=instance)
         agent.resetnetwork(self._session, instance, vm_ref)
 
         # Set VCPU weight
@@ -867,8 +846,8 @@ class VMOps(object):
         """Inject instance metadata into xenstore."""
         def store_meta(topdir, data_list):
             for item in data_list:
-                key = self._sanitize_xenstore_key(item.key)
-                value = item.value or ''
+                key = self._sanitize_xenstore_key(item['key'])
+                value = item['value'] or ''
                 self._add_to_param_xenstore(vm_ref, '%s/%s' % (topdir, key),
                                             jsonutils.dumps(value))
 
@@ -1245,7 +1224,21 @@ class VMOps(object):
 
     def get_vnc_console(self, instance):
         """Return connection info for a vnc console."""
-        vm_ref = self._get_vm_opaque_ref(instance)
+        # NOTE(johannes): This can fail if the VM object hasn't been created
+        # yet on the dom0. Since that step happens fairly late in the build
+        # process, there's a potential for a race condition here. Until the
+        # VM object is created, return back a 409 error instead of a 404
+        # error.
+        try:
+            vm_ref = self._get_vm_opaque_ref(instance)
+        except exception.NotFound:
+            if instance['vm_state'] != vm_states.BUILDING:
+                raise
+
+            LOG.info(_('Fetching VM ref while BUILDING failed'),
+                     instance=instance)
+            raise exception.InstanceNotReady(instance_id=instance['uuid'])
+
         session_id = self._session.get_session_id()
         path = "/console?ref=%s&session_id=%s" % (str(vm_ref), session_id)
 
@@ -1456,6 +1449,10 @@ class VMOps(object):
         """ recreates security group rules for every instance """
         self.firewall_driver.refresh_security_group_members(security_group_id)
 
+    def refresh_instance_security_rules(self, instance):
+        """ recreates security group rules for specified instance """
+        self.firewall_driver.refresh_instance_security_rules(instance)
+
     def refresh_provider_fw_rules(self):
         self.firewall_driver.refresh_provider_fw_rules()
 
@@ -1465,7 +1462,10 @@ class VMOps(object):
                                                network_info=network_info)
 
     def _get_host_uuid_from_aggregate(self, context, hostname):
-        current_aggregate = db.aggregate_get_by_host(context, FLAGS.host)
+        current_aggregate = db.aggregate_get_by_host(context, FLAGS.host,
+               key=pool_states.POOL_FLAG)[0]
+        if not current_aggregate:
+            raise exception.AggregateHostNotFound(host=FLAGS.host)
         try:
             return current_aggregate.metadetails[hostname]
         except KeyError:

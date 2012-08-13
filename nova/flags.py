@@ -413,7 +413,7 @@ global_opts = [
                 default='nova.volume.api.API',
                 help='The full class name of the volume API class to use'),
     cfg.StrOpt('security_group_handler',
-               default='nova.network.quantum.sg.NullSecurityGroupHandler',
+               default='nova.network.sg.NullSecurityGroupHandler',
                help='The full class name of the security group handler class'),
     cfg.StrOpt('default_access_ip_network_name',
                default=None,
@@ -431,6 +431,11 @@ global_opts = [
                          'min_disk'],
                 help='These are image properties which a snapshot should not'
                      ' inherit from an instance'),
+    cfg.BoolOpt('defer_iptables_apply',
+                default=False,
+                help='Whether to batch up the application of IPTables rules'
+                     ' during a host restart and apply all at the end of the'
+                     ' init phase'),
 ]
 
 FLAGS.register_opts(global_opts)

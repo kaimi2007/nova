@@ -54,10 +54,10 @@ from nova.openstack.common import log as logging
 from nova.virt import driver
 from nova.virt.xenapi import host
 from nova.virt.xenapi import pool
+from nova.virt.xenapi import pool_states
 from nova.virt.xenapi import vm_utils
 from nova.virt.xenapi import vmops
 from nova.virt.xenapi import volumeops
-
 
 LOG = logging.getLogger(__name__)
 
@@ -170,9 +170,6 @@ class XenAPIDriver(driver.ComputeDriver):
     def list_instances(self):
         """List VM instances"""
         return self._vmops.list_instances()
-
-    def list_instances_detail(self):
-        return self._vmops.list_instances_detail()
 
     def spawn(self, context, instance, image_meta,
               network_info=None, block_device_info=None):
@@ -519,6 +516,13 @@ class XenAPIDriver(driver.ComputeDriver):
         """
         return self._vmops.refresh_security_group_members(security_group_id)
 
+    def refresh_instance_security_rules(self, instance):
+        """ Updates security group rules for specified instance
+            Invoked when instances are added/removed to a security group
+            or when a rule is added/removed to a security group
+        """
+        return self._vmops.refresh_instance_security_rules(instance)
+
     def refresh_provider_fw_rules(self):
         return self._vmops.refresh_provider_fw_rules()
 
@@ -624,13 +628,12 @@ class XenAPISession(object):
 
     def _get_host_uuid(self):
         if self.is_slave:
-            try:
-                aggr = db.aggregate_get_by_host(context.get_admin_context(),
-                                                FLAGS.host)
-            except exception.AggregateHostNotFound:
-                LOG.exception(_('Host is member of a pool, but DB '
+            aggr = db.aggregate_get_by_host(context.get_admin_context(),
+                    FLAGS.host, key=pool_states.POOL_FLAG)[0]
+            if not aggr:
+                LOG.error(_('Host is member of a pool, but DB '
                                 'says otherwise'))
-                raise
+                raise exception.AggregateHostNotFound()
             return aggr.metadetails[FLAGS.host]
         else:
             with self._get_session() as session:

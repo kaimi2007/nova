@@ -27,6 +27,7 @@ import nova.api.openstack.compute
 from nova.api.openstack.compute import ips
 from nova.api.openstack.compute import servers
 from nova.api.openstack.compute import views
+from nova.api.openstack import extensions
 from nova.api.openstack import xmlutil
 import nova.compute.api
 from nova.compute import instance_types
@@ -94,6 +95,7 @@ class MockSetAdminPassword(object):
 
 
 class ServersControllerTest(test.TestCase):
+
     def setUp(self):
         super(ServersControllerTest, self).setUp()
         self.flags(verbose=True, use_ipv6=False)
@@ -113,11 +115,18 @@ class ServersControllerTest(test.TestCase):
         self.stubs.Set(nova.db, 'instance_update_and_get_original',
                 instance_update)
 
-        self.controller = servers.Controller()
+        self.ext_mgr = extensions.ExtensionManager()
+        self.ext_mgr.extensions = {}
+        self.controller = servers.Controller(self.ext_mgr)
         self.ips_controller = ips.Controller()
 
         fake_network.stub_out_nw_api_get_instance_nw_info(self.stubs,
                                                           spectacular=True)
+
+    def test_can_check_loaded_extensions(self):
+        self.ext_mgr.extensions = {'os-fake': None}
+        self.assertTrue(self.controller.ext_mgr.is_loaded('os-fake'))
+        self.assertFalse(self.controller.ext_mgr.is_loaded('os-not-loaded'))
 
     def test_requested_networks_prefix(self):
         uuid = 'br-00000000-0000-0000-0000-000000000000'
@@ -1402,7 +1411,9 @@ class ServerStatusTest(test.TestCase):
         super(ServerStatusTest, self).setUp()
         fakes.stub_out_nw_api(self.stubs)
 
-        self.controller = servers.Controller()
+        self.ext_mgr = extensions.ExtensionManager()
+        self.ext_mgr.extensions = {}
+        self.controller = servers.Controller(self.ext_mgr)
 
     def _get_with_state(self, vm_state, task_state=None):
         self.stubs.Set(nova.db, 'instance_get_by_uuid',
@@ -1471,7 +1482,9 @@ class ServersControllerCreateTest(test.TestCase):
         self.instance_cache_by_id = {}
         self.instance_cache_by_uuid = {}
 
-        self.controller = servers.Controller()
+        self.ext_mgr = extensions.ExtensionManager()
+        self.ext_mgr.extensions = {}
+        self.controller = servers.Controller(self.ext_mgr)
 
         def instance_create(context, inst):
             inst_type = instance_types.get_instance_type_by_flavor_id(3)
@@ -1610,6 +1623,7 @@ class ServersControllerCreateTest(test.TestCase):
         """Test creating multiple instances but not asking for
         reservation_id
         """
+        self.ext_mgr.extensions = {'os-multiple-create': 'fake'}
         image_href = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
         flavor_ref = 'http://localhost/123/flavors/3'
         body = {
@@ -1637,6 +1651,7 @@ class ServersControllerCreateTest(test.TestCase):
         """Test creating multiple instances but not asking for
         reservation_id
         """
+        self.ext_mgr.extensions = {'os-multiple-create': 'fake'}
         self.flags(enable_instance_password=False)
         image_href = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
         flavor_ref = 'http://localhost/123/flavors/3'
@@ -1665,6 +1680,7 @@ class ServersControllerCreateTest(test.TestCase):
         """Test creating multiple instances with asking for
         reservation_id
         """
+        self.ext_mgr.extensions = {'os-multiple-create': 'fake'}
         image_href = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
         flavor_ref = 'http://localhost/123/flavors/3'
         body = {
@@ -1734,6 +1750,271 @@ class ServersControllerCreateTest(test.TestCase):
     def test_create_instance_no_key_pair(self):
         fakes.stub_out_key_pair_funcs(self.stubs, have_key_pair=False)
         self._test_create_instance()
+
+    def _test_create_extra(self, params):
+        image_uuid = 'c905cedb-7281-47e4-8a62-f26bc5fc4c77'
+        server = dict(name='server_test', imageRef=image_uuid, flavorRef=2)
+        server.update(params)
+        body = dict(server=server)
+        req = fakes.HTTPRequest.blank('/v2/fake/servers')
+        req.method = 'POST'
+        req.body = jsonutils.dumps(body)
+        req.headers["content-type"] = "application/json"
+        server = self.controller.create(req, body).obj['server']
+
+    def test_create_instance_with_security_group_enabled(self):
+        self.ext_mgr.extensions = {'os-security-groups': 'fake'}
+        group = 'foo'
+        params = {'security_groups': [{'name': group}]}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['security_group'], [group])
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_security_group_disabled(self):
+        group = 'foo'
+        params = {'security_groups': [{'name': group}]}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            # NOTE(vish): if the security groups extension is not
+            #             enabled, then security groups passed in
+            #             are ignored.
+            self.assertEqual(kwargs['security_group'], ['default'])
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_disk_config_enabled(self):
+        self.ext_mgr.extensions = {'OS-DCF': 'fake'}
+        # NOTE(vish): the extension converts OS-DCF:disk_config into
+        #             auto_disk_config, so we are testing with
+        #             the_internal_value
+        params = {'auto_disk_config': True}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['auto_disk_config'], True)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_disk_config_disabled(self):
+        params = {'auto_disk_config': True}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['auto_disk_config'], False)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_scheduler_hints_enabled(self):
+        self.ext_mgr.extensions = {'os-scheduler-hints': 'fake'}
+        hints = {'a': 'b'}
+        params = {'scheduler_hints': hints}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['scheduler_hints'], hints)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_scheduler_hints_disabled(self):
+        hints = {'a': 'b'}
+        params = {'scheduler_hints': hints}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['scheduler_hints'], {})
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_volumes_enabled(self):
+        self.ext_mgr.extensions = {'os-volumes': 'fake'}
+        bdm = [{'device_name': 'foo'}]
+        params = {'block_device_mapping': bdm}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['block_device_mapping'], bdm)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_volumes_disabled(self):
+        bdm = [{'device_name': 'foo'}]
+        params = {'block_device_mapping': bdm}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['block_device_mapping'], None)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_user_data_enabled(self):
+        self.ext_mgr.extensions = {'os-user-data': 'fake'}
+        user_data = 'fake'
+        params = {'user_data': user_data}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['user_data'], user_data)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_user_data_disabled(self):
+        user_data = 'fake'
+        params = {'user_data': user_data}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['user_data'], None)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_keypairs_enabled(self):
+        self.ext_mgr.extensions = {'os-keypairs': 'fake'}
+        key_name = 'green'
+
+        params = {'key_name': key_name}
+        old_create = nova.compute.api.API.create
+
+        # NOTE(sdague): key pair goes back to the database,
+        # so we need to stub it out for tests
+        def key_pair_get(context, user_id, name):
+            return {'public_key': 'FAKE_KEY',
+                    'fingerprint': 'FAKE_FINGERPRINT',
+                    'name': name}
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['key_name'], key_name)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.db, 'key_pair_get', key_pair_get)
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_keypairs_disabled(self):
+        key_name = 'green'
+
+        params = {'key_name': key_name}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['key_name'], None)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_availability_zone_enabled(self):
+        self.ext_mgr.extensions = {'os-availability-zone': 'fake'}
+        availability_zone = 'fake'
+        params = {'availability_zone': availability_zone}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['availability_zone'], availability_zone)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_availability_zone_disabled(self):
+        availability_zone = 'fake'
+        params = {'availability_zone': availability_zone}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['availability_zone'], None)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_multiple_create_enabled(self):
+        self.ext_mgr.extensions = {'os-multiple-create': 'fake'}
+        min_count = 2
+        max_count = 3
+        params = {
+            'min_count': min_count,
+            'max_count': max_count,
+        }
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['min_count'], 2)
+            self.assertEqual(kwargs['max_count'], 3)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_multiple_create_disabled(self):
+        ret_res_id = True
+        min_count = 2
+        max_count = 3
+        params = {
+            'min_count': min_count,
+            'max_count': max_count,
+        }
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['min_count'], 1)
+            self.assertEqual(kwargs['max_count'], 1)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_networks_enabled(self):
+        self.ext_mgr.extensions = {'os-networks': 'fake'}
+        net_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
+        requested_networks = [{'uuid': net_uuid}]
+        params = {'networks': requested_networks}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            result = [('76fa36fc-c930-4bf3-8c8a-ea2a2420deb6', None)]
+            self.assertEqual(kwargs['requested_networks'], result)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_networks_disabled(self):
+        self.ext_mgr.extensions = {}
+        net_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
+        requested_networks = [{'uuid': net_uuid}]
+        params = {'networks': requested_networks}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['requested_networks'], None)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
 
     def test_create_instance_with_access_ip(self):
         # proper local hrefs must start with 'http://localhost/v2/'
@@ -2153,6 +2434,7 @@ class ServersControllerCreateTest(test.TestCase):
                           self.controller.create, req, body)
 
     def test_create_instance_with_config_drive(self):
+        self.ext_mgr.extensions = {'os-config-drive': 'fake'}
         image_href = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
         flavor_ref = 'http://localhost/v2/fake/flavors/3'
         body = {
@@ -2179,6 +2461,7 @@ class ServersControllerCreateTest(test.TestCase):
         self.assertEqual(FAKE_UUID, server['id'])
 
     def test_create_instance_with_config_drive_as_id(self):
+        self.ext_mgr.extensions = {'os-config-drive': 'fake'}
         image_href = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
         flavor_ref = 'http://localhost/v2/fake/flavors/3'
         body = {
@@ -2205,6 +2488,7 @@ class ServersControllerCreateTest(test.TestCase):
         self.assertEqual(FAKE_UUID, server['id'])
 
     def test_create_instance_with_bad_config_drive(self):
+        self.ext_mgr.extensions = {'os-config-drive': 'fake'}
         image_href = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
         flavor_ref = 'http://localhost/v2/fake/flavors/3'
         body = {
@@ -2230,6 +2514,7 @@ class ServersControllerCreateTest(test.TestCase):
                           self.controller.create, req, body)
 
     def test_create_instance_without_config_drive(self):
+        self.ext_mgr.extensions = {'os-config-drive': 'fake'}
         image_href = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
         flavor_ref = 'http://localhost/v2/fake/flavors/3'
         body = {
@@ -2254,6 +2539,18 @@ class ServersControllerCreateTest(test.TestCase):
 
         server = res['server']
         self.assertEqual(FAKE_UUID, server['id'])
+
+    def test_create_instance_with_config_drive_disabled(self):
+        config_drive = [{'config_drive': 'foo'}]
+        params = {'config_drive': config_drive}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['config_drive'], None)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
 
     def test_create_instance_bad_href(self):
         image_href = 'asdf'

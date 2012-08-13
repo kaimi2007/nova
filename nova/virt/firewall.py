@@ -47,6 +47,14 @@ class FirewallDriver(object):
         At this point, the instance isn't running yet."""
         raise NotImplementedError()
 
+    def filter_defer_apply_on(self):
+        """Defer application of IPTables rules"""
+        pass
+
+    def filter_defer_apply_off(self):
+        """Turn off deferral of IPTables rules and apply the rules now"""
+        pass
+
     def unfilter_instance(self, instance, network_info):
         """Stop filtering instance"""
         raise NotImplementedError()
@@ -73,6 +81,14 @@ class FirewallDriver(object):
 
         Gets called when an instance gets added to or removed from
         the security group."""
+        raise NotImplementedError()
+
+    def refresh_instance_security_rules(self, instance):
+        """Refresh security group rules from data store
+
+        Gets called when an instance gets added to or removed from
+        the security group the instance is a member of or if the
+        group gains or looses a rule."""
         raise NotImplementedError()
 
     def refresh_provider_fw_rules(self):
@@ -127,6 +143,12 @@ class IptablesFirewallDriver(FirewallDriver):
     def apply_instance_filter(self, instance, network_info):
         """No-op. Everything is done in prepare_instance_filter."""
         pass
+
+    def filter_defer_apply_on(self):
+        self.iptables.defer_apply_on()
+
+    def filter_defer_apply_off(self):
+        self.iptables.defer_apply_off()
 
     def unfilter_instance(self, instance, network_info):
         # make sure this is legacy nw_info
@@ -391,11 +413,20 @@ class IptablesFirewallDriver(FirewallDriver):
         self.do_refresh_security_group_rules(security_group)
         self.iptables.apply()
 
+    def refresh_instance_security_rules(self, instance):
+        self.do_refresh_instance_rules(instance)
+        self.iptables.apply()
+
     @utils.synchronized('iptables', external=True)
     def do_refresh_security_group_rules(self, security_group):
         for instance in self.instances.values():
             self.remove_filters_for_instance(instance)
             self.add_filters_for_instance(instance)
+
+    @utils.synchronized('iptables', external=True)
+    def do_refresh_instance_rules(self, instance):
+        self.remove_filters_for_instance(instance)
+        self.add_filters_for_instance(instance)
 
     def refresh_provider_fw_rules(self):
         """See :class:`FirewallDriver` docs."""

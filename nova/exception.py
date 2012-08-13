@@ -179,7 +179,7 @@ class DBError(NovaException):
 
 
 class DeprecatedConfig(NovaException):
-    message = _("Fatal call to deprecated config %(msg)")
+    message = _("Fatal call to deprecated config %(msg)s")
 
 
 class DecryptionFailure(NovaException):
@@ -325,6 +325,10 @@ class InstanceNotSuspended(Invalid):
 
 class InstanceNotInRescueMode(Invalid):
     message = _("Instance %(instance_id)s is not in rescue mode")
+
+
+class InstanceNotReady(Invalid):
+    message = _("Instance %(instance_id)s is not ready")
 
 
 class InstanceSuspendFailure(Invalid):
@@ -721,6 +725,11 @@ class QuotaResourceUnknown(QuotaNotFound):
     message = _("Unknown quota resources %(unknown)s.")
 
 
+class UserQuotaNotFound(QuotaNotFound):
+    message = _("Quota for user %(user_id)s in project %(project_id)s "
+                "could not be found.")
+
+
 class ProjectQuotaNotFound(QuotaNotFound):
     message = _("Quota for project %(project_id)s could not be found.")
 
@@ -1081,6 +1090,11 @@ class VolumeTypeCreateFailed(NovaException):
                 "name %(name)s and specs %(extra_specs)s")
 
 
+class VolumeBackendAPIException(NovaException):
+    message = _("Bad or unexpected response from the storage volume "
+                "backend API: data=%(data)s")
+
+
 class InstanceTypeCreateFailed(NovaException):
     message = _("Unable to create instance type")
 
@@ -1120,15 +1134,25 @@ class CouldNotFetchImage(NovaException):
 
 
 class TaskAlreadyRunning(NovaException):
-    message = _("Task %(task_name) is already running on host %(host)")
+    message = _("Task %(task_name)s is already running on host %(host)s")
 
 
 class TaskNotRunning(NovaException):
-    message = _("Task %(task_name) is not running on host %(host)")
+    message = _("Task %(task_name)s is not running on host %(host)s")
 
 
 class InstanceIsLocked(InstanceInvalidState):
     message = _("Instance %(instance_uuid)s is locked")
+
+
+class ConfigDriveMountFailed(NovaException):
+    message = _("Could not mount vfat config drive. %(operation)s failed. "
+                "Error: %(error)s")
+
+
+class ConfigDriveUnknownFormat(NovaException):
+    message = _("Unknown config drive format %(format)s. Select one of "
+                "iso9660 or vfat.")
 
 
 def get_context_from_function_and_args(function, args, kwargs):

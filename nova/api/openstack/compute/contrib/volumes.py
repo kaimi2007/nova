@@ -19,7 +19,6 @@ import webob
 from webob import exc
 
 from nova.api.openstack import common
-from nova.api.openstack.compute import servers
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
@@ -428,13 +427,6 @@ class VolumeAttachmentController(object):
         return {'volumeAttachments': results}
 
 
-class BootFromVolumeController(servers.Controller):
-    """The boot from volume API controller for the OpenStack API."""
-
-    def _get_block_device_mapping(self, data):
-        return data.get('block_device_mapping')
-
-
 def _translate_snapshot_detail_view(context, vol):
     """Maps keys for snapshots details view."""
 
@@ -598,7 +590,7 @@ class Volumes(extensions.ExtensionDescriptor):
         resources.append(res)
 
         res = extensions.ResourceExtension('os-volumes_boot',
-                                           BootFromVolumeController())
+                                           inherits='servers')
         resources.append(res)
 
         res = extensions.ResourceExtension('os-snapshots',

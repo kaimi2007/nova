@@ -188,6 +188,11 @@ class ComputeRpcAPITestCase(test.TestCase):
         self._test_compute_api('inject_network_info', 'cast',
                 instance=self.fake_instance, version='1.19')
 
+    def test_live_migration(self):
+        self._test_compute_api('live_migration', 'cast',
+                instance=self.fake_instance, dest='dest',
+                block_migration='blockity_block', host='tsoh', version='1.40')
+
     def test_post_live_migration_at_destination(self):
         self._test_compute_api('post_live_migration_at_destination', 'call',
                 instance=self.fake_instance, block_migration='block_migration',
@@ -209,6 +214,11 @@ class ComputeRpcAPITestCase(test.TestCase):
         self._test_compute_api('pre_live_migration', 'call',
                 instance=self.fake_instance, block_migration='block_migration',
                 disk='disk', host='host', version='1.23')
+
+    def test_prep_resize(self):
+        self._test_compute_api('prep_resize', 'cast',
+                instance=self.fake_instance, instance_type='fake_type',
+                image='fake_image', host='host', version='1.38')
 
     def test_reboot_instance(self):
         self._test_compute_api('reboot_instance', 'cast',
@@ -274,6 +284,13 @@ class ComputeRpcAPITestCase(test.TestCase):
         self._test_compute_api('rollback_live_migration_at_destination',
                 'cast', instance=self.fake_instance, host='host',
                 version='1.32')
+
+    def test_run_instance(self):
+        self._test_compute_api('run_instance', 'cast',
+                instance=self.fake_instance, host='fake_host',
+                request_spec='fake_spec', filter_properties={},
+                requested_networks='networks', injected_files='files',
+                admin_password='pw', is_first_time=True, version='1.39')
 
     def test_set_admin_password(self):
         self._test_compute_api('set_admin_password', 'call',

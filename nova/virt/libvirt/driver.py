@@ -74,6 +74,7 @@ from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova import utils
+from nova.virt import configdrive
 from nova.virt.disk import api as disk
 from nova.virt import driver
 from nova.virt.libvirt import config
@@ -301,7 +302,6 @@ class LibvirtDriver(driver.ComputeDriver):
         self._host_state = None
         self._initiator = None
         self._wrapped_conn = None
-        self.container = None
         self.read_only = read_only
         if FLAGS.firewall_driver not in firewall.drivers:
             FLAGS.set_default('firewall_driver', firewall.drivers[0])
@@ -472,35 +472,17 @@ class LibvirtDriver(driver.ComputeDriver):
         return self._conn.listDomainsID()
 
     def list_instances(self):
-        return [self._conn.lookupByID(x).name()
-                for x in self.list_instance_ids()
-                if x != 0]  # We skip domains with ID 0 (hypervisors).
-
-    @staticmethod
-    def _map_to_instance_info(domain):
-        """Gets info from a virsh domain object into an InstanceInfo"""
-
-        # domain.info() returns a list of:
-        #    state:       one of the state values (virDomainState)
-        #    maxMemory:   the maximum memory used by the domain
-        #    memory:      the current amount of memory used by the domain
-        #    nbVirtCPU:   the number of virtual CPU
-        #    puTime:      the time used by the domain in nanoseconds
-
-        (state, _max_mem, _mem, _num_cpu, _cpu_time) = domain.info()
-        state = LIBVIRT_POWER_STATE[state]
-
-        name = domain.name()
-
-        return driver.InstanceInfo(name, state)
-
-    def list_instances_detail(self):
-        infos = []
+        names = []
         for domain_id in self.list_instance_ids():
-            domain = self._conn.lookupByID(domain_id)
-            info = self._map_to_instance_info(domain)
-            infos.append(info)
-        return infos
+            try:
+                # We skip domains with ID 0 (hypervisors).
+                if domain_id != 0:
+                    domain = self._conn.lookupByID(domain_id)
+                    names.append(domain.name())
+            except libvirt.libvirtError:
+                # Instance was deleted while listing... ignore it
+                pass
+        return names
 
     def allow_gpus(self, inst):
         global num_gpus
@@ -719,7 +701,10 @@ class LibvirtDriver(driver.ComputeDriver):
             self.deassign_gpus(instance)
             #disk.destroy_container(self.container)
         if FLAGS.libvirt_type == 'lxc':
-                disk.destroy_container(self.container)
+            container_dir = os.path.join(FLAGS.instances_path,
+                                         instance['name'],
+                                         'rootfs')
+            disk.destroy_container(container_dir=container_dir)
         if os.path.exists(target):
             # If we fail to get rid of the directory
             # tree, this shouldn't block deletion of
@@ -1584,6 +1569,13 @@ class LibvirtDriver(driver.ComputeDriver):
         if not suffix:
             suffix = ''
 
+        # Are we using a config drive?
+        using_config_drive = False
+        if (instance.get('config_drive') or
+            FLAGS.force_config_drive):
+            LOG.info(_('Using config drive'), instance=instance)
+            using_config_drive = True
+
         # syntactic nicety
         def basepath(fname='', suffix=suffix):
             return os.path.join(FLAGS.instances_path,
@@ -1604,7 +1596,9 @@ class LibvirtDriver(driver.ComputeDriver):
         libvirt_utils.write_to_file(basepath('libvirt.xml'), libvirt_xml)
 
         if FLAGS.libvirt_type == 'lxc':
-            container_dir = '%s/rootfs' % basepath(suffix='')
+            container_dir = os.path.join(FLAGS.instances_path,
+                                         instance['name'],
+                                         'rootfs')
             libvirt_utils.ensure_tree(container_dir)
 
         # NOTE(dprince): for rescue console.log may already exist... chown it.
@@ -1700,29 +1694,14 @@ class LibvirtDriver(driver.ComputeDriver):
                                      size=size,
                                      swap_mb=swap_mb)
 
+        # target partition for file injection
         target_partition = None
         if not instance['kernel_id']:
             target_partition = FLAGS.libvirt_inject_partition
             if target_partition == 0:
                 target_partition = None
-
-        config_drive, config_drive_id = self._get_config_drive_info(instance)
-
-        if any((FLAGS.libvirt_type == 'lxc', config_drive, config_drive_id)):
+        if FLAGS.libvirt_type == 'lxc':
             target_partition = None
-
-        if config_drive_id:
-            fname = config_drive_id
-            raw('disk.config').cache(fn=libvirt_utils.fetch_image,
-                                     fname=fname,
-                                     image_id=config_drive_id,
-                                     user_id=instance['user_id'],
-                                     project_id=instance['project_id'])
-        elif config_drive:
-            label = 'config'
-            with utils.remove_path_on_error(basepath('disk.config')):
-                self._create_local(basepath('disk.config'), 64, unit='M',
-                                   fs_format='msdos', label=label)  # 64MB
 
         if FLAGS.libvirt_inject_key and instance['key_data']:
             key = str(instance['key_data'])
@@ -1766,6 +1745,12 @@ class LibvirtDriver(driver.ComputeDriver):
                                searchList=[{'interfaces': nets,
                                             'use_ipv6': FLAGS.use_ipv6}]))
 
+        # Config drive
+        cdb = None
+        if using_config_drive:
+            cdb = configdrive.ConfigDriveBuilder(instance=instance)
+
+        # File injection
         metadata = instance.get('metadata')
 
         if FLAGS.libvirt_inject_password:
@@ -1776,33 +1761,50 @@ class LibvirtDriver(driver.ComputeDriver):
         files = instance.get('injected_files')
 
         if any((key, net, metadata, admin_pass, files)):
-            if config_drive:  # Should be True or None by now.
-                injection_path = raw('disk.config').path
-                img_id = 'config-drive'
-            else:
+            if not using_config_drive:
+                # If we're not using config_drive, inject into root fs
                 injection_path = image('disk').path
-                img_id = instance.image_ref
+                img_id = instance['image_ref']
 
-            for injection in ('metadata', 'key', 'net', 'admin_pass', 'files'):
-                if locals()[injection]:
-                    LOG.info(_('Injecting %(injection)s into image'
-                               ' %(img_id)s'), locals(), instance=instance)
+                for injection in ('metadata', 'key', 'net', 'admin_pass',
+                                  'files'):
+                    if locals()[injection]:
+                        LOG.info(_('Injecting %(injection)s into image'
+                                   ' %(img_id)s'), locals(), instance=instance)
+                try:
+                    disk.inject_data(injection_path,
+                                     key, net, metadata, admin_pass, files,
+                                     partition=target_partition,
+                                     use_cow=FLAGS.use_cow_images)
+
+                except Exception as e:
+                    # This could be a windows image, or a vmdk format disk
+                    LOG.warn(_('Ignoring error injecting data into image '
+                               '%(img_id)s (%(e)s)') % locals(),
+                             instance=instance)
+
+            else:
+                # We're using config_drive, so put the files there instead
+                cdb.inject_data(key, net, metadata, admin_pass, files)
+
+        if using_config_drive:
+            # NOTE(mikal): Render the config drive. We can't add instance
+            # metadata here until after file injection, as the file injection
+            # creates state the openstack metadata relies on.
+            cdb.add_instance_metadata()
+
             try:
-                disk.inject_data(injection_path,
-                                 key, net, metadata, admin_pass, files,
-                                 partition=target_partition,
-                                 use_cow=FLAGS.use_cow_images)
-
-            except Exception as e:
-                # This could be a windows image, or a vmdk format disk
-                LOG.warn(_('Ignoring error injecting data into image '
-                           '%(img_id)s (%(e)s)') % locals(),
-                         instance=instance)
+                configdrive_path = basepath(fname='disk.config')
+                LOG.info(_('Creating config drive at %(path)s'),
+                         {'path': configdrive_path}, instance=instance)
+                cdb.make_drive(configdrive_path)
+            finally:
+                cdb.cleanup()
 
         if FLAGS.libvirt_type == 'lxc':
-            self.container = disk.setup_container(basepath('disk'),
-                                                  container_dir=container_dir,
-                                                  use_cow=FLAGS.use_cow_images)
+            disk.setup_container(basepath('disk'),
+                                 container_dir=container_dir,
+                                 use_cow=FLAGS.use_cow_images)
 
         if FLAGS.libvirt_type == 'uml':
             libvirt_utils.chown(basepath('disk'), 'root')
@@ -1824,18 +1826,6 @@ class LibvirtDriver(driver.ComputeDriver):
 
         LOG.debug(_("block_device_list %s"), block_device_list)
         return block_device.strip_dev(mount_device) in block_device_list
-
-    def _get_config_drive_info(self, instance):
-        config_drive = instance.get('config_drive')
-        config_drive_id = instance.get('config_drive_id')
-        if FLAGS.force_config_drive:
-            if not config_drive_id:
-                config_drive = True
-        return config_drive, config_drive_id
-
-    def _has_config_drive(self, instance):
-        config_drive, config_drive_id = self._get_config_drive_info(instance)
-        return any((config_drive, config_drive_id))
 
     def get_host_capabilities(self):
         """Returns an instance of config.LibvirtConfigCaps representing
@@ -1931,7 +1921,7 @@ class LibvirtDriver(driver.ComputeDriver):
             fs.source_type = "mount"
             fs.source_dir = os.path.join(FLAGS.instances_path,
                                          instance['name'],
-                                         "rootfs")
+                                         'rootfs')
             devices.append(fs)
         else:
             if image_meta and image_meta.get('disk_format') == 'iso':
@@ -2032,7 +2022,9 @@ class LibvirtDriver(driver.ComputeDriver):
                                                     mount_device)
                     devices.append(cfg)
 
-            if self._has_config_drive(instance):
+            if (instance.get('config_drive') or
+                instance.get('config_drive_id') or
+                FLAGS.force_config_drive):
                 diskconfig = config.LibvirtConfigGuestDisk()
                 diskconfig.source_type = "file"
                 diskconfig.driver_format = "raw"
@@ -2548,6 +2540,9 @@ class LibvirtDriver(driver.ComputeDriver):
     def refresh_security_group_members(self, security_group_id):
         self.firewall_driver.refresh_security_group_members(security_group_id)
 
+    def refresh_instance_security_rules(self, instance):
+        self.firewall_driver.refresh_instance_security_rules(instance)
+
     def refresh_provider_fw_rules(self):
         self.firewall_driver.refresh_provider_fw_rules()
 
@@ -2773,7 +2768,7 @@ class LibvirtDriver(driver.ComputeDriver):
         os.remove(tmp_file)
 
     def ensure_filtering_rules_for_instance(self, instance_ref, network_info,
-                                            time=None):
+                                            time_module=None):
         """Setting up filtering rules and waiting for its completion.
 
         To migrate an instance, filtering rules to hypervisors
@@ -2797,8 +2792,8 @@ class LibvirtDriver(driver.ComputeDriver):
 
         """
 
-        if not time:
-            time = greenthread
+        if not time_module:
+            time_module = greenthread
 
         # If any instances never launch at destination host,
         # basic-filtering must be set here.
@@ -2817,7 +2812,13 @@ class LibvirtDriver(driver.ComputeDriver):
             if len(timeout_count) == 0:
                 msg = _('Timeout migrating for %s. nwfilter not found.')
                 raise exception.NovaException(msg % instance_ref["name"])
-            time.sleep(1)
+            time_module.sleep(1)
+
+    def filter_defer_apply_on(self):
+        self.firewall_driver.filter_defer_apply_on()
+
+    def filter_defer_apply_off(self):
+        self.firewall_driver.filter_defer_apply_off()
 
     def live_migration(self, ctxt, instance_ref, dest,
                        post_method, recover_method, block_migration=False):
@@ -2875,8 +2876,10 @@ class LibvirtDriver(driver.ComputeDriver):
                              None,
                              FLAGS.live_migration_bandwidth)
 
-        except Exception:
+        except Exception as e:
             with excutils.save_and_reraise_exception():
+                LOG.error(_("Live Migration failure: %(e)s") % locals(),
+                          instance=instance_ref)
                 recover_method(ctxt, instance_ref, dest, block_migration)
 
         # Waiting for completion of live_migration.

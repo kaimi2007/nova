@@ -42,6 +42,9 @@ class FakeInstance(object):
         self.name = name
         self.state = state
 
+    def __getitem__(self, key):
+        return getattr(self, key)
+
 
 class FakeDriver(driver.ComputeDriver):
     """Fake hypervisor driver"""
@@ -71,17 +74,6 @@ class FakeDriver(driver.ComputeDriver):
     def list_instances(self):
         return self.instances.keys()
 
-    def _map_to_instance_info(self, instance):
-        instance = utils.check_isinstance(instance, FakeInstance)
-        info = driver.InstanceInfo(instance.name, instance.state)
-        return info
-
-    def list_instances_detail(self):
-        info_list = []
-        for instance in self.instances.values():
-            info_list.append(self._map_to_instance_info(instance))
-        return info_list
-
     def plug_vifs(self, instance, network_info):
         """Plug VIFs into networks."""
         pass
@@ -92,7 +84,7 @@ class FakeDriver(driver.ComputeDriver):
 
     def spawn(self, context, instance, image_meta,
               network_info=None, block_device_info=None):
-        name = instance.name
+        name = instance['name']
         state = power_state.RUNNING
         fake_instance = FakeInstance(name, state)
         self.instances[name] = fake_instance
@@ -219,6 +211,9 @@ class FakeDriver(driver.ComputeDriver):
         return True
 
     def refresh_security_group_members(self, security_group_id):
+        return True
+
+    def refresh_instance_security_rules(self, instance):
         return True
 
     def refresh_provider_fw_rules(self):

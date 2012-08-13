@@ -118,7 +118,7 @@ class LibvirtOpenVswitchDriver(vif.VIFDriver):
        libvirt XML.  Used for libvirt versions that do not support
        OVS virtual port XML (0.9.10 or earlier)."""
 
-    def get_dev_name(_self, iface_id):
+    def get_dev_name(self, iface_id):
         return "tap" + iface_id[0:11]
 
     def plug(self, instance, vif):
@@ -152,6 +152,8 @@ class LibvirtOpenVswitchDriver(vif.VIFDriver):
 
         conf = config.LibvirtConfigGuestInterface()
 
+        if FLAGS.libvirt_use_virtio_for_bridges:
+            conf.model = "virtio"
         conf.net_type = "ethernet"
         conf.target_dev = dev
         conf.script = ""
@@ -213,6 +215,8 @@ class QuantumLinuxBridgeVIFDriver(vif.VIFDriver):
 
         conf = config.LibvirtConfigGuestInterface()
 
+        if FLAGS.libvirt_use_virtio_for_bridges:
+            conf.model = 'virtio'
         conf.net_type = "ethernet"
         conf.target_dev = dev
         conf.script = ""

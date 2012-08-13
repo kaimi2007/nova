@@ -105,7 +105,8 @@
     "compute_extension:networks": [],
     "compute_extension:networks:view": [],
     "compute_extension:quotas:show": [],
-    "compute_extension:quotas:update": [],
+    "compute_extension:quotas:update_for_project": [],
+    "compute_extension:quotas:update_for_user": [],
     "compute_extension:quota_classes": [],
     "compute_extension:rescue": [],
     "compute_extension:security_groups": [],
@@ -169,6 +170,7 @@
     "network:get_fixed_ip": [],
     "network:add_fixed_ip_to_instance": [],
     "network:remove_fixed_ip_from_instance": [],
+    "network:add_network_to_project": [],
     "network:get_instance_nw_info": [],
 
     "network:get_dns_domains": [],

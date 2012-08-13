@@ -789,7 +789,7 @@ class NetworkManager(manager.SchedulerDependentManager):
         # NOTE(tr3buchet: unless manager subclassing NetworkManager has
         #                 already imported ipam, import nova ipam here
         if not hasattr(self, 'ipam'):
-            self._import_ipam_lib('nova.network.quantum.nova_ipam_lib')
+            self._import_ipam_lib('nova.network.nova_ipam_lib')
         l3_lib = kwargs.get("l3_lib", FLAGS.l3_lib)
         self.l3driver = importutils.import_object(l3_lib)
 
@@ -1906,6 +1906,11 @@ class VlanManager(RPCAllocateFixedIP, FloatingIP, NetworkManager):
         self.db.fixed_ip_update(context, address, values)
         self._setup_network_on_host(context, network)
         return address
+
+    @wrap_check_policy
+    def add_network_to_project(self, context, project_id):
+        """Force adds another network to a project."""
+        self.db.network_associate(context, project_id, force=True)
 
     def _get_networks_for_instance(self, context, instance_id, project_id,
                                    requested_networks=None):

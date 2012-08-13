@@ -105,20 +105,6 @@ class BareMetalDriver(driver.ComputeDriver):
     def list_instances(self):
         return self._conn.list_domains()
 
-    def _map_to_instance_info(self, domain_name):
-        """Gets info from a virsh domain object into an InstanceInfo"""
-        _domain_info = self._conn.get_domain_info(domain_name)
-        state, _max_mem, _mem, _num_cpu, _cpu_time = _domain_info
-        name = domain_name
-        return driver.InstanceInfo(name, state)
-
-    def list_instances_detail(self):
-        infos = []
-        for domain_name in self._conn.list_domains():
-            info = self._map_to_instance_info(domain_name)
-            infos.append(info)
-        return infos
-
     def destroy(self, instance, network_info, block_device_info=None,
                 cleanup=True):
         while True:
@@ -462,7 +448,7 @@ class BareMetalDriver(driver.ComputeDriver):
             inst_name = inst['name']
 
             injection_path = basepath('root')
-            img_id = inst.image_ref
+            img_id = inst['image_ref']
 
             for injection in ('metadata', 'key', 'net'):
                 if locals()[injection]:
@@ -669,6 +655,10 @@ class BareMetalDriver(driver.ComputeDriver):
         # Bare metal doesn't currently support security groups
         pass
 
+    def refresh_instance_security_rules(self, instance):
+        # Bare metal doesn't currently support security groups
+        pass
+
     def update_available_resource(self, ctxt, host):
         """Updates compute manager resource info on ComputeNode table.
 
@@ -709,8 +699,7 @@ class BareMetalDriver(driver.ComputeDriver):
             LOG.info(_('Compute_service record updated for %s ') % host)
             db.compute_node_update(ctxt, compute_node_ref[0]['id'], dic)
 
-    def ensure_filtering_rules_for_instance(self, instance_ref,
-                                            time=None):
+    def ensure_filtering_rules_for_instance(self, instance_ref, network_info):
         raise NotImplementedError()
 
     def live_migration(self, ctxt, instance_ref, dest,

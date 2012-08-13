@@ -677,9 +677,13 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
             self._tee_executed = True
             return '', ''
 
+        def _readlink_handler(cmd_parts, **kwargs):
+            return os.path.realpath(cmd_parts[2]), ''
+
         fake_utils.fake_execute_set_repliers([
             # Capture the tee .../etc/network/interfaces command
             (r'tee.*interfaces', _tee_handler),
+            (r'readlink -nm.*', _readlink_handler),
         ])
         self._test_spawn(IMAGE_MACHINE,
                          IMAGE_KERNEL,
@@ -987,18 +991,18 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
                                      {'uuid': vdi_uuid, 'ref': vdi_ref})
         self.assertEqual(called['resize'], True)
 
-        def test_resize_xcp(self):
-            instance = db.instance_create(self.context, self.instance_values)
-            called = {'resize': False}
+    def test_resize_xcp(self):
+        instance = db.instance_create(self.context, self.instance_values)
+        called = {'resize': False}
 
-            def fake_vdi_resize(*args, **kwargs):
-                called['resize'] = True
+        def fake_vdi_resize(*args, **kwargs):
+            called['resize'] = True
 
-                self.stubs.Set(stubs.FakeSessionForVMTests,
-                               "VDI_resize", fake_vdi_resize)
-                stubs.stubout_session(self.stubs, stubs.FakeSessionForVMTests,
-                                      product_version=(1, 4, 99),
-                                      product_brand='XCP')
+        self.stubs.Set(stubs.FakeSessionForVMTests,
+                       "VDI_resize", fake_vdi_resize)
+        stubs.stubout_session(self.stubs, stubs.FakeSessionForVMTests,
+                              product_version=(1, 4, 99),
+                              product_brand='XCP')
         conn = xenapi_conn.XenAPIDriver(False)
         vdi_ref = xenapi_fake.create_vdi('hurr', 'fake')
         vdi_uuid = xenapi_fake.get_record('VDI', vdi_ref)['uuid']
@@ -2145,9 +2149,9 @@ class XenAPILiveMigrateTestCase(stubs.XenAPITestBase):
             def __init__(self):
                 self.metadetails = {"host": "test_host_uuid"}
 
-        def fake_aggregate_get_by_host(context, host):
+        def fake_aggregate_get_by_host(context, host, key=None):
             self.assertEqual(FLAGS.host, host)
-            return fake_aggregate()
+            return [fake_aggregate()]
 
         self.stubs.Set(db, "aggregate_get_by_host",
                 fake_aggregate_get_by_host)
@@ -2159,9 +2163,9 @@ class XenAPILiveMigrateTestCase(stubs.XenAPITestBase):
             def __init__(self):
                 self.metadetails = {"dest_other": "test_host_uuid"}
 
-        def fake_aggregate_get_by_host(context, host):
+        def fake_aggregate_get_by_host(context, host, key=None):
             self.assertEqual(FLAGS.host, host)
-            return fake_aggregate()
+            return [fake_aggregate()]
 
         self.stubs.Set(db, "aggregate_get_by_host",
                       fake_aggregate_get_by_host)
@@ -2261,22 +2265,19 @@ class XenAPIInjectMetadataTestCase(stubs.XenAPITestBase):
                        fake_delete_from_xenstore)
 
     def test_inject_instance_metadata(self):
-        class FakeMetaItem(object):
-            def __init__(self, key, value):
-                self.key = key
-                self.value = value
 
         # Add some system_metadata to ensure it doesn't get added
         # to xenstore
-        instance = dict(metadata=[FakeMetaItem("a", 1),
-                                  FakeMetaItem("b", 2),
-                                  FakeMetaItem("c", 3),
+        instance = dict(metadata=[{'key': 'a', 'value': 1},
+                                  {'key': 'b', 'value': 2},
+                                  {'key': 'c', 'value': 3},
                                   # Check xenstore key sanitizing
-                                  FakeMetaItem("hi.there", 4),
-                                  FakeMetaItem("hi!t.e/e", 5)],
-                        system_metadata=[FakeMetaItem("sys_a", 1),
-                                         FakeMetaItem("sys_b", 2),
-                                         FakeMetaItem("sys_c", 3)])
+                                  {'key': 'hi.there', 'value': 4},
+                                  {'key': 'hi!t.e/e', 'value': 5}],
+                                  # Check xenstore key sanitizing
+                        system_metadata=[{'key': 'sys_a', 'value': 1},
+                                         {'key': 'sys_b', 'value': 2},
+                                         {'key': 'sys_c', 'value': 3}])
         self.conn._vmops.inject_instance_metadata(instance, 'vm_ref')
 
         self.assertEqual(self.xenstore, {

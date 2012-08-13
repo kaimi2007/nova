@@ -795,14 +795,14 @@ class CloudController(object):
         volume = self.volume_api.get(context, volume_id)
 
         try:
-            instance = self.compute_api.detach_volume(context,
-                                                      volume_id=volume_id)
+            self.compute_api.detach_volume(context, volume_id=volume_id)
         except exception.InvalidVolume:
             raise exception.EC2APIError(_('Detach Volume Failed.'))
 
         return {'attachTime': volume['attach_time'],
                 'device': volume['mountpoint'],
-                'instanceId': ec2utils.id_to_ec2_inst_id(instance['uuid']),
+                'instanceId': ec2utils.id_to_ec2_inst_id(
+                                    volume['instance_uuid']),
                 'requestId': context.request_id,
                 'status': volume['attach_status'],
                 'volumeId': ec2utils.id_to_ec2_vol_id(volume_id)}
@@ -921,10 +921,10 @@ class CloudController(object):
             try:
                 internal_id = ec2utils.ec2_id_to_id(ec2_id)
                 instance = self.compute_api.get(context, internal_id)
-                i['shutdownState'] = _state_description(instance['vm_state'],
+                i['currentState'] = _state_description(instance['vm_state'],
                                             instance['shutdown_terminate'])
             except exception.NotFound:
-                i['shutdownState'] = _state_description(vm_states.DELETED,
+                i['currentState'] = _state_description(vm_states.DELETED,
                                                         True)
             instances_set.append(i)
         return {'instancesSet': instances_set}
@@ -1098,7 +1098,10 @@ class CloudController(object):
 
     def allocate_address(self, context, **kwargs):
         LOG.audit(_("Allocate address"), context=context)
-        public_ip = self.network_api.allocate_floating_ip(context)
+        try:
+            public_ip = self.network_api.allocate_floating_ip(context)
+        except exception.FloatingIpLimitExceeded:
+            raise exception.EC2APIError(_('No more floating IPs available'))
         return {'publicIp': public_ip}
 
     def release_address(self, context, public_ip, **kwargs):

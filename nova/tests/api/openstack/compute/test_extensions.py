@@ -109,11 +109,14 @@ class StubExtensionManager(object):
         self.action_ext = action_ext
         self.request_ext = request_ext
         self.controller_ext = controller_ext
+        self.extra_resource_ext = None
 
     def get_resources(self):
         resource_exts = []
         if self.resource_ext:
             resource_exts.append(self.resource_ext)
+        if self.extra_resource_ext:
+            resource_exts.append(self.extra_resource_ext)
         return resource_exts
 
     def get_actions(self):
@@ -153,6 +156,7 @@ class ExtensionControllerTest(ExtensionTestCase):
         self.ext_list = [
             "AdminActions",
             "Aggregates",
+            "AvailabilityZone",
             "Certificates",
             "Cloudpipe",
             "Console_output",
@@ -172,6 +176,7 @@ class ExtensionControllerTest(ExtensionTestCase):
             "Hosts",
             "Keypairs",
             "Multinic",
+            "MultipleCreate",
             "Networks",
             "QuotaClasses",
             "Quotas",
@@ -181,6 +186,7 @@ class ExtensionControllerTest(ExtensionTestCase):
             "ServerDiagnostics",
             "ServerStartStop",
             "SimpleTenantUsage",
+            "UserData",
             "VirtualInterfaces",
             "Volumes",
             "VolumeTypes",
@@ -380,8 +386,8 @@ class ExtensionManagerTest(ExtensionTestCase):
         app = compute.APIRouter()
         ext_mgr = compute_extensions.ExtensionManager()
         ext_mgr.register(InvalidExtension())
-        self.assertTrue('FOXNSOX' in ext_mgr.extensions)
-        self.assertTrue('THIRD' not in ext_mgr.extensions)
+        self.assertTrue(ext_mgr.is_loaded('FOXNSOX'))
+        self.assertFalse(ext_mgr.is_loaded('THIRD'))
 
 
 class ActionExtensionTest(ExtensionTestCase):
@@ -507,6 +513,27 @@ class ControllerExtensionTest(ExtensionTestCase):
                                        controller_ext=cont_ext)
         app = compute.APIRouter(manager)
         request = webob.Request.blank("/fake/tweedles")
+        response = request.get_response(app)
+        self.assertEqual(200, response.status_int)
+        self.assertEqual(extension_body, response.body)
+
+    def test_controller_extension_late_inherited_resource(self):
+        # Need a dict for the body to convert to a ResponseObject
+        controller = StubController(dict(foo=response_body))
+        parent_ext = base_extensions.ResourceExtension('tweedles', controller)
+
+        ext_controller = StubLateExtensionController(extension_body)
+        extension = StubControllerExtension()
+        cont_ext = base_extensions.ControllerExtension(extension, 'tweedles',
+                                                       ext_controller)
+
+        manager = StubExtensionManager(resource_ext=parent_ext,
+                                       controller_ext=cont_ext)
+        child_ext = base_extensions.ResourceExtension('beetles', controller,
+                                                      inherits='tweedles')
+        manager.extra_resource_ext = child_ext
+        app = compute.APIRouter(manager)
+        request = webob.Request.blank("/fake/beetles")
         response = request.get_response(app)
         self.assertEqual(200, response.status_int)
         self.assertEqual(extension_body, response.body)

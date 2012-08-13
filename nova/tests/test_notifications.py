@@ -28,6 +28,7 @@ from nova import flags
 import nova.network
 from nova import notifications
 from nova.openstack.common import log as logging
+from nova.openstack.common.notifier import api as notifier_api
 from nova.openstack.common.notifier import test_notifier
 from nova import test
 from nova.tests import fake_network
@@ -54,7 +55,7 @@ class NotificationsTestCase(test.TestCase):
 
         self.flags(compute_driver='nova.virt.fake.FakeDriver',
                    stub_network=True,
-            notification_driver='nova.openstack.common.notifier.test_notifier',
+          notification_driver=['nova.openstack.common.notifier.test_notifier'],
                    network_manager='nova.network.manager.FlatManager',
                    notify_on_state_change="vm_and_task_state",
                    host='testhost')
@@ -65,6 +66,10 @@ class NotificationsTestCase(test.TestCase):
         test_notifier.NOTIFICATIONS = []
 
         self.instance = self._wrapped_create()
+
+    def tearDown(self):
+        notifier_api._reset_drivers()
+        super(NotificationsTestCase, self).tearDown()
 
     def _wrapped_create(self, params=None):
         inst = {}
@@ -268,3 +273,22 @@ class NotificationsTestCase(test.TestCase):
         display_name = self.instance["display_name"]
 
         self.assertEquals(payload["display_name"], display_name)
+
+    def test_send_no_state_change(self):
+        called = [False]
+
+        def sending_no_state_change(context, instance, **kwargs):
+            called[0] = True
+        self.stubs.Set(notifications, '_send_instance_update_notification',
+                       sending_no_state_change)
+        notifications.send_update(self.context, self.instance, self.instance)
+        self.assertTrue(called[0])
+
+    def test_fail_sending_update(self):
+        def fail_sending(context, instance, **kwargs):
+            raise Exception('failed to notify')
+        self.stubs.Set(notifications, '_send_instance_update_notification',
+                       fail_sending)
+
+        notifications.send_update(self.context, self.instance, self.instance)
+        self.assertEquals(0, len(test_notifier.NOTIFICATIONS))

@@ -52,6 +52,8 @@ class FaultWrapper(base_wsgi.Middleware):
         safe = getattr(inner, 'safe', False)
         headers = getattr(inner, 'headers', None)
         status = getattr(inner, 'code', 500)
+        if status is None:
+            status = 500
 
         msg_dict = dict(url=req.url, status=status)
         LOG.info(_("%(url)s returned with HTTP %(status)d") % msg_dict)
@@ -122,7 +124,7 @@ class APIRouter(base_wsgi.Router):
 
         mapper = ProjectMapper()
         self.resources = {}
-        self._setup_routes(mapper)
+        self._setup_routes(mapper, ext_mgr)
         self._setup_ext_routes(mapper, ext_mgr)
         self._setup_extensions(ext_mgr)
         super(APIRouter, self).__init__(mapper)
@@ -132,7 +134,13 @@ class APIRouter(base_wsgi.Router):
             LOG.debug(_('Extended resource: %s'),
                       resource.collection)
 
-            wsgi_resource = wsgi.Resource(resource.controller)
+            inherits = None
+            if resource.inherits:
+                inherits = self.resources.get(resource.inherits)
+                if not resource.controller:
+                    resource.controller = inherits.controller
+            wsgi_resource = wsgi.Resource(resource.controller,
+                                          inherits=inherits)
             self.resources[resource.collection] = wsgi_resource
             kargs = dict(
                 controller=wsgi_resource,
@@ -166,5 +174,5 @@ class APIRouter(base_wsgi.Router):
             resource.register_actions(controller)
             resource.register_extensions(controller)
 
-    def _setup_routes(self, mapper):
+    def _setup_routes(self, mapper, ext_mgr):
         raise NotImplementedError
