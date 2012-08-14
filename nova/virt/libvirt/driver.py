@@ -46,12 +46,9 @@ import hashlib
 import multiprocessing
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
 import uuid
-from xml.dom import minidom
-from xml.etree import ElementTree
 
 from eventlet import greenthread
 from eventlet import tpool
@@ -62,7 +59,6 @@ from nova import block_device
 from nova.compute import instance_types
 from nova.compute import power_state
 from nova.compute import vm_mode
-from nova.compute import vm_states
 from nova import context as nova_context
 from nova import db
 from nova import exception
@@ -82,17 +78,11 @@ from nova.virt.libvirt import firewall
 from nova.virt.libvirt import imagebackend
 from nova.virt.libvirt import imagecache
 from nova.virt.libvirt import utils as libvirt_utils
-from nova import vnc
-import subprocess
 
 libvirt = None
 Template = None
 
 LOG = logging.getLogger(__name__)
-
-#ISI
-lxc_mounts = {}
-#!ISI
 
 libvirt_opts = [
     cfg.StrOpt('rescue_image_id',
@@ -164,14 +154,6 @@ libvirt_opts = [
                help='Override the default disk prefix for the devices attached'
                     ' to a server, which is dependent on libvirt_type. '
                     '(valid options are: sd, xvd, uvd, vd)'),
-    cfg.ListOpt('extra_node_capabilities',
-               default=[],
-               help='Key/value list with extra caps of the compute node'),
-    cfg.StrOpt('dev_cgroups_path',
-               default=None,
-               help='Override the default disk prefix for the devices '
-               'attached to a server, which is dependent on '
-               'libvirt_type. (valid options are: sd, xvd, uvd, vd)'),
     cfg.IntOpt('libvirt_wait_soft_reboot_seconds',
                default=120,
                help='Number of seconds to wait for instance to shut down after'
@@ -211,18 +193,6 @@ FLAGS.register_opts(libvirt_opts)
 
 flags.DECLARE('live_migration_retry_count', 'nova.compute.manager')
 flags.DECLARE('vncserver_proxyclient_address', 'nova.vnc')
-
-
-# Variables for tracking gpus available and gpus assigned
-if FLAGS.connection_type == 'gpu':
-    gpus_available = []
-    gpus_assigned = {}
-    vcpus_used = 0
-    num_gpus = None
-    gpu_arch = None
-    gpu_info = None
-
-extra_specs = {}
 
 
 def patch_tpool_proxy():
@@ -369,39 +339,6 @@ class LibvirtDriver(driver.ComputeDriver):
             LOG.error(_('Nova requires libvirt version '
                         '%(major)i.%(minor)i.%(micro)i or greater.') %
                         locals())
-        context = nova_context.get_admin_context()
-        self._get_instance_type_extra_specs_capabilities(context)
-        if FLAGS.connection_type == 'gpu':
-            global gpus_available
-            global num_gpus
-            global gpu_arch
-            global gpu_info
-            if 'gpus' in extra_specs:
-                num_gpus = extra_specs['gpus']
-                gpus_available = range(int(extra_specs['gpus']))
-                print "**************************"
-                print num_gpus
-                print gpus_available
-                print int(num_gpus) - len(gpus_available)
-                print "**************************"
-            if 'gpu_arch' in extra_specs:
-                gpu_arch = extra_specs['gpu_arch']
-            if 'gpu_info' in extra_specs:
-                gpu_info = extra_specs['gpu_info']
-
-        if FLAGS.libvirt_type == 'lxc':
-            FLAGS.use_cow_images = False
-
-        # NOTE(nsokolov): moved instance restarting to ComputeManager
-        pass
-
-    def _get_instance_type_extra_specs_capabilities(self, context):
-        """Return additional capabilities for this compute host."""
-        for pair in FLAGS.instance_type_extra_specs:
-            keyval = pair.split(':', 1)
-            keyval[0] = keyval[0].strip()
-            keyval[1] = keyval[1].strip()
-            extra_specs[keyval[0]] = keyval[1]
 
     def _get_connection(self):
         if not self._wrapped_conn or not self._test_connection():
@@ -483,108 +420,6 @@ class LibvirtDriver(driver.ComputeDriver):
                 # Instance was deleted while listing... ignore it
                 pass
         return names
-
-    def allow_gpus(self, inst):
-        global num_gpus
-        dev_whitelist = os.path.join(FLAGS.dev_cgroups_path,
-                                      inst['name'],
-                                      'devices.allow')
-        # Allow Nvidia Conroller
-        perm = "c 195:255  rwm"
-#        cmd = "sudo echo %s >> %s" % (perm, dev_whitelist)
-        cmd = "echo %s | sudo tee -a %s" % (perm, dev_whitelist)
-        msg = _("executing  %s") % cmd
-        LOG.info(msg)
-        subprocess.Popen(cmd, shell=True)
-        for i in range(int(num_gpus)):
-            # Allow each gpu device
-            perm = "c 195:%d  rwm" % i
-#            cmd = "sudo echo %s >> %s" % (perm, dev_whitelist)
-            cmd = "echo %s | sudo tee -a %s" % (perm, dev_whitelist)
-            msg = _("executing  %s") % cmd
-            LOG.info(msg)
-            subprocess.Popen(cmd, shell=True)
-
-    def assign_gpus(self, inst):
-        """Assigns gpus to a specific instance"""
-        global gpus_available
-        global gpus_assigned
-        global vcpus_used
-        ctxt = nova_context.get_admin_context()
-        gpus_in_meta = 0
-        gpus_in_extra = 0
-        env_file = os.path.join(FLAGS.instances_path,
-                                inst['name'],
-                                'rootfs/etc/environment')
-        msg = _("instance_type_id is %d .") % inst.instance_type_id
-        LOG.info(msg)
-        print "(JP) %s" % msg
-        instance_extra = db.instance_type_extra_specs_get( \
-                                ctxt, inst.instance_type_id)
-        msg = _("instance_extra is %s .") % instance_extra
-        LOG.info(msg)
-        msg = _("vcpus for this instance are %d .") % inst.vcpus
-        LOG.info(msg)
-        vcpus_used = vcpus_used + inst.vcpus
-        if 'gpus' in inst['metadata']:
-            gpus_in_meta = int(inst['metadata']['gpus'])
-            msg = _("gpus in metadata asked, %d .") % gpus_in_meta
-            LOG.info(msg)
-        if 'gpus' in instance_extra:
-            gpus_in_extra = int(instance_extra['gpus'].split()[1])
-            print "*****************"
-            print gpus_in_extra
-            print "*****************"
-            msg = _("gpus in instance_extra asked, %d .") % gpus_in_extra
-            LOG.info(msg)
-
-        if gpus_in_meta > gpus_in_extra:
-            gpus_needed = gpus_in_meta
-        else:
-            gpus_needed = gpus_in_extra
-        #added by JP for debug
-        #gpus_needed = 1
-        msg = _("GPUS asked, %d .") % gpus_needed
-#        raise Exception(_("Test Error"))
-        LOG.info(msg)
-        print "(JP) %s" % msg
-        # Allow gpu devices inside the container
-        self.allow_gpus(inst)
-        # Set environemnt
-        gpus_assigned_list = []
-#        self.destroy(inst, network_info)
-
-        if gpus_needed > len(gpus_available):
-            raise Exception(_("Overcommit Error"))
-        for i in range(gpus_needed):
-            gpus_assigned_list.append(gpus_available.pop())
-        if gpus_needed:
-            print 'GPUs are definitely needed.'
-            gpus_assigned[inst['name']] = gpus_assigned_list
-            gpus_visible = str(gpus_assigned_list).strip('[]')
-            flag = "CUDA_VISIBLE_DEVICES=%s" % gpus_visible
-            cmd = "echo %s | sudo tee -a %s" % (flag, env_file)
-#            cmd = "echo %s >> %s" % (flag, env_file)
-            msg = _("executing the command %s") % cmd
-            LOG.info(msg)
-            print "(JP) %s" % msg
-            subprocess.Popen(cmd, shell=True)
-#            utils.executeShell(cmd, run_as_root=True)
-
-    def deassign_gpus(self, inst):
-        """Assigns gpus to a specific instance"""
-        global gpus_available
-        global gpus_assigned
-        global vcpus_used
-
-        vcpus_used = vcpus_used - inst.vcpus
-        if vcpus_used < 0:
-            vcpus_used = 0
-        #Check if already deassigned
-        if inst['name'] in gpus_assigned:
-            gpus_available.extend(gpus_assigned[inst['name']])
-            del gpus_assigned[inst['name']]
-        return
 
     def plug_vifs(self, instance, network_info):
         """Plug VIFs into networks."""
@@ -697,9 +532,6 @@ class LibvirtDriver(driver.ComputeDriver):
         target = os.path.join(FLAGS.instances_path, instance['name'])
         LOG.info(_('Deleting instance files %(target)s') % locals(),
                  instance=instance)
-        if FLAGS.connection_type == 'gpu':
-            self.deassign_gpus(instance)
-            #disk.destroy_container(self.container)
         if FLAGS.libvirt_type == 'lxc':
             container_dir = os.path.join(FLAGS.instances_path,
                                          instance['name'],
@@ -770,132 +602,9 @@ class LibvirtDriver(driver.ComputeDriver):
         method = getattr(driver, method_name)
         return method(connection_info, *args, **kwargs)
 
-    def attach_volume_lxc(self, connection_info, instance_name, \
-                          mountpoint, virt_dom):
-        # get device path
-        data = connection_info['data']
-        device_path = data['device_path']
-        LOG.info(_('attach_volume: device_path(%s)') % str(device_path))
-
-        # get id of the virt_dom
-        spid = str(virt_dom.ID())
-        LOG.info(_('attach_volume: pid(%s)') % spid)
-
-        # get PID of the init process
-        ps_command = subprocess.Popen("ps -o pid --ppid %s --noheaders" % \
-                           spid, shell=True, stdout=subprocess.PIPE)
-        init_pid = ps_command.stdout.read()
-        init_pid = str(int(init_pid))
-        retcode = ps_command.wait()
-        assert retcode == 0, "ps command returned %d" % retcode
-
-        LOG.info(_('attach_volume: init_pid(%s)') % init_pid)
-        # get major, minor number of the device
-        s = os.stat(device_path)
-        major_num = os.major(s.st_rdev)
-        minor_num = os.minor(s.st_rdev)
-        LOG.info(_('attach_volume: path(%s)') % device_path)
-        LOG.info(_('attach_volume: major_num(%(major_num)d) ' \
-                   'minor_num(%(minor_num)d)') % locals())
-
-        # allow the device
-        dev_whitelist = os.path.join(FLAGS.dev_cgroups_path,
-                                     instance_name,
-                                     'devices.allow')
-        # Allow the disk
-        perm = "b %d:%d rwm" % (major_num, minor_num)
-        cmd = "echo %s | sudo tee -a %s" % (perm, dev_whitelist)
-        LOG.info(_('attach_volume: cmd(%s)') % cmd)
-        subprocess.Popen(cmd, shell=True)
-
-        cmd_lxc = 'sudo lxc-attach -n %s -- ' % init_pid
-        # check if 'mountpoint' already exists
-
-        LOG.info(_('attach_volume: mountpoint(%s)') % mountpoint)
-        dev_key = init_pid + mountpoint
-        LOG.info(_('attach_volume: dev_key(%s)') % dev_key)
-        if dev_key in lxc_mounts:
-            LOG.info(_('attach_volume: dev_key(%s) is already used') \
-                        % dev_key)
-            raise Exception(_('the same mount point(%s) is already used.')\
-                        % mountpoint)
-
-        # create device(s) for mount
-        # sudo lxc-attach -n pid -- mknod -m 777
-        #                 <mountpoint> b <major #> <minor #>
-        cmd = '/bin/mknod -m 777 %s b %d %d '\
-             % (mountpoint, major_num, minor_num)
-        cmd = cmd_lxc + cmd
-        LOG.info(_('attach_volume: cmd (%s)') % cmd)
-        subprocess.call(cmd, shell=True)
-
-        # create a directory for mount
-        cmd = '/bin/mkdir -p /vmnt '
-        cmd = cmd_lxc + cmd
-        LOG.info(_('attach_volume: cmd (%s)') % cmd)
-        subprocess.call(cmd, shell=True)
-
-        # create a sub-directory for mount
-        found = 0
-        for n in range(0, 100):
-            dir_name = '/vmnt/vol' + str(n)
-            cmd = cmd_lxc + '/bin/ls ' + dir_name
-            LOG.info(_('attach_volume: cmd (%s)') % cmd)
-            p = subprocess.Popen(cmd, shell=True,  \
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            x = p.communicate()
-            LOG.info(_('attach_volume: return x[0](%s)') % x[0])
-            LOG.info(_('attach_volume: return x[1](%s)') % x[1])
-            #if len(x[1]) > 5: # new  "No such file exists..."
-            s = x[1].lower()
-            if (len(s) > 0 and s.find('no such') >= 0):
-            # new  "No such file exists..."
-                cmd = cmd_lxc + ' /bin/mkdir ' + dir_name
-                LOG.info(_('attach_volume: cmd (%s)') % cmd)
-                subprocess.call(cmd, shell=True)
-                found = 1
-                break
-        if found == 0:
-            cmd = '/bin/rm %s ' % (mountpoint)
-            cmd = cmd_lxc + cmd
-            LOG.info(_('attach_volume: cmd (%s)') % cmd)
-            subprocess.call(cmd, shell=True)
-            raise Exception(_('cannot find mounting directories'))
-
-        lxc_mounts[dev_key] = dir_name
-        cmd = cmd_lxc + '/bin/chmod 777 ' + mountpoint
-        LOG.info(_('attach_volume: cmd (%s)') % cmd)
-        subprocess.call(cmd, shell=True)
-
-        # mount
-        cmd = cmd_lxc + ' /bin/mount ' + mountpoint + ' ' + dir_name
-        LOG.info(_('attach_volume: cmd (%s)') % cmd)
-        p = subprocess.Popen(cmd, shell=True, \
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        x = p.communicate()
-
-        # change owner
-        user = FLAGS.user
-        user = user.rsplit("/")
-        user = user[len(user) - 1]
-        cmd = '/bin/chown %s /vmnt' % user
-        cmd = cmd_lxc + cmd
-        LOG.info(_('attach_volume: cmd (%s)') % cmd)
-        subprocess.call(cmd, shell=True)
-
-        cmd = '/bin/chown %s %s ' % (user, dir_name)
-        cmd = cmd_lxc + cmd
-        LOG.info(_('attach_volume: cmd (%s)') % cmd)
-        subprocess.call(cmd, shell=True)
-
-        cmd = cmd_lxc + " /bin/chmod 'og+w' " + ' ' + dir_name
-        LOG.info(_('attach_volume: cmd (%s)') % cmd)
-        subprocess.call(cmd, shell=True)
-
     @exception.wrap_exception()
     def attach_volume(self, connection_info, instance_name, mountpoint):
         virt_dom = self._lookup_by_name(instance_name)
-
         mount_device = mountpoint.rpartition("/")[2]
         conf = self.volume_driver_method('connect_volume',
                                          connection_info,
@@ -940,43 +649,6 @@ class LibvirtDriver(driver.ComputeDriver):
                 if child.tag == 'target':
                     if child.get('dev') == device:
                         return etree.tostring(node)
-
-    def detach_volume_lxc(self, connection_info, instance_name, \
-                          mountpoint, virt_dom):
-        # get id of the virt_dom
-        spid = str(virt_dom.ID())
-        LOG.info(_('detach_volume: pid(%s)') % spid)
-
-        # get PID of the init process
-        ps_command = subprocess.Popen("ps -o pid --ppid %s --noheaders" \
-                              % spid, shell=True, stdout=subprocess.PIPE)
-        init_pid = ps_command.stdout.read()
-        init_pid = str(int(init_pid))
-        retcode = ps_command.wait()
-        assert retcode == 0, "ps command returned %d" % retcode
-
-        dev_key = init_pid + mountpoint
-        if dev_key not in lxc_mounts:
-            raise Exception(_('no such process(%(init_pid)s) or ' \
-                  'mount point(%(mountpoint)s)') % locals())
-        dir_name = lxc_mounts[dev_key]
-
-        LOG.info(_('detach_volume: init_pid(%s)') % init_pid)
-        cmd_lxc = 'sudo lxc-attach -n %s -- ' % str(init_pid)
-        cmd = cmd_lxc + ' /bin/umount ' + dir_name
-        LOG.info(_('detach_volume: cmd(%s)') % cmd)
-        p = subprocess.Popen(cmd, shell=True, \
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        x = p.communicate()
-        cmd = cmd_lxc + ' /bin/rmdir  ' + dir_name
-        LOG.info(_('detach_volume: cmd(%s)') % cmd)
-        subprocess.call(cmd, shell=True)
-
-        del lxc_mounts[dev_key]  # delete dictionary entry
-
-        cmd = cmd_lxc + ' /bin/rm ' + mountpoint
-        LOG.info(_('detach_volume: cmd(%s)') % cmd)
-        subprocess.call(cmd, shell=True)
 
     @exception.wrap_exception()
     def detach_volume(self, connection_info, instance_name, mountpoint):
@@ -1112,36 +784,16 @@ class LibvirtDriver(driver.ComputeDriver):
         # Find the disk
         xml_desc = virt_dom.XMLDesc(0)
         domain = etree.fromstring(xml_desc)
+        source = domain.find('devices/disk/source')
+        disk_path = source.get('file')
+
+        snapshot_name = uuid.uuid4().hex
 
         (state, _max_mem, _mem, _cpus, _t) = virt_dom.info()
         state = LIBVIRT_POWER_STATE[state]
 
-        if FLAGS.libvirt_type != 'lxc' or FLAGS.use_cow_images == True:
-            source = domain.find('devices/disk/source')
-            disk_path = source.get('file')
-            if state == power_state.RUNNING:
-                virt_dom.managedSave(0)
-
-        snapshot_name = uuid.uuid4().hex
-
-        if FLAGS.libvirt_type == 'lxc' and FLAGS.use_cow_images == False:
-            source = domain.find('devices/filesystem/source')
-            disk_path = source.get('dir')
-            disk_path = disk_path[0:disk_path.rfind('rootfs')]
-            # hacking because snapshot is not supported for raw image
-            if FLAGS.use_cow_images == False:
-                qemu_img_cmd = ('qemu-img',
-                                'convert',
-                                '-f',
-                                'raw',
-                                '-O',
-                                'qcow2',
-                                disk_path + 'disk',
-                                disk_path + 'disk.qcow2')
-                libvirt_utils.execute(*qemu_img_cmd, run_as_root=True)
-                disk_path = disk_path + 'disk.qcow2'
-                source_format = 'qcow2'
-
+        if state == power_state.RUNNING:
+            virt_dom.managedSave(0)
         # Make the snapshot
         libvirt_utils.create_snapshot(disk_path, snapshot_name)
 
@@ -1156,9 +808,8 @@ class LibvirtDriver(driver.ComputeDriver):
                                                image_format)
             finally:
                 libvirt_utils.delete_snapshot(disk_path, snapshot_name)
-                if FLAGS.libvirt_type != 'lxc' or FLAGS.use_cow_images == True:
-                    if state == power_state.RUNNING:
-                        self._create_domain(domain=virt_dom)
+                if state == power_state.RUNNING:
+                    self._create_domain(domain=virt_dom)
 
             # Upload that image to the image service
             with libvirt_utils.file_open(out_path) as image_file:
@@ -1251,10 +902,6 @@ class LibvirtDriver(driver.ComputeDriver):
                 raise utils.LoopingCallDone
 
             if state == power_state.RUNNING:
-                #No need to set environment here, as same filesystem exists.
-                #But devices whitelist needs to be set again
-                if FLAGS.connection_type == 'gpu':
-                    allow_gpus(instance)
                 LOG.info(_("Instance rebooted successfully."),
                          instance=instance)
                 raise utils.LoopingCallDone
@@ -1396,15 +1043,6 @@ class LibvirtDriver(driver.ComputeDriver):
                 raise utils.LoopingCallDone
 
             if state == power_state.RUNNING:
-                if FLAGS.connection_type == 'gpu':
-                    try:
-                        self.assign_gpus(instance)
-                    except Exception as Exn:
-                        LOG.error(_("Error in GPU assignment, overcommitted."))
-                        self.destroy(instance, network_info, cleanup=True)
-                        db.instance_update(
-                            nova_context.get_admin_context(), instance['uuid'],
-                            {'vm_state': vm_states.OVERCOMMIT})
                 LOG.info(_("Instance spawned successfully."),
                          instance=instance)
                 raise utils.LoopingCallDone
@@ -2573,19 +2211,10 @@ class LibvirtDriver(driver.ComputeDriver):
                'hypervisor_version': self.get_hypervisor_version(),
                'hypervisor_hostname': self.get_hypervisor_hostname(),
                'cpu_info': self.get_cpu_info(),
-               #RLK
-               #'cpu_arch': FLAGS.cpu_arch,
-               #'xpu_arch': FLAGS.xpu_arch,
-               #'xpus': FLAGS.xpus,
-               #'xpu_info': FLAGS.xpu_info,
-               #'net_arch': FLAGS.net_arch,
-               #'net_info': FLAGS.net_info,
-               #'net_mbps': FLAGS.net_mbps,
                'service_id': service_ref['id'],
                'disk_available_least': self.get_disk_available_least()}
 
         compute_node_ref = service_ref['compute_node']
-#        LOG.info(_('#### RLK: cpu_arch = %s ') % FLAGS.cpu_arch)
         if not compute_node_ref:
             LOG.info(_('Compute_service record created for %s ') % host)
             db.compute_node_create(ctxt, dic)
@@ -2925,7 +2554,7 @@ class LibvirtDriver(driver.ComputeDriver):
                     LOG.warn(_("plug_vifs() failed %(cnt)d."
                                "Retry up to %(max_retry)d for %(hostname)s.")
                                % locals())
-                    time.sleep(1)
+                    greenthread.sleep(1)
 
     def pre_block_migration(self, ctxt, instance_ref, disk_info_json):
         """Preparation block migration.
@@ -3386,15 +3015,7 @@ class HostState(object):
         return self._stats
 
     def update_status(self):
-        """Since under Xenserver, a compute node runs on a given host,
-        we can get host status information using xenapi.
-        """
-        if FLAGS.connection_type == 'gpu':
-            global gpus_available
-            global vcpus_used
-            global num_gpus
-            global gpu_arch
-            global gpu_info
+        """Retrieve status info from libvirt."""
         LOG.debug(_("Updating host stats"))
         if self.connection is None:
             self.connection = LibvirtDriver(self.read_only)
@@ -3403,16 +3024,6 @@ class HostState(object):
         data["vcpus_used"] = self.connection.get_vcpu_used()
         data["cpu_info"] = jsonutils.loads(self.connection.get_cpu_info())
         data["disk_total"] = self.connection.get_local_gb_total()
-        if FLAGS.connection_type == 'gpu':
-            print "*****************"
-            print num_gpus
-            print gpus_available
-            print "*****************"
-            if 'gpus' in extra_specs:
-                extra_specs["gpus"] = int(len(gpus_available))
-                extra_specs["hypervisor_type"] = \
-                          self.connection.get_hypervisor_type()
-        data.update({"instance_type_extra_specs": extra_specs})
         data["disk_used"] = self.connection.get_local_gb_used()
         data["disk_available"] = data["disk_total"] - data["disk_used"]
         data["host_memory_total"] = self.connection.get_memory_mb_total()
@@ -3422,11 +3033,6 @@ class HostState(object):
         data["hypervisor_version"] = self.connection.get_hypervisor_version()
         data["hypervisor_hostname"] = self.connection.get_hypervisor_hostname()
 
-        # Add user-defined capabilities
-        caps = FLAGS.extra_node_capabilities
-        for cap in caps:
-            key, value = cap.split('=')
-            data[key] = value
         self._stats = data
 
         return data
