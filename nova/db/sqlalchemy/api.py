@@ -2075,7 +2075,7 @@ def key_pair_count_by_user(context, user_id):
 
 
 @require_admin_context
-def network_associate(context, project_id, force=False):
+def network_associate(context, project_id, network_id=None, force=False):
     """Associate a project with a network.
 
     called by project_get_networks under certain conditions
@@ -2093,10 +2093,13 @@ def network_associate(context, project_id, force=False):
     session = get_session()
     with session.begin():
 
-        def network_query(project_filter):
+        def network_query(project_filter, id=None):
+            filter_kwargs = {'project_id': project_filter}
+            if id is not None:
+                filter_kwargs['id'] = id
             return model_query(context, models.Network, session=session,
                               read_deleted="no").\
-                           filter_by(project_id=project_filter).\
+                           filter_by(**filter_kwargs).\
                            with_lockmode('update').\
                            first()
 
@@ -2109,7 +2112,7 @@ def network_associate(context, project_id, force=False):
             # with a new network
 
             # get new network
-            network_ref = network_query(None)
+            network_ref = network_query(None, network_id)
             if not network_ref:
                 raise db.NoMoreNetworks()
 
@@ -4551,7 +4554,7 @@ def instance_type_extra_specs_update_or_create(context, flavor_id,
             spec_ref = models.InstanceTypeExtraSpecs()
         spec_ref.update({"key": key, "value": value,
                          "instance_type_id": instance_type["id"],
-                         "deleted": 0})
+                         "deleted": False})
         spec_ref.save(session=session)
     return specs
 
@@ -4732,7 +4735,7 @@ def volume_type_extra_specs_update_or_create(context, volume_type_id,
             spec_ref = models.VolumeTypeExtraSpecs()
         spec_ref.update({"key": key, "value": value,
                          "volume_type_id": volume_type_id,
-                         "deleted": 0})
+                         "deleted": False})
         spec_ref.save(session=session)
     return specs
 
