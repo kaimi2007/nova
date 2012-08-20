@@ -218,7 +218,9 @@ class VolumeController(object):
             raise exc.HTTPUnprocessableEntity()
 
         volume = body['volume']
+
         size = volume['size']
+
         LOG.audit(_("Create volume of %s GB"), size, context=context)
 
         kwargs = {}

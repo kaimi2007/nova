@@ -1,4 +1,5 @@
 {
+    "admin": [["role:admin"], ["role:administrator"]],
     "compute:create": [],
     "compute:create:attach_network": [],
     "compute:create:attach_volume": [],
@@ -105,8 +106,7 @@
     "compute_extension:networks": [],
     "compute_extension:networks:view": [],
     "compute_extension:quotas:show": [],
-    "compute_extension:quotas:update_for_project": [],
-    "compute_extension:quotas:update_for_user": [],
+    "compute_extension:quotas:update": [],
     "compute_extension:quota_classes": [],
     "compute_extension:rescue": [],
     "compute_extension:security_groups": [],

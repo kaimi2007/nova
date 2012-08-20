@@ -244,19 +244,19 @@ class FakeSessionForFirewallTests(FakeSessionForVMTests):
             else:
                 output = ''
                 process_input = args.get('process_input', None)
-                if cmd == ['ip6tables-save', '-t', 'filter']:
+                if cmd == ['ip6tables-save', '-c', '-t', 'filter']:
                     output = '\n'.join(self._in6_filter_rules)
-                if cmd == ['iptables-save', '-t', 'filter']:
+                if cmd == ['iptables-save', '-c', '-t', 'filter']:
                     output = '\n'.join(self._in_filter_rules)
-                if cmd == ['iptables-save', '-t', 'nat']:
+                if cmd == ['iptables-save', '-c', '-t', 'nat']:
                     output = '\n'.join(self._in_nat_rules)
-                if cmd == ['iptables-restore', ]:
+                if cmd == ['iptables-restore', '-c', ]:
                     lines = process_input.split('\n')
                     if '*filter' in lines:
                         if self._test_case is not None:
                             self._test_case._out_rules = lines
                         output = '\n'.join(lines)
-                if cmd == ['ip6tables-restore', ]:
+                if cmd == ['ip6tables-restore', '-c', ]:
                     lines = process_input.split('\n')
                     if '*filter' in lines:
                         output = '\n'.join(lines)
@@ -354,6 +354,22 @@ def stub_out_migration_methods(stubs):
     stubs.Set(vm_utils, 'get_vdi_for_vm_safely', fake_get_vdi)
     stubs.Set(vm_utils, 'get_sr_path', fake_get_sr_path)
     stubs.Set(vm_utils, 'generate_ephemeral', fake_generate_ephemeral)
+
+
+class FakeSessionForFailedMigrateTests(FakeSessionForVMTests):
+    def __init__(self, uri):
+        super(FakeSessionForFailedMigrateTests, self).__init__(uri)
+
+    def VM_assert_can_migrate(self, session, vmref, migrate_data,
+                              live, vdi_map, vif_map, options):
+        raise fake.Failure("XenAPI VM.assert_can_migrate failed")
+
+    def host_migrate_receive(self, session, hostref, networkref, options):
+        raise fake.Failure("XenAPI host.migrate_receive failed")
+
+    def VM_migrate_send(self, session, vmref, migrate_data, islive, vdi_map,
+                        vif_map, options):
+        raise fake.Failure("XenAPI VM.migrate_send failed")
 
 
 class XenAPITestBase(test.TestCase):

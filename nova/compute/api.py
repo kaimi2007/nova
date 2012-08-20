@@ -21,6 +21,7 @@
 """Handles all requests relating to compute resources (e.g. guest VMs,
 networking and storage of VMs, and compute hosts on which they run)."""
 
+import base64
 import functools
 import re
 import string
@@ -58,6 +59,7 @@ LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
 flags.DECLARE('consoleauth_topic', 'nova.consoleauth')
 
+MAX_USERDATA_SIZE = 65535
 QUOTAS = quota.QUOTAS
 
 
@@ -100,7 +102,7 @@ def check_instance_lock(function):
         if instance['locked'] and not context.is_admin:
             raise exception.InstanceIsLocked(instance_uuid=instance['uuid'])
         # NOTE(danms): at this point, we have verified that either
-        # theinstance is not locked, or the user is suffiently endowed
+        # the instance is not locked, or the user is sufficiently endowed
         # that it doesn't matter. While the following statement may be
         # interpreted as the "the instance is not locked", it actually
         # refers to the whole condition.
@@ -371,8 +373,7 @@ class API(base.Base):
                access_ip_v4, access_ip_v6,
                requested_networks, config_drive,
                block_device_mapping, auto_disk_config,
-               reservation_id=None, create_instance_here=False,
-               scheduler_hints=None):
+               reservation_id=None, scheduler_hints=None):
         """Verify all the input parameters regardless of the provisioning
         strategy being performed and schedule the instance(s) for
         creation."""
@@ -473,6 +474,19 @@ class API(base.Base):
             'architecture': architecture,
             'progress': 0}
 
+        if user_data:
+            l = len(user_data)
+            if l > MAX_USERDATA_SIZE:
+                # NOTE(mikal): user_data is stored in a text column, and the
+                # database might silently truncate if its over length.
+                raise exception.InstanceUserDataTooLarge(
+                    length=l, maxsize=MAX_USERDATA_SIZE)
+
+            try:
+                base64.decodestring(user_data)
+            except base64.binascii.Error:
+                raise exception.InstanceUserDataMalformed()
+
         options_from_image = self._inherit_properties_from_image(
                 image, auto_disk_config)
 
@@ -480,45 +494,48 @@ class API(base.Base):
 
         LOG.debug(_("Going to run %s instances...") % num_instances)
 
-        if create_instance_here:
-            instance = self.create_db_entry_for_new_instance(
-                    context, instance_type, image, base_options,
-                    security_group, block_device_mapping,
-                    quota_reservations)
-
-            # Reservations committed; don't double-commit
-            quota_reservations = None
-
-            # Tells scheduler we created the instance already.
-            base_options['uuid'] = instance['uuid']
-            use_call = False
-        else:
-            # We need to wait for the scheduler to create the instance
-            # DB entries, because the instance *could* be # created in
-            # a child zone.
-            use_call = True
-
         filter_properties = dict(scheduler_hints=scheduler_hints)
         if context.is_admin and forced_host:
             filter_properties['force_hosts'] = [forced_host]
 
-        # TODO(comstud): We should use rpc.multicall when we can
-        # retrieve the full instance dictionary from the scheduler.
-        # Otherwise, we could exceed the AMQP max message size limit.
-        # This would require the schedulers' schedule_run_instances
-        # methods to return an iterator vs a list.
-        instances = self._schedule_run_instance(
-                use_call,
-                context, base_options,
-                instance_type,
-                availability_zone, injected_files,
-                admin_password, image,
-                num_instances, requested_networks,
-                block_device_mapping, security_group,
-                filter_properties, quota_reservations)
+        instances = []
+        instance_uuids = []
+        try:
+            for i in xrange(num_instances):
+                options = base_options.copy()
+                instance = self.create_db_entry_for_new_instance(
+                        context, instance_type, image, options,
+                        security_group, block_device_mapping)
+                instances.append(instance)
+                instance_uuids.append(instance['uuid'])
+        except Exception:
+            # Clean up as best we can.
+            with excutils.save_and_reraise_exception():
+                try:
+                    for instance_uuid in instance_uuids:
+                        self.db.instance_destroy(context,
+                                instance_uuid)
+                finally:
+                    QUOTAS.rollback(context, quota_reservations)
 
-        if create_instance_here:
-            return ([instance], reservation_id)
+        # Commit the reservations
+        QUOTAS.commit(context, quota_reservations)
+
+        request_spec = {
+            'image': jsonutils.to_primitive(image),
+            'instance_properties': base_options,
+            'instance_type': instance_type,
+            'instance_uuids': instance_uuids,
+            'block_device_mapping': block_device_mapping,
+            'security_group': security_group,
+        }
+
+        self.scheduler_rpcapi.run_instance(context,
+                request_spec=request_spec,
+                admin_password=admin_password, injected_files=injected_files,
+                requested_networks=requested_networks, is_first_time=True,
+                filter_properties=filter_properties)
+
         return (instances, reservation_id)
 
     @staticmethod
@@ -683,7 +700,7 @@ class API(base.Base):
     #NOTE(bcwaldon): No policy check since this is only used by scheduler and
     # the compute api. That should probably be cleaned up, though.
     def create_db_entry_for_new_instance(self, context, instance_type, image,
-            base_options, security_group, block_device_mapping, reservations):
+            base_options, security_group, block_device_mapping):
         """Create an entry in the DB for this new instance,
         including any related table updates (such as security group,
         etc).
@@ -709,47 +726,7 @@ class API(base.Base):
         notifications.send_update_with_states(context, instance, None,
                 vm_states.BUILDING, None, None, service="api")
 
-        # Commit the reservations
-        if reservations:
-            QUOTAS.commit(context, reservations)
-
         return instance
-
-    def _schedule_run_instance(self,
-            use_call,
-            context, base_options,
-            instance_type,
-            availability_zone, injected_files,
-            admin_password, image,
-            num_instances,
-            requested_networks,
-            block_device_mapping,
-            security_group,
-            filter_properties,
-            quota_reservations):
-        """Send a run_instance request to the schedulers for processing."""
-
-        pid = context.project_id
-        uid = context.user_id
-
-        LOG.debug(_("Sending create to scheduler for %(pid)s/%(uid)s's") %
-                  locals())
-
-        request_spec = {
-            'image': jsonutils.to_primitive(image),
-            'instance_properties': base_options,
-            'instance_type': instance_type,
-            'num_instances': num_instances,
-            'block_device_mapping': block_device_mapping,
-            'security_group': security_group,
-        }
-
-        return self.scheduler_rpcapi.run_instance(context,
-                request_spec=request_spec,
-                admin_password=admin_password, injected_files=injected_files,
-                requested_networks=requested_networks, is_first_time=True,
-                filter_properties=filter_properties,
-                reservations=quota_reservations, call=use_call)
 
     def _check_create_policies(self, context, availability_zone,
             requested_networks, block_device_mapping):
@@ -780,21 +757,13 @@ class API(base.Base):
         scheduler.  The scheduler will determine where the instance(s)
         go and will handle creating the DB entries.
 
-        Returns a tuple of (instances, reservation_id) where instances
-        could be 'None' or a list of instance dicts depending on if
-        we waited for information from the scheduler or not.
+        Returns a tuple of (instances, reservation_id)
         """
 
         self._check_create_policies(context, availability_zone,
                 requested_networks, block_device_mapping)
 
-        # We can create the DB entry for the instance here if we're
-        # only going to create 1 instance.
-        # This speeds up API responses for builds
-        # as we don't need to wait for the scheduler.
-        create_instance_here = max_count == 1 or max_count is None
-
-        (instances, reservation_id) = self._create_instance(
+        return self._create_instance(
                                context, instance_type,
                                image_href, kernel_id, ramdisk_id,
                                min_count, max_count,
@@ -805,23 +774,7 @@ class API(base.Base):
                                access_ip_v4, access_ip_v6,
                                requested_networks, config_drive,
                                block_device_mapping, auto_disk_config,
-                               create_instance_here=create_instance_here,
                                scheduler_hints=scheduler_hints)
-
-        if create_instance_here or instances is None:
-            return (instances, reservation_id)
-
-        inst_ret_list = []
-        for instance in instances:
-            if instance.get('_is_precooked', False):
-                inst_ret_list.append(instance)
-            else:
-                # Scheduler only gives us the 'id'.  We need to pull
-                # in the created instances from the DB
-                instance = self.db.instance_get(context, instance['id'])
-                inst_ret_list.append(dict(instance.iteritems()))
-
-        return (inst_ret_list, reservation_id)
 
     def trigger_provider_fw_rules_refresh(self, context):
         """Called when a rule is added/removed from a provider firewall"""
@@ -923,10 +876,23 @@ class API(base.Base):
                         context, instance['uuid'], 'finished')
                 if migration_ref:
                     src_host = migration_ref['source_compute']
-                    # Call since this can race with the terminate_instance
+                    # Call since this can race with the terminate_instance.
+                    # The resize is done but awaiting confirmation/reversion,
+                    # so there are two cases:
+                    # 1. up-resize: here -instance['vcpus'/'memory_mb'] match
+                    #    the quota usages accounted for this instance,
+                    #    so no further quota adjustment is needed
+                    # 2. down-resize: here -instance['vcpus'/'memory_mb'] are
+                    #    shy by delta(old, new) from the quota usages accounted
+                    #    for this instance, so we must adjust
+                    deltas = self._downsize_quota_delta(context,
+                                                        migration_ref)
+                    downsize_reservations = self._reserve_quota_delta(context,
+                                                                      deltas)
                     self.compute_rpcapi.confirm_resize(context,
                             instance, migration_ref['id'],
-                            host=src_host, cast=False)
+                            host=src_host, cast=False,
+                            reservations=downsize_reservations)
 
             self.compute_rpcapi.terminate_instance(context, instance)
 
@@ -1343,12 +1309,16 @@ class API(base.Base):
             raise exception.MigrationNotFoundByStatus(
                     instance_id=instance['uuid'], status='finished')
 
+        # reverse quota reservation for increased resource usage
+        deltas = self._reverse_upsize_quota_delta(context, migration_ref)
+        reservations = self._reserve_quota_delta(context, deltas)
+
         instance = self.update(context, instance,
                                task_state=task_states.RESIZE_REVERTING)
 
         self.compute_rpcapi.revert_resize(context,
                 instance=instance, migration_id=migration_ref['id'],
-                host=migration_ref['dest_compute'])
+                host=migration_ref['dest_compute'], reservations=reservations)
 
         self.db.migration_update(context, migration_ref['id'],
                                  {'status': 'reverted'})
@@ -1365,15 +1335,88 @@ class API(base.Base):
             raise exception.MigrationNotFoundByStatus(
                     instance_id=instance['uuid'], status='finished')
 
+        # reserve quota only for any decrease in resource usage
+        deltas = self._downsize_quota_delta(context, migration_ref)
+        reservations = self._reserve_quota_delta(context, deltas)
+
         instance = self.update(context, instance, vm_state=vm_states.ACTIVE,
                                task_state=None)
 
         self.compute_rpcapi.confirm_resize(context,
                 instance=instance, migration_id=migration_ref['id'],
-                host=migration_ref['source_compute'])
+                host=migration_ref['source_compute'],
+                reservations=reservations)
 
         self.db.migration_update(context, migration_ref['id'],
                 {'status': 'confirmed'})
+
+    @staticmethod
+    def _resize_quota_delta(context, new_instance_type,
+                            old_instance_type, sense, compare):
+        """
+        Calculate any quota adjustment required at a particular point
+        in the resize cycle.
+
+        :param context: the request context
+        :param new_instance_type: the target instance type
+        :param old_instance_type: the original instance type
+        :param sense: the sense of the adjustment, 1 indicates a
+                      forward adjustment, whereas -1 indicates a
+                      reversal of a prior adjustment
+        :param compare: the direction of the comparison, 1 indicates
+                        we're checking for positive deltas, whereas
+                        -1 indicates negative deltas
+        """
+        def _quota_delta(resource):
+            return sense * (new_instance_type[resource] -
+                            old_instance_type[resource])
+
+        deltas = {}
+        if compare * _quota_delta('vcpus') > 0:
+            deltas['cores'] = _quota_delta('vcpus')
+        if compare * _quota_delta('memory_mb') > 0:
+            deltas['ram'] = _quota_delta('memory_mb')
+
+        return deltas
+
+    @staticmethod
+    def _upsize_quota_delta(context, new_instance_type, old_instance_type):
+        """
+        Calculate deltas required to adjust quota for an instance upsize.
+        """
+        return API._resize_quota_delta(context, new_instance_type,
+                                       old_instance_type, 1, 1)
+
+    @staticmethod
+    def _reverse_upsize_quota_delta(context, migration_ref):
+        """
+        Calculate deltas required to reverse a prior upsizing
+        quota adjustment.
+        """
+        old_instance_type = instance_types.get_instance_type(
+            migration_ref['old_instance_type_id'])
+        new_instance_type = instance_types.get_instance_type(
+            migration_ref['new_instance_type_id'])
+
+        return API._resize_quota_delta(context, new_instance_type,
+                                       old_instance_type, -1, -1)
+
+    @staticmethod
+    def _downsize_quota_delta(context, migration_ref):
+        """
+        Calculate deltas required to adjust quota for an instance downsize.
+        """
+        old_instance_type = instance_types.get_instance_type(
+            migration_ref['old_instance_type_id'])
+        new_instance_type = instance_types.get_instance_type(
+            migration_ref['new_instance_type_id'])
+
+        return API._resize_quota_delta(context, new_instance_type,
+                                       old_instance_type, 1, -1)
+
+    @staticmethod
+    def _reserve_quota_delta(context, deltas):
+        return QUOTAS.reserve(context, **deltas) if deltas else None
 
     @wrap_check_policy
     @check_instance_lock
@@ -1424,12 +1467,39 @@ class API(base.Base):
         if (current_memory_mb == new_memory_mb) and flavor_id:
             raise exception.CannotResizeToSameSize()
 
+        # ensure there is sufficient headroom for upsizes
+        deltas = self._upsize_quota_delta(context, new_instance_type,
+                                          current_instance_type)
+        try:
+            reservations = self._reserve_quota_delta(context, deltas)
+        except exception.OverQuota as exc:
+            quotas = exc.kwargs['quotas']
+            usages = exc.kwargs['usages']
+            overs = exc.kwargs['overs']
+
+            headroom = dict((res, quotas[res] -
+                             (usages[res]['in_use'] + usages[res]['reserved']))
+                            for res in quotas.keys())
+
+            resource = overs[0]
+            used = quotas[resource] - headroom[resource]
+            total_allowed = used + headroom[resource]
+            overs = ','.join(overs)
+
+            pid = context.project_id
+            LOG.warn(_("%(overs)s quota exceeded for %(pid)s,"
+                       " tried to resize instance. %(msg)s"), locals())
+            raise exception.TooManyInstances(overs=overs,
+                                             req=deltas[resource],
+                                             used=used, allowed=total_allowed,
+                                             resource=resource)
+
         instance = self.update(context, instance,
                 task_state=task_states.RESIZE_PREP, progress=0, **kwargs)
 
         request_spec = {
                 'instance_type': new_instance_type,
-                'num_instances': 1,
+                'instance_uuids': instance['uuid'],
                 'instance_properties': instance}
 
         filter_properties = {'ignore_hosts': []}
@@ -1443,6 +1513,7 @@ class API(base.Base):
             "image": image,
             "request_spec": jsonutils.to_primitive(request_spec),
             "filter_properties": filter_properties,
+            "reservations": reservations,
         }
         self.scheduler_rpcapi.prep_resize(context, **args)
 
@@ -1556,6 +1627,9 @@ class API(base.Base):
     @wrap_check_policy
     def get_vnc_console(self, context, instance, console_type):
         """Get a url to an instance Console."""
+        if not instance['host']:
+            raise exception.InstanceNotReady(instance=instance)
+
         connect_info = self.compute_rpcapi.get_vnc_console(context,
                 instance=instance, console_type=console_type)
 
@@ -1606,15 +1680,33 @@ class API(base.Base):
 
     @wrap_check_policy
     @check_instance_lock
-    def attach_volume(self, context, instance, volume_id, device):
+    def attach_volume(self, context, instance, volume_id, device=None):
         """Attach an existing volume to an existing instance."""
-        if not re.match("^/dev/x{0,1}[a-z]d[a-z]+$", device):
+        # NOTE(vish): Fail fast if the device is not going to pass. This
+        #             will need to be removed along with the test if we
+        #             change the logic in the manager for what constitutes
+        #             a valid device.
+        if device and not re.match("^/dev/x{0,1}[a-z]d[a-z]+$", device):
             raise exception.InvalidDevicePath(path=device)
-        volume = self.volume_api.get(context, volume_id)
-        self.volume_api.check_attach(context, volume)
-        self.volume_api.reserve_volume(context, volume)
-        self.compute_rpcapi.attach_volume(context, instance=instance,
-                volume_id=volume_id, mountpoint=device)
+        # NOTE(vish): This is done on the compute host because we want
+        #             to avoid a race where two devices are requested at
+        #             the same time. When db access is removed from
+        #             compute, the bdm will be created here and we will
+        #             have to make sure that they are assigned atomically.
+        device = self.compute_rpcapi.reserve_block_device_name(
+            context, device=device, instance=instance)
+        try:
+            volume = self.volume_api.get(context, volume_id)
+            self.volume_api.check_attach(context, volume)
+            self.volume_api.reserve_volume(context, volume)
+            self.compute_rpcapi.attach_volume(context, instance=instance,
+                    volume_id=volume_id, mountpoint=device)
+        except Exception:
+            with excutils.save_and_reraise_exception():
+                self.db.block_device_mapping_destroy_by_instance_and_device(
+                        context, instance['uuid'], device)
+
+        return device
 
     @check_instance_lock
     def _detach_volume(self, context, instance, volume_id):
@@ -1928,6 +2020,13 @@ class KeypairAPI(base.Base):
                 'fingerprint': key_pair['fingerprint'],
             })
         return rval
+
+    def get_key_pair(self, context, user_id, key_name):
+        """Get a keypair by name."""
+        key_pair = self.db.key_pair_get(context, user_id, key_name)
+        return {'name': key_pair['name'],
+                'public_key': key_pair['public_key'],
+                'fingerprint': key_pair['fingerprint']}
 
 
 class SecurityGroupAPI(base.Base):

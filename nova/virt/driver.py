@@ -22,7 +22,6 @@ Driver base-classes:
     types that support that contract
 """
 
-from nova.compute import power_state
 from nova import flags
 from nova.openstack.common import log as logging
 
@@ -193,7 +192,8 @@ class ComputeDriver(object):
         # TODO(Vek): Need to pass context in for access to auth_token
         raise NotImplementedError()
 
-    def reboot(self, instance, network_info, reboot_type):
+    def reboot(self, instance, network_info, reboot_type,
+               block_device_info=None):
         """Reboot the specified instance.
 
         :param instance: Instance object as returned by DB layer.
@@ -302,7 +302,8 @@ class ComputeDriver(object):
         # TODO(Vek): Need to pass context in for access to auth_token
         raise NotImplementedError()
 
-    def resume_state_on_host_boot(self, context, instance, network_info):
+    def resume_state_on_host_boot(self, context, instance, network_info,
+                                  block_device_info=None):
         """resume guest state when a host is booted"""
         raise NotImplementedError()
 
@@ -337,7 +338,8 @@ class ComputeDriver(object):
         raise NotImplementedError()
 
     def live_migration(self, ctxt, instance_ref, dest,
-                       post_method, recover_method, block_migration=False):
+                       post_method, recover_method, block_migration=False,
+                       migrate_data=None):
         """Live migration of an instance to another host.
 
         :params ctxt: security context
@@ -352,6 +354,8 @@ class ComputeDriver(object):
             recovery method when any exception occurs.
             expected nova.compute.manager.recover_live_migration.
         :params block_migration: if true, migrate VM disk.
+        :params migrate_data: implementation specific params.
+
         """
         raise NotImplementedError()
 

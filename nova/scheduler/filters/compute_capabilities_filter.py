@@ -15,6 +15,7 @@
 
 from nova.openstack.common import log as logging
 from nova.scheduler import filters
+from nova.scheduler.filters import extra_specs_ops
 
 
 LOG = logging.getLogger(__name__)
@@ -29,11 +30,9 @@ class ComputeCapabilitiesFilter(filters.BaseHostFilter):
         if 'extra_specs' not in instance_type:
             return True
 
-        # NOTE(lorinh): For now, we are just checking exact matching on the
-        # values. Later on, we want to handle numerical
-        # values so we can represent things like number of GPU cards
-        for key, value in instance_type['extra_specs'].iteritems():
-            if capabilities.get(key, None) != value:
+        for key, req in instance_type['extra_specs'].iteritems():
+            cap = capabilities.get(key, None)
+            if not extra_specs_ops.match(cap, req):
                 return False
         return True
 

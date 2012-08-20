@@ -24,71 +24,59 @@ LOG = logging.getLogger(__name__)
 
 
 class ComputeFilter(filters.BaseHostFilter):
-    """HostFilter hard-coded to work with InstanceType records."""
+    """Filter on active Compute nodes that satisfy the instance properties"""
 
-    def _satisfies_extra_specs(self, capabilities, instance_type):
-        """Check that the capabilities provided by the compute service
-        satisfy the extra specs associated with the instance type"""
-        if 'extra_specs' not in instance_type:
+    def _instance_supported(self, capabilities, instance_meta):
+        """Check if the instance is supported by the hypervisor.
+
+        The instance may specify an architecture, hypervisor, and
+        vm_mode, e.g. (x86_64, kvm, hvm).
+        """
+        inst_arch = instance_meta.get('image_architecture', None)
+        inst_h_type = instance_meta.get('image_hypervisor_type', None)
+        inst_vm_mode = instance_meta.get('image_vm_mode', None)
+        inst_props_req = (inst_arch, inst_h_type, inst_vm_mode)
+
+        # Supported if no compute-related instance properties are specified
+        if not any(inst_props_req):
             return True
 
-        LOG.debug(_("filter st"))
+        supp_instances = capabilities.get('supported_instances', None)
+        # Not supported if an instance property is requested but nothing
+        # advertised by the host.
+        if not supp_instances:
+            LOG.debug(_("Instance contains properties %(instance_meta)s, "
+                        "but no corresponding capabilities are advertised "
+                        "by the compute node"), locals())
+            return False
 
-        # The following operations are supported:
-        #   =, s==, s!=, s>=, s>, s<=, s<, <in>, <or>, ==, !=, >=, <=
-        #   Note that <or> is handled in a different way below.
-        op_methods = {'=': lambda x, y: (float(x) >= float(y)),
-                      '<in>': lambda x, y: (x.find(y) != -1),
-                      '==': lambda x, y: (float(x) == float(y)),
-                      '!=': lambda x, y: (float(x) != float(y)),
-                      '>=': lambda x, y: (float(x) >= float(y)),
-                      '<=': lambda x, y: (float(x) <= float(y)),
-                      's==': lambda x, y: operator.eq(x, y),
-                      's!=': lambda x, y: operator.ne(x, y),
-                      's<': lambda x, y: operator.lt(x, y),
-                      's<=': lambda x, y: operator.le(x, y),
-                      's>': lambda x, y: operator.gt(x, y),
-                      's>=': lambda x, y: operator.ge(x, y)}
+        def _compare_props(props, other_props):
+            for i in props:
+                if i and i not in other_props:
+                    return False
+            return True
 
-        LOG.debug(_("op"))
-        cap_extra_specs = capabilities.get('instance_type_extra_specs', {})
-        for key, req in instance_type['extra_specs'].iteritems():
-            cap = cap_extra_specs.get(key, None)
-            if cap is None:
-                return False
-            if isinstance(req, (bool, int, long, float)):
-                    if cap != req:
-                        return False
-            else:
-                words = req.split()
-                if len(words) == 1:
-                    if cap != req:
-                        return False
-                else:
-                    op = words[0]
-                    method = op_methods.get(op)
-                    new_req = words[1]
-                    for i in range(2, len(words)):
-                        new_req += words[i]
+        for supp_inst in supp_instances:
+            if _compare_props(inst_props_req, supp_inst):
+                LOG.debug(_("Instance properties %(instance_meta)s "
+                            "are satisfied by compute host capabilities "
+                            "%(capabilities)s"), locals())
+                return True
 
-                    if op == '<or>':  # Ex: <or> v1 <or> v2 <or> v3
-                        found = 0
-                        for idx in range(1, len(words), 2):
-                            if words[idx] == cap:
-                                found = 1
-                                break
-                        if found == 0:
-                            return False
-                    elif method:
-                        if method(cap, new_req) == False:
-                            return False
-                    else:
-                        if cap != req:
-                            return False
-        return True
+        LOG.debug(_("Instance contains properties %(instance_meta)s "
+                    "that are not provided by the compute node "
+                    "capabilities %(capabilities)s"), locals())
+        return False
 
     def host_passes(self, host_state, filter_properties):
-        """Returns True for only active compute nodes"""
+        """Check if host passes instance compute properties.
+
+        Returns True for active compute nodes that satisfy
+        the compute properties specified in the instance.
+        """
+        spec = filter_properties.get('request_spec', {})
+        instance_props = spec.get('instance_properties', {})
+        instance_meta = instance_props.get('system_metadata', {})
         instance_type = filter_properties.get('instance_type')
         if host_state.topic != 'compute' or not instance_type:
             return True
@@ -102,5 +90,9 @@ class ComputeFilter(filters.BaseHostFilter):
         if not capabilities.get("enabled", True):
             LOG.debug(_("%(host_state)s is disabled via capabilities"),
                     locals())
+            return False
+        if not self._instance_supported(capabilities, instance_meta):
+            LOG.debug(_("%(host_state)s does not support requested "
+                        "instance_properties"), locals())
             return False
         return True

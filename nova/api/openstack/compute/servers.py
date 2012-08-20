@@ -197,6 +197,8 @@ class CommonDeserializer(wsgi.MetadataXMLDeserializer):
                     item["uuid"] = network_node.getAttribute("uuid")
                 if network_node.hasAttribute("fixed_ip"):
                     item["fixed_ip"] = network_node.getAttribute("fixed_ip")
+                if network_node.hasAttribute("port"):
+                    item["port"] = network_node.getAttribute("port")
                 networks.append(item)
             return networks
         else:
@@ -498,14 +500,31 @@ class Controller(wsgi.Controller):
             injected_files.append((path, contents))
         return injected_files
 
+    def _is_quantum_v2(self):
+        return FLAGS.network_api_class ==\
+            "nova.network.quantumv2.api.API"
+
     def _get_requested_networks(self, requested_networks):
         """Create a list of requested networks from the networks attribute."""
         networks = []
         for network in requested_networks:
             try:
-                network_uuid = network['uuid']
+                port_id = network.get('port', None)
+                if port_id:
+                    network_uuid = None
+                    if not self._is_quantum_v2():
+                        # port parameter is only for qunatum v2.0
+                        msg = _("Unknown argment : port")
+                        raise exc.HTTPBadRequest(explanation=msg)
+                    if not utils.is_uuid_like(port_id):
+                        msg = _("Bad port format: port uuid is "
+                                "not in proper format "
+                                "(%s)") % port_id
+                        raise exc.HTTPBadRequest(explanation=msg)
+                else:
+                    network_uuid = network['uuid']
 
-                if not utils.is_uuid_like(network_uuid):
+                if not port_id and not utils.is_uuid_like(network_uuid):
                     br_uuid = network_uuid.split('-', 1)[-1]
                     if not utils.is_uuid_like(br_uuid):
                         msg = _("Bad networks format: network uuid is "
@@ -520,16 +539,22 @@ class Controller(wsgi.Controller):
                 if address is not None and not utils.is_valid_ipv4(address):
                     msg = _("Invalid fixed IP address (%s)") % address
                     raise exc.HTTPBadRequest(explanation=msg)
-                # check if the network id is already present in the list,
-                # we don't want duplicate networks to be passed
-                # at the boot time
-                for id, ip in networks:
-                    if id == network_uuid:
-                        expl = (_("Duplicate networks (%s) are not allowed") %
-                                network_uuid)
-                        raise exc.HTTPBadRequest(explanation=expl)
 
-                networks.append((network_uuid, address))
+                # For quantumv2, requestd_networks
+                # should be tuple of (network_uuid, fixed_ip, port_id)
+                if self._is_quantum_v2():
+                    networks.append((network_uuid, address, port_id))
+                else:
+                    # check if the network id is already present in the list,
+                    # we don't want duplicate networks to be passed
+                    # at the boot time
+                    for id, ip in networks:
+                        if id == network_uuid:
+                            expl = (_("Duplicate networks"
+                                      " (%s) are not allowed") %
+                                    network_uuid)
+                            raise exc.HTTPBadRequest(explanation=expl)
+                    networks.append((network_uuid, address))
             except KeyError as key:
                 expl = _('Bad network format: missing %s') % key
                 raise exc.HTTPBadRequest(explanation=expl)
@@ -664,19 +689,35 @@ class Controller(wsgi.Controller):
             block_device_mapping = server_dict.get('block_device_mapping')
 
         ret_resv_id = False
-        min_count = None
-        max_count = None
+        # min_count and max_count are optional.  If they exist, they may come
+        # in as strings.  Verify that they are valid integers and > 0.
+        # Also, we want to default 'min_count' to 1, and default
+        # 'max_count' to be 'min_count'.
+        min_count = 1
+        max_count = 1
         if self.ext_mgr.is_loaded('os-multiple-create'):
             ret_resv_id = server_dict.get('return_reservation_id', False)
-            min_count = server_dict.get('min_count')
-            max_count = server_dict.get('max_count')
-        # min_count and max_count are optional.  If they exist, they come
-        # in as strings.  We want to default 'min_count' to 1, and default
-        # 'max_count' to be 'min_count'.
-        min_count = int(min_count) if min_count else 1
-        max_count = int(max_count) if max_count else min_count
+            min_count = server_dict.get('min_count', 1)
+            max_count = server_dict.get('max_count', min_count)
+
+        try:
+            min_count = int(min_count)
+        except ValueError:
+            raise webob.exc.HTTPBadRequest(_('min_count must be an '
+                                             'integer value'))
+        if min_count < 1:
+            raise webob.exc.HTTPBadRequest(_('min_count must be > 0'))
+
+        try:
+            max_count = int(max_count)
+        except ValueError:
+            raise webob.exc.HTTPBadRequest(_('max_count must be an '
+                                             'integer value'))
+        if max_count < 1:
+            raise webob.exc.HTTPBadRequest(_('max_count must be > 0'))
+
         if min_count > max_count:
-            min_count = max_count
+            raise webob.exc.HTTPBadRequest(_('min_count must be <= max_count'))
 
         auto_disk_config = False
         if self.ext_mgr.is_loaded('OS-DCF'):

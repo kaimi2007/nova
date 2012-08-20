@@ -386,6 +386,10 @@ class InvalidDevicePath(Invalid):
     message = _("The supplied device path (%(path)s) is invalid.")
 
 
+class DevicePathInUse(Invalid):
+    message = _("The supplied device path (%(path)s) is in use.")
+
+
 class DeviceIsBusy(Invalid):
     message = _("The supplied device (%(device)s) is busy.")
 
@@ -588,8 +592,20 @@ class NetworkBusy(NovaException):
     message = _("Network %(network)s has active ports, cannot delete.")
 
 
+class NetworkIsDuplicated(NovaException):
+    message = _("Network %(network)s is duplicated.")
+
+
 class DatastoreNotFound(NotFound):
     message = _("Could not find the datastore reference(s) which the VM uses.")
+
+
+class PortInUse(NovaException):
+    message = _("Port %(port_id)s is still in use.")
+
+
+class PortNotFound(NotFound):
+    message = _("Port %(port_id)s could not be found.")
 
 
 class FixedIpNotFound(NotFound):
@@ -637,6 +653,15 @@ class NoMoreFixedIps(NovaException):
 
 class NoFixedIpsDefined(NotFound):
     message = _("Zero fixed ips could be found.")
+
+
+#TODO(bcwaldon): EOL this exception!
+class Duplicate(NovaException):
+    pass
+
+
+class FloatingIpExists(Duplicate):
+    message = _("Floating ip %(address)s already exists.")
 
 
 class FloatingIpNotFound(NotFound):
@@ -723,11 +748,6 @@ class QuotaNotFound(NotFound):
 
 class QuotaResourceUnknown(QuotaNotFound):
     message = _("Unknown quota resources %(unknown)s.")
-
-
-class UserQuotaNotFound(QuotaNotFound):
-    message = _("Quota for user %(user_id)s in project %(project_id)s "
-                "could not be found.")
 
 
 class ProjectQuotaNotFound(QuotaNotFound):
@@ -905,11 +925,6 @@ class ImageRotationNotAllowed(NovaException):
 
 class RotationRequiredForBackup(NovaException):
     message = _("Rotation param is required for backup image_type")
-
-
-#TODO(bcwaldon): EOL this exception!
-class Duplicate(NovaException):
-    pass
 
 
 class KeyPairExists(Duplicate):
@@ -1153,6 +1168,16 @@ class ConfigDriveMountFailed(NovaException):
 class ConfigDriveUnknownFormat(NovaException):
     message = _("Unknown config drive format %(format)s. Select one of "
                 "iso9660 or vfat.")
+
+
+class InstanceUserDataTooLarge(NovaException):
+    message = _("User data too large. User data must be no larger than "
+                "%(maxsize)s bytes once base64 encoded. Your data is "
+                "%(length)d bytes")
+
+
+class InstanceUserDataMalformed(NovaException):
+    message = _("User data needs to be valid base 64.")
 
 
 def get_context_from_function_and_args(function, args, kwargs):

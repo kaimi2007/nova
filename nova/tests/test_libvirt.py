@@ -18,6 +18,7 @@
 import copy
 import errno
 import eventlet
+import json
 import mox
 import os
 import re
@@ -30,8 +31,6 @@ from xml.dom import minidom
 from nova.api.ec2 import cloud
 from nova.compute import instance_types
 from nova.compute import power_state
-from nova.compute import rpcapi as compute_rpcapi
-from nova.compute import utils as compute_utils
 from nova.compute import vm_mode
 from nova.compute import vm_states
 from nova import context
@@ -56,6 +55,7 @@ from nova.virt.libvirt import firewall
 from nova.virt.libvirt import imagebackend
 from nova.virt.libvirt import utils as libvirt_utils
 from nova.virt.libvirt import volume
+from nova.virt.libvirt import volume_nfs
 from nova.volume import driver as volume_driver
 
 
@@ -326,6 +326,31 @@ class LibvirtVolumeTestCase(test.TestCase):
         libvirt_driver.disconnect_volume(connection_info, mount_device)
         connection_info = vol_driver.terminate_connection(vol, self.connr)
 
+    def test_libvirt_nfs_driver(self):
+        # NOTE(vish) exists is to make driver assume connecting worked
+        mnt_base = '/mnt'
+        self.flags(nfs_mount_point_base=mnt_base)
+
+        libvirt_driver = volume_nfs.NfsVolumeDriver(self.fake_conn)
+        export_string = '192.168.1.1:/nfs/share1'
+        name = 'volume-00001'
+        export_mnt_base = os.path.join(mnt_base,
+                libvirt_driver.get_hash_str(export_string))
+        file_path = os.path.join(export_mnt_base, name)
+
+        connection_info = {'data': {'export': export_string, 'name': name}}
+        mount_device = "vde"
+        conf = libvirt_driver.connect_volume(connection_info, mount_device)
+        tree = conf.format_dom()
+        self.assertEqual(tree.get('type'), 'file')
+        self.assertEqual(tree.find('./source').get('file'), file_path)
+        libvirt_driver.disconnect_volume(connection_info, mount_device)
+
+        expected_commands = [
+            ('stat', export_mnt_base),
+            ('mount', '-t', 'nfs', export_string, export_mnt_base)]
+        self.assertEqual(self.executes, expected_commands)
+
 
 class CacheConcurrencyTestCase(test.TestCase):
     def setUp(self):
@@ -412,7 +437,6 @@ class LibvirtConnTestCase(test.TestCase):
 
     def setUp(self):
         super(LibvirtConnTestCase, self).setUp()
-        libvirt_driver._late_load_cheetah()
         self.flags(fake_call=True)
         self.user_id = 'fake'
         self.project_id = 'fake'
@@ -1826,16 +1850,30 @@ class LibvirtConnTestCase(test.TestCase):
 
             # Test data
             instance_ref = db.instance_create(self.context, self.test_instance)
-            dummyjson = ('[{"path": "%s/disk", "disk_size": "10737418240",'
-                         ' "type": "raw", "backing_file": ""}]')
+            dummy_info = [{'path': '%s/disk' % tmpdir,
+                           'disk_size': 10737418240,
+                           'type': 'raw',
+                           'backing_file': ''},
+                          {'backing_file': 'otherdisk_1234567',
+                           'path': '%s/otherdisk' % tmpdir,
+                           'virt_disk_size': 10737418240}]
+            dummyjson = json.dumps(dummy_info)
 
-            # Preparing mocks
             # qemu-img should be mockd since test environment might not have
             # large disk space.
+            self.mox.StubOutWithMock(imagebackend.Image, 'cache')
+            imagebackend.Image.cache(context=mox.IgnoreArg(),
+                                     fn=mox.IgnoreArg(),
+                                     fname='otherdisk',
+                                     image_id=123456,
+                                     project_id='fake',
+                                     size=10737418240L,
+                                     user_id=None).AndReturn(None)
             self.mox.ReplayAll()
+
             conn = libvirt_driver.LibvirtDriver(False)
             conn.pre_block_migration(self.context, instance_ref,
-                                     dummyjson % tmpdir)
+                                     dummyjson)
 
             self.assertTrue(os.path.exists('%s/%s/' %
                                            (tmpdir, instance_ref.name)))
@@ -2205,11 +2243,13 @@ class LibvirtConnTestCase(test.TestCase):
             guest = config.LibvirtConfigGuest()
             guest.ostype = vm_mode.HVM
             guest.arch = "x86_64"
+            guest.domtype = ["kvm"]
             caps.guests.append(guest)
 
             guest = config.LibvirtConfigGuest()
             guest.ostype = vm_mode.HVM
             guest.arch = "i686"
+            guest.domtype = ["kvm"]
             caps.guests.append(guest)
 
             return caps
@@ -2616,6 +2656,36 @@ class LibvirtConnTestCase(test.TestCase):
                   }
         self.assertEqual(actual, expect)
 
+    def test_get_instance_capabilities(self):
+        conn = libvirt_driver.LibvirtDriver(True)
+
+        def get_host_capabilities_stub(self):
+            caps = config.LibvirtConfigCaps()
+
+            guest = config.LibvirtConfigGuest()
+            guest.ostype = 'hvm'
+            guest.arch = 'x86_64'
+            guest.domtype = ['kvm', 'qemu']
+            caps.guests.append(guest)
+
+            guest = config.LibvirtConfigGuest()
+            guest.ostype = 'hvm'
+            guest.arch = 'i686'
+            guest.domtype = ['kvm']
+            caps.guests.append(guest)
+
+            return caps
+
+        self.stubs.Set(libvirt_driver.LibvirtDriver,
+                       'get_host_capabilities',
+                       get_host_capabilities_stub)
+
+        want = [('x86_64', 'kvm', 'hvm'),
+                ('x86_64', 'qemu', 'hvm'),
+                ('i686', 'kvm', 'hvm')]
+        got = conn.get_instance_capabilities()
+        self.assertEqual(want, got)
+
 
 class HostStateTestCase(test.TestCase):
 
@@ -2624,6 +2694,7 @@ class HostStateTestCase(test.TestCase):
                  '"fxsr", "clflush", "pse36", "pat", "cmov", "mca", "pge", '
                  '"mtrr", "sep", "apic"], '
                  '"topology": {"cores": "1", "threads": "1", "sockets": "1"}}')
+    instance_caps = [("x86_64", "kvm", "hvm"), ("i686", "kvm", "hvm")]
 
     class FakeConnection(object):
         """Fake connection object"""
@@ -2658,8 +2729,15 @@ class HostStateTestCase(test.TestCase):
         def get_hypervisor_hostname(self):
             return 'compute1'
 
+        def get_host_uptime(self):
+            return ('10:01:16 up  1:36,  6 users,  '
+                    'load average: 0.21, 0.16, 0.19')
+
         def get_disk_available_least(self):
             return 13091
+
+        def get_instance_capabilities(self):
+            return HostStateTestCase.instance_caps
 
     def test_update_status(self):
         self.mox.StubOutWithMock(libvirt_driver, 'LibvirtDriver')
@@ -2744,13 +2822,15 @@ class IptablesFirewallTestCase(test.TestCase):
       ':FORWARD ACCEPT [0:0]',
       ':OUTPUT ACCEPT [915599:63811649]',
       ':nova-block-ipv4 - [0:0]',
-      '-A INPUT -i virbr0 -p tcp -m tcp --dport 67 -j ACCEPT ',
-      '-A FORWARD -d 192.168.122.0/24 -o virbr0 -m state --state RELATED'
+      '[0:0] -A INPUT -i virbr0 -p tcp -m tcp --dport 67 -j ACCEPT ',
+      '[0:0] -A FORWARD -d 192.168.122.0/24 -o virbr0 -m state --state RELATED'
       ',ESTABLISHED -j ACCEPT ',
-      '-A FORWARD -s 192.168.122.0/24 -i virbr0 -j ACCEPT ',
-      '-A FORWARD -i virbr0 -o virbr0 -j ACCEPT ',
-      '-A FORWARD -o virbr0 -j REJECT --reject-with icmp-port-unreachable ',
-      '-A FORWARD -i virbr0 -j REJECT --reject-with icmp-port-unreachable ',
+      '[0:0] -A FORWARD -s 192.168.122.0/24 -i virbr0 -j ACCEPT ',
+      '[0:0] -A FORWARD -i virbr0 -o virbr0 -j ACCEPT ',
+      '[0:0] -A FORWARD -o virbr0 -j REJECT '
+      '--reject-with icmp-port-unreachable ',
+      '[0:0] -A FORWARD -i virbr0 -j REJECT '
+      '--reject-with icmp-port-unreachable ',
       'COMMIT',
       '# Completed on Mon Dec  6 11:54:13 2010',
     ]
@@ -2830,18 +2910,18 @@ class IptablesFirewallTestCase(test.TestCase):
 #        self.fw.add_instance(instance_ref)
         def fake_iptables_execute(*cmd, **kwargs):
             process_input = kwargs.get('process_input', None)
-            if cmd == ('ip6tables-save', '-t', 'filter'):
+            if cmd == ('ip6tables-save', '-c', '-t', 'filter'):
                 return '\n'.join(self.in6_filter_rules), None
-            if cmd == ('iptables-save', '-t', 'filter'):
+            if cmd == ('iptables-save', '-c', '-t', 'filter'):
                 return '\n'.join(self.in_filter_rules), None
-            if cmd == ('iptables-save', '-t', 'nat'):
+            if cmd == ('iptables-save', '-c', '-t', 'nat'):
                 return '\n'.join(self.in_nat_rules), None
-            if cmd == ('iptables-restore',):
+            if cmd == ('iptables-restore', '-c',):
                 lines = process_input.split('\n')
                 if '*filter' in lines:
                     self.out_rules = lines
                 return '', ''
-            if cmd == ('ip6tables-restore',):
+            if cmd == ('ip6tables-restore', '-c',):
                 lines = process_input.split('\n')
                 if '*filter' in lines:
                     self.out6_rules = lines
@@ -2884,27 +2964,29 @@ class IptablesFirewallTestCase(test.TestCase):
         self.assertTrue(security_group_chain,
                         "The security group chain wasn't added")
 
-        regex = re.compile('-A .* -j ACCEPT -p icmp -s 192.168.11.0/24')
+        regex = re.compile('\[0\:0\] -A .* -j ACCEPT -p icmp '
+                           '-s 192.168.11.0/24')
         self.assertTrue(len(filter(regex.match, self.out_rules)) > 0,
                         "ICMP acceptance rule wasn't added")
 
-        regex = re.compile('-A .* -j ACCEPT -p icmp -m icmp --icmp-type 8'
-                           ' -s 192.168.11.0/24')
+        regex = re.compile('\[0\:0\] -A .* -j ACCEPT -p icmp -m icmp '
+                           '--icmp-type 8 -s 192.168.11.0/24')
         self.assertTrue(len(filter(regex.match, self.out_rules)) > 0,
                         "ICMP Echo Request acceptance rule wasn't added")
 
         for ip in network_model.fixed_ips():
             if ip['version'] != 4:
                 continue
-            regex = re.compile('-A .* -j ACCEPT -p tcp -m multiport '
+            regex = re.compile('\[0\:0\] -A .* -j ACCEPT -p tcp -m multiport '
                                '--dports 80:81 -s %s' % ip['address'])
             self.assertTrue(len(filter(regex.match, self.out_rules)) > 0,
                             "TCP port 80/81 acceptance rule wasn't added")
-            regex = re.compile('-A .* -j ACCEPT -s %s' % ip['address'])
+            regex = re.compile('\[0\:0\] -A .* -j ACCEPT -s '
+                               '%s' % ip['address'])
             self.assertTrue(len(filter(regex.match, self.out_rules)) > 0,
                             "Protocol/port-less acceptance rule wasn't added")
 
-        regex = re.compile('-A .* -j ACCEPT -p tcp '
+        regex = re.compile('\[0\:0\] -A .* -j ACCEPT -p tcp '
                            '-m multiport --dports 80:81 -s 192.168.10.0/24')
         self.assertTrue(len(filter(regex.match, self.out_rules)) > 0,
                         "TCP port 80/81 acceptance rule wasn't added")

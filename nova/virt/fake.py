@@ -29,7 +29,6 @@ from nova.compute import power_state
 from nova import db
 from nova import exception
 from nova.openstack.common import log as logging
-from nova import utils
 from nova.virt import driver
 
 
@@ -93,7 +92,8 @@ class FakeDriver(driver.ComputeDriver):
         if not instance['name'] in self.instances:
             raise exception.InstanceNotRunning()
 
-    def reboot(self, instance, network_info, reboot_type):
+    def reboot(self, instance, network_info, reboot_type,
+               block_device_info=None):
         pass
 
     @staticmethod
@@ -106,7 +106,8 @@ class FakeDriver(driver.ComputeDriver):
     def inject_file(self, instance, b64_path, b64_contents):
         pass
 
-    def resume_state_on_host_boot(self, context, instance, network_info):
+    def resume_state_on_host_boot(self, context, instance, network_info,
+                                  block_device_info=None):
         pass
 
     def rescue(self, context, instance, network_info, image_meta,
@@ -257,12 +258,11 @@ class FakeDriver(driver.ComputeDriver):
         raise NotImplementedError('This method is supported only by libvirt.')
 
     def get_instance_disk_info(self, instance_name):
-        """This method is supported only by libvirt."""
         return
 
     def live_migration(self, context, instance_ref, dest,
-                       post_method, recover_method, block_migration=False):
-        """This method is supported only by libvirt."""
+                       post_method, recover_method, block_migration=False,
+                       migrate_data=None):
         return
 
     def finish_migration(self, context, migration, instance, disk_info,
@@ -274,7 +274,6 @@ class FakeDriver(driver.ComputeDriver):
 
     def pre_live_migration(self, context, instance_ref, block_device_info,
                            network_info):
-        """This method is supported only by libvirt."""
         return
 
     def unfilter_instance(self, instance_ref, network_info):

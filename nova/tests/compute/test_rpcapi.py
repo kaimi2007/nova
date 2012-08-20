@@ -129,12 +129,12 @@ class ComputeRpcAPITestCase(test.TestCase):
     def test_confirm_resize_cast(self):
         self._test_compute_api('confirm_resize', 'cast',
                 instance=self.fake_instance, migration_id='id', host='host',
-                version='1.12')
+                reservations=list('fake_res'), version='1.42')
 
     def test_confirm_resize_call(self):
         self._test_compute_api('confirm_resize', 'call',
                 instance=self.fake_instance, migration_id='id', host='host',
-                version='1.12')
+                reservations=list('fake_res'), version='1.42')
 
     def test_detach_volume(self):
         self._test_compute_api('detach_volume', 'cast',
@@ -144,12 +144,12 @@ class ComputeRpcAPITestCase(test.TestCase):
         self._test_compute_api('finish_resize', 'cast',
                 instance=self.fake_instance, migration_id='id',
                 image='image', disk_info='disk_info', host='host',
-                version='1.14')
+                reservations=list('fake_res'), version='1.42')
 
     def test_finish_revert_resize(self):
         self._test_compute_api('finish_revert_resize', 'cast',
                 instance=self.fake_instance, migration_id='id', host='host',
-                version='1.15')
+                reservations=list('fake_res'), version='1.42')
 
     def test_get_console_output(self):
         self._test_compute_api('get_console_output', 'call',
@@ -191,7 +191,8 @@ class ComputeRpcAPITestCase(test.TestCase):
     def test_live_migration(self):
         self._test_compute_api('live_migration', 'cast',
                 instance=self.fake_instance, dest='dest',
-                block_migration='blockity_block', host='tsoh', version='1.40')
+                block_migration='blockity_block', host='tsoh', version='1.43',
+                migrate_data={})
 
     def test_post_live_migration_at_destination(self):
         self._test_compute_api('post_live_migration_at_destination', 'call',
@@ -218,7 +219,8 @@ class ComputeRpcAPITestCase(test.TestCase):
     def test_prep_resize(self):
         self._test_compute_api('prep_resize', 'cast',
                 instance=self.fake_instance, instance_type='fake_type',
-                image='fake_image', host='host', version='1.38')
+                image='fake_image', host='host',
+                reservations=list('fake_res'), version='1.42')
 
     def test_reboot_instance(self):
         self._test_compute_api('reboot_instance', 'cast',
@@ -229,6 +231,10 @@ class ComputeRpcAPITestCase(test.TestCase):
                 instance=self.fake_instance, new_pass='pass',
                 injected_files='files', image_ref='ref',
                 orig_image_ref='orig_ref', version='1.24')
+
+    def test_reserve_block_device_name(self):
+        self._test_compute_api('reserve_block_device_name', 'call',
+                instance=self.fake_instance, device='device', version='1.44')
 
     def refresh_provider_fw_rules(self):
         self._test_compute_api('refresh_provider_fw_rules', 'cast',
@@ -269,7 +275,7 @@ class ComputeRpcAPITestCase(test.TestCase):
     def test_resize_instance(self):
         self._test_compute_api('resize_instance', 'cast',
                 instance=self.fake_instance, migration_id='id', image='image',
-                version='1.29')
+                reservations=list('fake_res'), version='1.42')
 
     def test_resume_instance(self):
         self._test_compute_api('resume_instance', 'cast',
@@ -278,7 +284,7 @@ class ComputeRpcAPITestCase(test.TestCase):
     def test_revert_resize(self):
         self._test_compute_api('revert_resize', 'cast',
                 instance=self.fake_instance, migration_id='id', host='host',
-                version='1.31')
+                reservations=list('fake_res'), version='1.42')
 
     def test_rollback_live_migration_at_destination(self):
         self._test_compute_api('rollback_live_migration_at_destination',

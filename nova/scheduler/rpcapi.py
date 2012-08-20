@@ -39,6 +39,8 @@ class SchedulerAPI(nova.openstack.common.rpc.proxy.RpcProxy):
         1.2 - Remove topic from run_instance, it was unused
         1.3 - Remove instance_id, add instance to live_migration
         1.4 - Remove update_db from prep_resize
+        1.5 - Add reservations argument to prep_resize()
+        1.6 - Remove reservations argument to run_instance()
     '''
 
     BASE_RPC_API_VERSION = '1.0'
@@ -49,24 +51,23 @@ class SchedulerAPI(nova.openstack.common.rpc.proxy.RpcProxy):
 
     def run_instance(self, ctxt, request_spec, admin_password,
             injected_files, requested_networks, is_first_time,
-            filter_properties, reservations, call=True):
-        rpc_method = self.call if call else self.cast
-        return rpc_method(ctxt, self.make_msg('run_instance',
+            filter_properties):
+        return self.cast(ctxt, self.make_msg('run_instance',
                 request_spec=request_spec, admin_password=admin_password,
                 injected_files=injected_files,
                 requested_networks=requested_networks,
                 is_first_time=is_first_time,
-                filter_properties=filter_properties,
-                reservations=reservations), version='1.2')
+                filter_properties=filter_properties), version='1.6')
 
     def prep_resize(self, ctxt, instance, instance_type, image,
-            request_spec, filter_properties):
+            request_spec, filter_properties, reservations):
         instance_p = jsonutils.to_primitive(instance)
         instance_type_p = jsonutils.to_primitive(instance_type)
         self.cast(ctxt, self.make_msg('prep_resize',
                 instance=instance_p, instance_type=instance_type_p,
                 image=image, request_spec=request_spec,
-                filter_properties=filter_properties), version='1.4')
+                filter_properties=filter_properties,
+                reservations=reservations), version='1.5')
 
     def show_host_resources(self, ctxt, host):
         return self.call(ctxt, self.make_msg('show_host_resources', host=host))

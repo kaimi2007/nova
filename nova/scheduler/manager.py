@@ -53,7 +53,7 @@ QUOTAS = quota.QUOTAS
 class SchedulerManager(manager.Manager):
     """Chooses a host to run instances on."""
 
-    RPC_API_VERSION = '1.4'
+    RPC_API_VERSION = '1.6'
 
     def __init__(self, scheduler_driver=None, *args, **kwargs):
         if not scheduler_driver:
@@ -117,7 +117,7 @@ class SchedulerManager(manager.Manager):
 
     def run_instance(self, context, request_spec, admin_password,
             injected_files, requested_networks, is_first_time,
-            filter_properties, reservations, topic=None):
+            filter_properties, reservations=None, topic=None):
         """Tries to call schedule_run_instance on the driver.
         Sets instance vm_state to ERROR on exceptions
         """
@@ -128,7 +128,7 @@ class SchedulerManager(manager.Manager):
                     reservations)
             return result
         except exception.NoValidHost as ex:
-            # don't reraise
+            # don't re-raise
             self._set_vm_state_and_notify('run_instance',
                                          {'vm_state': vm_states.ERROR},
                                           context, ex, request_spec)
@@ -146,7 +146,8 @@ class SchedulerManager(manager.Manager):
     # here for rpcapi backwards compatibility.
     def prep_resize(self, context, image, request_spec, filter_properties,
                     update_db=None, instance=None, instance_uuid=None,
-                    instance_type=None, instance_type_id=None, topic=None):
+                    instance_type=None, instance_type_id=None,
+                    reservations=None, topic=None):
         """Tries to call schedule_prep_resize on the driver.
         Sets instance vm_state to ACTIVE on NoHostFound
         Sets vm_state to ERROR on other exceptions
@@ -165,6 +166,7 @@ class SchedulerManager(manager.Manager):
                 'filter_properties': filter_properties,
                 'instance': instance,
                 'instance_type': instance_type,
+                'reservations': reservations,
             }
             return self.driver.schedule_prep_resize(**kwargs)
         except exception.NoValidHost as ex:
@@ -172,11 +174,15 @@ class SchedulerManager(manager.Manager):
                                          {'vm_state': vm_states.ACTIVE,
                                           'task_state': None},
                                          context, ex, request_spec)
+            if reservations:
+                QUOTAS.rollback(context, reservations)
         except Exception as ex:
             with excutils.save_and_reraise_exception():
                 self._set_vm_state_and_notify('prep_resize',
                                              {'vm_state': vm_states.ERROR},
                                              context, ex, request_spec)
+                if reservations:
+                    QUOTAS.rollback(context, reservations)
 
     def _set_vm_state_and_notify(self, method, updates, context, ex,
                                  request_spec):
@@ -196,7 +202,13 @@ class SchedulerManager(manager.Manager):
 
         vm_state = updates['vm_state']
         properties = request_spec.get('instance_properties', {})
-        instance_uuid = properties.get('uuid', {})
+        # FIXME(comstud): We really need to move error handling closer
+        # to where the errors occur so we can deal with errors on
+        # individual instances when scheduling multiple.
+        if 'instance_uuids' in request_spec:
+            instance_uuid = request_spec['instance_uuids'][0]
+        else:
+            instance_uuid = properties.get('uuid', {})
 
         if instance_uuid:
             state = vm_state.upper()

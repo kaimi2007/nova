@@ -31,7 +31,6 @@ from nova import flags
 from nova import notifications
 from nova.openstack.common import jsonutils
 from nova.openstack.common import rpc
-from nova.openstack.common.rpc import common as rpc_common
 from nova.openstack.common import timeutils
 from nova.scheduler import driver
 from nova.scheduler import manager
@@ -251,6 +250,7 @@ class SchedulerManagerTestCase(test.TestCase):
                 'filter_properties': 'fake_props',
                 'instance': 'fake_instance',
                 'instance_type': 'fake_type',
+                'reservations': list('fake_res'),
         }
         self.manager.driver.schedule_prep_resize(**kwargs).AndRaise(
                 exception.NoValidHost(reason=""))
@@ -281,6 +281,7 @@ class SchedulerManagerTestCase(test.TestCase):
                 'filter_properties': 'fake_props',
                 'instance': 'fake_instance',
                 'instance_type': 'fake_type',
+                'reservations': list('fake_res'),
         }
 
         self.manager.driver.schedule_prep_resize(**kwargs).AndRaise(
@@ -425,7 +426,8 @@ class SchedulerTestCase(test.TestCase):
         self.driver._live_migration_common_check(self.context, instance,
                                                  dest)
         self.driver.compute_rpcapi.check_can_live_migrate_destination(
-               self.context, instance, dest, block_migration, disk_over_commit)
+               self.context, instance, dest, block_migration,
+               disk_over_commit).AndReturn({})
         db.instance_update_and_get_original(self.context, instance_uuid,
                 {"task_state": task_states.MIGRATING}).AndReturn(
                         (instance, instance))
@@ -434,7 +436,7 @@ class SchedulerTestCase(test.TestCase):
 
         compute_rpcapi.ComputeAPI.live_migration(self.context,
                 host=instance['host'], instance=instance, dest=dest,
-                block_migration=block_migration)
+                block_migration=block_migration, migrate_data={})
 
         self.mox.ReplayAll()
         self.driver.schedule_live_migration(self.context,
@@ -492,7 +494,7 @@ class SchedulerTestCase(test.TestCase):
                              'block_migration': block_migration,
                              'disk_over_commit': disk_over_commit},
                     "version": "1.10"},
-                 None)
+                 None).AndReturn({})
 
         db.instance_update_and_get_original(self.context, instance_uuid,
                 {"task_state": task_states.MIGRATING}).AndReturn(
@@ -500,7 +502,7 @@ class SchedulerTestCase(test.TestCase):
 
         compute_rpcapi.ComputeAPI.live_migration(self.context,
                 host=instance['host'], instance=instance, dest=dest,
-                block_migration=block_migration)
+                block_migration=block_migration, migrate_data={})
 
         self.mox.ReplayAll()
         result = self.driver.schedule_live_migration(self.context,
