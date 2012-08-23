@@ -297,14 +297,14 @@ class LibvirtConnection(driver.ComputeDriver):
 
     def init_host(self, host):
         # NOTE(nsokolov): moved instance restarting to ComputeManager
+        context = nova.context.get_admin_context() 
+        self._get_instance_type_extra_specs_capabilities(context) 
         if FLAGS.connection_type == 'gpu':
             global gpus_available
             global num_gpus
             global gpu_arch
             global gpu_info
-            context = nova.context.get_admin_context() 
 #            gpus_available = range(FLAGS.xpus)
-            self._get_instance_type_extra_specs_capabilities(context) 
             if 'gpus' in extra_specs:
                 num_gpus = extra_specs['gpus']
                 gpus_available = range(int(extra_specs['gpus']))
