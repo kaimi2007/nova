@@ -677,6 +677,7 @@ class LibvirtConnection(driver.ComputeDriver):
             #disk.destroy_container(self.container)
         if FLAGS.libvirt_type == 'lxc':
             disk.destroy_container(self.container)
+            time.sleep(1) # added by dkang
         if os.path.exists(target):
             shutil.rmtree(target)
 
@@ -2904,9 +2905,9 @@ class HostState(object):
             print "*****************"
             if 'gpus' in extra_specs:
                 extra_specs["gpus"] = int(len(gpus_available)) 
-                extra_specs["hypervisor_type"] = \
-                          self.connection.get_hypervisor_type()
-            data.update({"instance_type_extra_specs": extra_specs})
+        extra_specs["hypervisor_type"] = \
+            self.connection.get_hypervisor_type()
+        data.update({"instance_type_extra_specs": extra_specs})
         data["disk_used"] = self.connection.get_local_gb_used()
         data["disk_available"] = data["disk_total"] - data["disk_used"]
         print data["disk_available"]
