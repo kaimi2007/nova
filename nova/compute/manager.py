@@ -47,6 +47,7 @@ from nova import block_device
 from nova import compute
 from nova.compute import instance_types
 from nova.compute import power_state
+from nova.compute import resource_tracker
 from nova.compute import rpcapi as compute_rpcapi
 from nova.compute import task_states
 from nova.compute import utils as compute_utils
@@ -278,11 +279,16 @@ class ComputeManager(manager.SchedulerDependentManager):
         super(ComputeManager, self).__init__(service_name="compute",
                                              *args, **kwargs)
 
+        self.resource_tracker = resource_tracker.ResourceTracker(self.host,
+                self.driver)
+
     def _instance_update(self, context, instance_uuid, **kwargs):
         """Update an instance in the database using kwargs as value."""
 
         (old_ref, instance_ref) = self.db.instance_update_and_get_original(
                 context, instance_uuid, kwargs)
+        self.resource_tracker.update_load_stats_for_instance(context, old_ref,
+                instance_ref)
         notifications.send_update(context, old_ref, instance_ref)
 
         return instance_ref
@@ -416,11 +422,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         return self.driver.refresh_provider_fw_rules(**kwargs)
 
     def _get_instance_nw_info(self, context, instance):
-        """Get a list of dictionaries of network data of an instance.
-        Returns an empty list if stub_network flag is set."""
-        if FLAGS.stub_network:
-            return network_model.NetworkInfo()
-
+        """Get a list of dictionaries of network data of an instance."""
         # get the network info from network
         network_info = self.network_api.get_instance_nw_info(context,
                                                              instance)
@@ -523,10 +525,16 @@ class ComputeManager(manager.SchedulerDependentManager):
             network_info = self._allocate_network(context, instance,
                                                   requested_networks)
             try:
-                block_device_info = self._prep_block_device(context, instance)
-                instance = self._spawn(context, instance, image_meta,
-                                       network_info, block_device_info,
-                                       injected_files, admin_password)
+                memory_mb_limit = filter_properties.get('memory_mb_limit',
+                        None)
+                with self.resource_tracker.instance_resource_claim(context,
+                        instance, memory_mb_limit=memory_mb_limit):
+                    block_device_info = self._prep_block_device(context,
+                            instance)
+                    instance = self._spawn(context, instance, image_meta,
+                                           network_info, block_device_info,
+                                           injected_files, admin_password)
+
             except exception.InstanceNotFound:
                 raise  # the instance got deleted during the spawn
             except Exception:
@@ -722,10 +730,6 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     def _allocate_network(self, context, instance, requested_networks):
         """Allocate networks for an instance and return the network info"""
-        if FLAGS.stub_network:
-            LOG.debug(_('Skipping network allocation for instance'),
-                      instance=instance)
-            return network_model.NetworkInfo()
         self._instance_update(context, instance['uuid'],
                               vm_state=vm_states.BUILDING,
                               task_state=task_states.NETWORKING)
@@ -792,10 +796,8 @@ class ComputeManager(manager.SchedulerDependentManager):
                 extra_usage_info=extra_usage_info, host=self.host)
 
     def _deallocate_network(self, context, instance):
-        if not FLAGS.stub_network:
-            LOG.debug(_('Deallocating network for instance'),
-                      instance=instance)
-            self.network_api.deallocate_for_instance(context, instance)
+        LOG.debug(_('Deallocating network for instance'), instance=instance)
+        self.network_api.deallocate_for_instance(context, instance)
 
     def _get_instance_volume_bdms(self, context, instance_uuid):
         bdms = self.db.block_device_mapping_get_all_by_instance(context,
@@ -817,6 +819,8 @@ class ComputeManager(manager.SchedulerDependentManager):
         for bdm in bdms:
             try:
                 cinfo = jsonutils.loads(bdm['connection_info'])
+                if cinfo and 'serial' not in cinfo:
+                    cinfo['serial'] = bdm['volume_id']
                 bdmap = {'connection_info': cinfo,
                          'mount_device': bdm['device_name'],
                          'delete_on_termination': bdm['delete_on_termination']}
@@ -917,6 +921,8 @@ class ComputeManager(manager.SchedulerDependentManager):
         self.db.instance_destroy(context, instance_uuid)
         system_meta = self.db.instance_system_metadata_get(context,
             instance_uuid)
+        # mark resources free
+        self.resource_tracker.free_resources(context)
         self._notify_about_instance_usage(context, instance, "delete.end",
                 system_metadata=system_meta)
 
@@ -2083,6 +2089,10 @@ class ComputeManager(manager.SchedulerDependentManager):
                 LOG.exception(msg % locals(), context=context,
                               instance=instance)
                 self.volume_api.unreserve_volume(context, volume)
+
+        if 'serial' not in connection_info:
+            connection_info['serial'] = volume_id
+
         try:
             self.driver.attach_volume(connection_info,
                                       instance['name'],
@@ -2124,7 +2134,12 @@ class ComputeManager(manager.SchedulerDependentManager):
         if instance['name'] not in self.driver.list_instances():
             LOG.warn(_('Detaching volume from unknown instance'),
                      context=context, instance=instance)
-        self.driver.detach_volume(jsonutils.loads(bdm['connection_info']),
+        connection_info = jsonutils.loads(bdm['connection_info'])
+        # NOTE(vish): We currently don't use the serial when disconnecting,
+        #             but added for completeness in case we ever do.
+        if connection_info and 'serial' not in connection_info:
+            connection_info['serial'] = volume_id
+        self.driver.detach_volume(connection_info,
                                   instance['name'],
                                   mp)
 
@@ -2899,13 +2914,14 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     @manager.periodic_task
     def update_available_resource(self, context):
-        """See driver.update_available_resource()
+        """See driver.get_available_resource()
+
+        Periodic process that keeps that the compute host's understanding of
+        resource availability and usage in sync with the underlying hypervisor.
 
         :param context: security context
-        :returns: See driver.update_available_resource()
-
         """
-        self.driver.update_available_resource(context, self.host)
+        self.resource_tracker.update_available_resource(context)
 
     def _add_instance_fault_from_exc(self, context, instance_uuid, fault,
                                     exc_info=None):

@@ -462,7 +462,7 @@ class API(base.Base):
             'ephemeral_gb': instance_type['ephemeral_gb'],
             'display_name': display_name,
             'display_description': display_description or '',
-            'user_data': user_data or '',
+            'user_data': user_data,
             'key_name': key_name,
             'key_data': key_data,
             'locked': False,
@@ -1499,7 +1499,7 @@ class API(base.Base):
 
         request_spec = {
                 'instance_type': new_instance_type,
-                'instance_uuids': instance['uuid'],
+                'instance_uuids': [instance['uuid']],
                 'instance_properties': instance}
 
         filter_properties = {'ignore_hosts': []}
@@ -1724,6 +1724,10 @@ class API(base.Base):
     def detach_volume(self, context, volume_id):
         """Detach a volume from an instance."""
         volume = self.volume_api.get(context, volume_id)
+        if volume['attach_status'] == 'detached':
+            msg = _("Volume must be attached in order to detach.")
+            raise exception.InvalidVolume(reason=msg)
+
         instance_uuid = volume['instance_uuid']
         instance = self.db.instance_get_by_uuid(context.elevated(),
                                                 instance_uuid)
@@ -1742,6 +1746,8 @@ class API(base.Base):
     def delete_instance_metadata(self, context, instance, key):
         """Delete the given metadata item from an instance."""
         self.db.instance_metadata_delete(context, instance['uuid'], key)
+        instance['metadata'] = {}
+        notifications.send_update(context, instance, instance)
         self.compute_rpcapi.change_instance_metadata(context,
                                                      instance=instance,
                                                      diff={key: ['-']})
@@ -1764,8 +1770,10 @@ class API(base.Base):
             _metadata.update(metadata)
 
         self._check_metadata_properties_quota(context, _metadata)
-        self.db.instance_metadata_update(context, instance['uuid'],
+        metadata = self.db.instance_metadata_update(context, instance['uuid'],
                                          _metadata, True)
+        instance['metadata'] = metadata
+        notifications.send_update(context, instance, instance)
         diff = utils.diff_dict(orig, _metadata)
         self.compute_rpcapi.change_instance_metadata(context,
                                                      instance=instance,

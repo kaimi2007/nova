@@ -228,7 +228,7 @@ class RPCAllocateFixedIP(object):
         network = self._get_network_by_id(context, network_id)
         return self.allocate_fixed_ip(context, instance_id, network, **kwargs)
 
-    def deallocate_fixed_ip(self, context, address, host, **kwargs):
+    def deallocate_fixed_ip(self, context, address, host=None):
         """Call the superclass deallocate_fixed_ip if i'm the correct host
         otherwise call to the correct host"""
         fixed_ip = self.db.fixed_ip_get_by_address(context, address)
@@ -769,6 +769,8 @@ class NetworkManager(manager.SchedulerDependentManager):
 
     timeout_fixed_ips = True
 
+    required_create_args = []
+
     def __init__(self, network_driver=None, *args, **kwargs):
         if not network_driver:
             network_driver = FLAGS.network_driver
@@ -999,7 +1001,7 @@ class NetworkManager(manager.SchedulerDependentManager):
                   context=read_deleted_context)
         # deallocate fixed ips
         for fixed_ip in fixed_ips:
-            self.deallocate_fixed_ip(context, fixed_ip['address'], **kwargs)
+            self.deallocate_fixed_ip(context, fixed_ip['address'])
 
         # deallocate vifs (mac addresses)
         self.db.virtual_interface_delete_by_instance(read_deleted_context,
@@ -1270,7 +1272,7 @@ class NetworkManager(manager.SchedulerDependentManager):
         self._setup_network_on_host(context, network)
         return address
 
-    def deallocate_fixed_ip(self, context, address, **kwargs):
+    def deallocate_fixed_ip(self, context, address, host=None):
         """Returns a fixed ip to the pool."""
         fixed_ip_ref = self.db.fixed_ip_get_by_address(context, address)
         vif_id = fixed_ip_ref['virtual_interface_id']
@@ -1349,10 +1351,84 @@ class NetworkManager(manager.SchedulerDependentManager):
         if not fixed_ip['allocated']:
             self.db.fixed_ip_disassociate(context, address)
 
-    def create_networks(self, context, label, cidr, multi_host, num_networks,
-                        network_size, cidr_v6, gateway, gateway_v6, bridge,
-                        bridge_interface, dns1=None, dns2=None,
+    def create_networks(self, context,
+                        label, cidr=None, multi_host=None, num_networks=None,
+                        network_size=None, cidr_v6=None,
+                        gateway=None, gateway_v6=None, bridge=None,
+                        bridge_interface=None, dns1=None, dns2=None,
                         fixed_cidr=None, **kwargs):
+        arg_names = ("label", "cidr", "multi_host", "num_networks",
+                     "network_size", "cidr_v6",
+                     "gateway", "gateway_v6", "bridge",
+                     "bridge_interface", "dns1", "dns2",
+                     "fixed_cidr")
+        for name in arg_names:
+            kwargs[name] = locals()[name]
+        int_args = ("network_size", "num_networks",
+                    "vlan_start", "vpn_start")
+        for key in int_args:
+            try:
+                kwargs[key] = int(kwargs[key])
+            except ValueError:
+                raise ValueError(_("%s must be an integer") % key)
+            except KeyError:
+                pass
+
+        # check for certain required inputs
+        label = kwargs["label"]
+        if not label:
+            raise exception.NetworkNotCreated(req="label")
+
+        # Size of "label" column in nova.networks is 255, hence the restriction
+        if len(label) > 255:
+            raise ValueError(_("Maximum allowed length for 'label' is 255."))
+
+        if not (kwargs["cidr"] or kwargs["cidr_v6"]):
+            raise exception.NetworkNotCreated(req="cidr or cidr_v6")
+
+        kwargs["bridge"] = kwargs["bridge"] or FLAGS.flat_network_bridge
+        kwargs["bridge_interface"] = (kwargs["bridge_interface"] or
+                                      FLAGS.flat_interface)
+
+        for fld in self.required_create_args:
+            if not kwargs[fld]:
+                raise exception.NetworkNotCreated(req=fld)
+
+        kwargs["num_networks"] = kwargs["num_networks"] or FLAGS.num_networks
+        if not kwargs["network_size"]:
+            if kwargs["cidr"]:
+                fixnet = netaddr.IPNetwork(kwargs["cidr"])
+                each_subnet_size = fixnet.size / kwargs["num_networks"]
+                if each_subnet_size > FLAGS.network_size:
+                    subnet = 32 - int(math.log(FLAGS.network_size_size, 2))
+                    oversize_msg = _(
+                        'Subnet(s) too large, defaulting to /%s.'
+                        '  To override, specify network_size flag.') % subnet
+                    LOG.warn(oversize_msg)
+                    kwargs["network_size"] = FLAGS.network_size
+                else:
+                    kwargs["network_size"] = fixnet.size
+            else:
+                kwargs["network_size"] = FLAGS.network_size
+
+        kwargs["multi_host"] = (FLAGS.multi_host
+                                if kwargs["multi_host"] is None
+                                else
+                                utils.bool_from_str(kwargs["multi_host"]))
+        kwargs["vlan_start"] = kwargs.get("vlan_start") or FLAGS.vlan_start
+        kwargs["vpn_start"] = kwargs.get("vpn_start") or FLAGS.vpn_start
+        kwargs["dns1"] = kwargs["dns1"] or FLAGS.flat_network_dns
+
+        if kwargs["fixed_cidr"]:
+            kwargs["fixed_cidr"] = netaddr.IPNetwork(kwargs["fixed_cidr"])
+
+        return self._do_create_networks(context, **kwargs)
+
+    def _do_create_networks(self, context,
+                            label, cidr, multi_host, num_networks,
+                            network_size, cidr_v6, gateway, gateway_v6, bridge,
+                            bridge_interface, dns1=None, dns2=None,
+                            fixed_cidr=None, **kwargs):
         """Create networks based on parameters."""
         # NOTE(jkoelker): these are dummy values to make sure iter works
         # TODO(tr3buchet): disallow carving up networks
@@ -1720,6 +1796,8 @@ class FlatManager(NetworkManager):
 
     timeout_fixed_ips = False
 
+    required_create_args = ['bridge']
+
     def _allocate_fixed_ips(self, context, instance_id, host, networks,
                             **kwargs):
         """Calls allocate_fixed_ip once for each network."""
@@ -1734,10 +1812,9 @@ class FlatManager(NetworkManager):
             self.allocate_fixed_ip(context, instance_id,
                                    network, address=address)
 
-    def deallocate_fixed_ip(self, context, address, **kwargs):
+    def deallocate_fixed_ip(self, context, address, host=None):
         """Returns a fixed ip to the pool."""
-        super(FlatManager, self).deallocate_fixed_ip(context, address,
-                                                     **kwargs)
+        super(FlatManager, self).deallocate_fixed_ip(context, address)
         self.db.fixed_ip_disassociate(context, address)
 
     def _setup_network_on_host(self, context, network):
@@ -1794,6 +1871,7 @@ class FlatDHCPManager(RPCAllocateFixedIP, FloatingIP, NetworkManager):
 
     SHOULD_CREATE_BRIDGE = True
     DHCP = True
+    required_create_args = ['bridge']
 
     def init_host(self):
         """Do any initialization that needs to be run if this is a
@@ -1863,6 +1941,7 @@ class VlanManager(RPCAllocateFixedIP, FloatingIP, NetworkManager):
     SHOULD_CREATE_BRIDGE = True
     SHOULD_CREATE_VLAN = True
     DHCP = True
+    required_create_args = ['bridge_interface']
 
     def init_host(self):
         """Do any initialization that needs to be run if this is a
@@ -1942,6 +2021,8 @@ class VlanManager(RPCAllocateFixedIP, FloatingIP, NetworkManager):
                   '%(num_networks)s. Network size is %(network_size)s') %
                   kwargs)
 
+        kwargs['bridge_interface'] = (kwargs.get('bridge_interface') or
+                                      FLAGS.vlan_interface)
         return NetworkManager.create_networks(
             self, context, vpn=True, **kwargs)
 

@@ -152,6 +152,24 @@ class LibvirtVolumeTestCase(test.TestCase):
             'host': 'fake_host'
         }
 
+    def test_libvirt_volume_driver_serial(self):
+        vol_driver = volume_driver.VolumeDriver()
+        libvirt_driver = volume.LibvirtVolumeDriver(self.fake_conn)
+        name = 'volume-00000001'
+        vol = {'id': 1, 'name': name}
+        connection_info = {
+            'driver_volume_type': 'fake',
+            'data': {
+                    'device_path': '/foo',
+                },
+            'serial': 'fake_serial',
+        }
+        mount_device = "vde"
+        conf = libvirt_driver.connect_volume(connection_info, mount_device)
+        tree = conf.format_dom()
+        self.assertEqual(tree.get('type'), 'block')
+        self.assertEqual(tree.find('./serial').text, 'fake_serial')
+
     def test_libvirt_iscsi_driver(self):
         # NOTE(vish) exists is to make driver assume connecting worked
         self.stubs.Set(os.path, 'exists', lambda x: True)
@@ -1592,7 +1610,9 @@ class LibvirtConnTestCase(test.TestCase):
                                                      network_info,
                                                      time_module=fake_timer)
         except exception.NovaException, e:
-            c1 = (0 <= str(e).find('Timeout migrating for'))
+            msg = ('The firewall filter for %s does not exist' %
+                   instance_ref['name'])
+            c1 = (0 <= str(e).find(msg))
         self.assertTrue(c1)
 
         self.assertEqual(29, fake_timer.counter, "Didn't wait the expected "
@@ -2260,7 +2280,6 @@ class LibvirtConnTestCase(test.TestCase):
 
         want = {"vendor": "AMD",
                 "features": ["extapic", "3dnow"],
-                "permitted_instance_types": ["x86_64", "i686"],
                 "model": "Opteron_G4",
                 "arch": "x86_64",
                 "topology": {"cores": 2, "threads": 1, "sockets": 4}}
@@ -3374,12 +3393,6 @@ disk size: 4.4M''', ''))
 
         libvirt_utils.mkfs('ext4', '/my/block/dev')
         libvirt_utils.mkfs('swap', '/my/swap/block/dev')
-
-    def test_ensure_tree(self):
-        with utils.tempdir() as tmpdir:
-            testdir = '%s/foo/bar/baz' % (tmpdir,)
-            libvirt_utils.ensure_tree(testdir)
-            self.assertTrue(os.path.isdir(testdir))
 
     def test_write_to_file(self):
         dst_fd, dst_path = tempfile.mkstemp()

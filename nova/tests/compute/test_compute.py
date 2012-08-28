@@ -51,8 +51,8 @@ from nova.openstack.common.rpc import common as rpc_common
 from nova.openstack.common import timeutils
 import nova.policy
 from nova import quota
-from nova.scheduler import driver as scheduler_driver
 from nova import test
+from nova.tests.compute import fake_resource_tracker
 from nova.tests.db.fakes import FakeModel
 from nova.tests import fake_network
 from nova.tests.image import fake as fake_image
@@ -63,7 +63,6 @@ import nova.volume
 QUOTAS = quota.QUOTAS
 LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
-flags.DECLARE('stub_network', 'nova.compute.manager')
 flags.DECLARE('live_migration_retry_count', 'nova.compute.manager')
 
 
@@ -87,10 +86,16 @@ class BaseTestCase(test.TestCase):
     def setUp(self):
         super(BaseTestCase, self).setUp()
         self.flags(compute_driver='nova.virt.fake.FakeDriver',
-                   stub_network=True,
          notification_driver=['nova.openstack.common.notifier.test_notifier'],
                    network_manager='nova.network.manager.FlatManager')
         self.compute = importutils.import_object(FLAGS.compute_manager)
+
+        # override tracker with a version that doesn't need the database:
+        self.compute.resource_tracker = \
+            fake_resource_tracker.FakeResourceTracker(self.compute.host,
+                    self.compute.driver)
+        self.compute.update_available_resource(
+                context.get_admin_context())
 
         self.user_id = 'fake'
         self.project_id = 'fake'
@@ -110,6 +115,7 @@ class BaseTestCase(test.TestCase):
 
         fake_rpcapi = FakeSchedulerAPI()
         self.stubs.Set(self.compute, 'scheduler_rpcapi', fake_rpcapi)
+        fake_network.set_stub_network_methods(self.stubs)
 
     def tearDown(self):
         fake_image.FakeImageService_reset()
@@ -140,6 +146,7 @@ class BaseTestCase(test.TestCase):
         inst['root_gb'] = 0
         inst['ephemeral_gb'] = 0
         inst['architecture'] = 'x86_64'
+        inst['os_type'] = 'Linux'
         inst.update(params)
         return db.instance_create(self.context, inst)
 
@@ -261,8 +268,90 @@ class ComputeTestCase(BaseTestCase):
         finally:
             db.instance_destroy(self.context, instance['uuid'])
 
+    def test_create_instance_insufficient_memory(self):
+        params = {"memory_mb": 999999999999}
+        instance = self._create_fake_instance(params)
+        self.assertRaises(exception.ComputeResourcesUnavailable,
+                self.compute.run_instance, self.context, instance=instance)
+
+    def test_create_instance_insufficient_disk(self):
+        params = {"root_gb": 999999999999,
+                  "ephemeral_gb": 99999999999}
+        instance = self._create_fake_instance(params)
+        self.assertRaises(exception.ComputeResourcesUnavailable,
+                self.compute.run_instance, self.context, instance=instance)
+
+    def test_create_multiple_instances_then_starve(self):
+        params = {"memory_mb": 1024, "root_gb": 128, "ephemeral_gb": 128}
+        instance = self._create_fake_instance(params)
+        self.compute.run_instance(self.context, instance=instance)
+        self.assertEquals(1024,
+                self.compute.resource_tracker.compute_node['memory_mb_used'])
+        self.assertEquals(256,
+                self.compute.resource_tracker.compute_node['local_gb_used'])
+
+        params = {"memory_mb": 2048, "root_gb": 256, "ephemeral_gb": 256}
+        instance = self._create_fake_instance(params)
+        self.compute.run_instance(self.context, instance=instance)
+        self.assertEquals(3072,
+                self.compute.resource_tracker.compute_node['memory_mb_used'])
+        self.assertEquals(768,
+                self.compute.resource_tracker.compute_node['local_gb_used'])
+
+        params = {"memory_mb": 8192, "root_gb": 8192, "ephemeral_gb": 8192}
+        instance = self._create_fake_instance(params)
+        self.assertRaises(exception.ComputeResourcesUnavailable,
+                self.compute.run_instance, self.context, instance=instance)
+
+    def test_create_instance_with_oversubscribed_ram(self):
+        """Test passing of oversubscribed ram policy from the scheduler."""
+
+        # get total memory as reported by virt driver:
+        resources = self.compute.driver.get_available_resource()
+        total_mem_mb = resources['memory_mb']
+
+        oversub_limit_mb = total_mem_mb * 1.5
+        instance_mb = int(total_mem_mb * 1.45)
+
+        # build an instance, specifying an amount of memory that exceeds
+        # total_mem_mb, but is less than the oversubscribed limit:
+        params = {"memory_mb": instance_mb, "root_gb": 128,
+                  "ephemeral_gb": 128}
+        instance = self._create_fake_instance(params)
+
+        filter_properties = dict(memory_mb_limit=oversub_limit_mb)
+        self.compute.run_instance(self.context, instance=instance,
+                filter_properties=filter_properties)
+
+        self.assertEqual(instance_mb,
+                self.compute.resource_tracker.compute_node['memory_mb_used'])
+
+    def test_create_instance_with_oversubscribed_ram_fail(self):
+        """Test passing of oversubscribed ram policy from the scheduler, but
+        with insufficient memory.
+        """
+        # get total memory as reported by virt driver:
+        resources = self.compute.driver.get_available_resource()
+        total_mem_mb = resources['memory_mb']
+
+        oversub_limit_mb = total_mem_mb * 1.5
+        instance_mb = int(total_mem_mb * 1.55)
+
+        # build an instance, specifying an amount of memory that exceeds
+        # total_mem_mb, but is less than the oversubscribed limit:
+        params = {"memory_mb": instance_mb, "root_gb": 128,
+                  "ephemeral_gb": 128}
+        instance = self._create_fake_instance(params)
+
+        filter_properties = dict(memory_mb_limit=oversub_limit_mb)
+
+        self.assertRaises(exception.ComputeResourcesUnavailable,
+                self.compute.run_instance, self.context, instance=instance,
+                filter_properties=filter_properties)
+
     def test_default_access_ip(self):
-        self.flags(default_access_ip_network_name='test1', stub_network=False)
+        self.flags(default_access_ip_network_name='test1')
+        fake_network.unset_stub_network_methods(self.stubs)
         instance = jsonutils.to_primitive(self._create_fake_instance())
 
         try:
@@ -358,6 +447,41 @@ class ComputeTestCase(BaseTestCase):
         instances = db.instance_get_all(context.get_admin_context())
         LOG.info(_("Running instances: %s"), instances)
         self.assertEqual(len(instances), 1)
+
+        self.compute.terminate_instance(self.context, instance=instance)
+
+        instances = db.instance_get_all(context.get_admin_context())
+        LOG.info(_("After terminating instances: %s"), instances)
+        self.assertEqual(len(instances), 0)
+
+    def test_run_terminate_with_vol_attached(self):
+        """Make sure it is possible to  run and terminate instance with volume
+        attached
+        """
+        instance = jsonutils.to_primitive(self._create_fake_instance())
+
+        self.compute.run_instance(self.context, instance=instance)
+
+        instances = db.instance_get_all(context.get_admin_context())
+        LOG.info(_("Running instances: %s"), instances)
+        self.assertEqual(len(instances), 1)
+
+        def fake_check_attach(*args, **kwargs):
+            pass
+
+        def fake_reserve_volume(*args, **kwargs):
+            pass
+
+        def fake_volume_get(self, context, volume_id):
+            return {'id': volume_id}
+
+        self.stubs.Set(nova.volume.api.API, 'get', fake_volume_get)
+        self.stubs.Set(nova.volume.api.API, 'check_attach', fake_check_attach)
+        self.stubs.Set(nova.volume.api.API, 'reserve_volume',
+                       fake_reserve_volume)
+
+        self.compute_api.attach_volume(self.context, instance, 1,
+                                       '/dev/vdc')
 
         self.compute.terminate_instance(self.context, instance=instance)
 
@@ -1006,7 +1130,7 @@ class ComputeTestCase(BaseTestCase):
                 requested_networks=None,
                 vpn=False).AndRaise(rpc_common.RemoteError())
 
-        self.flags(stub_network=False)
+        fake_network.unset_stub_network_methods(self.stubs)
 
         self.mox.ReplayAll()
 
@@ -3207,6 +3331,12 @@ class ComputeAPITestCase(BaseTestCase):
             request_spec = msg['args']['request_spec']
             filter_properties = msg['args']['filter_properties']
             instance_properties = request_spec['instance_properties']
+            # resize with flavor_id = None will still send instance_type
+            self.assertEqual(request_spec['instance_type'],
+                             orig_instance_type)
+            self.assertEqual(request_spec['instance_uuids'],
+                             [instance['uuid']])
+            self.assertEqual(instance_properties['uuid'], instance['uuid'])
             self.assertEqual(instance_properties['host'], 'host2')
             # Ensure the instance passed to us has been updated with
             # progress set to 0 and task_state set to RESIZE_PREP.
@@ -3221,6 +3351,7 @@ class ComputeAPITestCase(BaseTestCase):
         instance = self._create_fake_instance(dict(host='host2'))
         instance = db.instance_get_by_uuid(context, instance['uuid'])
         instance = jsonutils.to_primitive(instance)
+        orig_instance_type = instance['instance_type']
         self.compute.run_instance(self.context, instance=instance)
         # We need to set the host to something 'known'.  Unfortunately,
         # the compute manager is using a cached copy of FLAGS.host,
@@ -3352,9 +3483,6 @@ class ComputeAPITestCase(BaseTestCase):
         self.stubs.Set(self.compute_api.network_api,
                        'get_instance_uuids_by_ip_filter',
                        network_manager.get_instance_uuids_by_ip_filter)
-        self.stubs.Set(network_manager.db,
-                       'instance_get_id_to_uuid_mapping',
-                       db.instance_get_id_to_uuid_mapping)
 
         instance1 = self._create_fake_instance({
                 'display_name': 'woot',
@@ -3591,6 +3719,7 @@ class ComputeAPITestCase(BaseTestCase):
 
     def test_instance_metadata(self):
         meta_changes = [None]
+        self.flags(notify_on_any_change=True)
 
         def fake_change_instance_metadata(inst, ctxt, diff, instance=None,
                                           instance_uuid=None):
@@ -3600,6 +3729,7 @@ class ComputeAPITestCase(BaseTestCase):
 
         _context = context.get_admin_context()
         instance = self._create_fake_instance({'metadata': {'key1': 'value1'}})
+        instance = dict(instance)
 
         metadata = self.compute_api.get_instance_metadata(_context, instance)
         self.assertEqual(metadata, {'key1': 'value1'})
@@ -3609,6 +3739,12 @@ class ComputeAPITestCase(BaseTestCase):
         metadata = self.compute_api.get_instance_metadata(_context, instance)
         self.assertEqual(metadata, {'key1': 'value1', 'key2': 'value2'})
         self.assertEqual(meta_changes, [{'key2': ['+', 'value2']}])
+
+        self.assertEquals(len(test_notifier.NOTIFICATIONS), 1)
+        msg = test_notifier.NOTIFICATIONS[0]
+        payload = msg['payload']
+        self.assertTrue('metadata' in payload)
+        self.assertEquals(payload['metadata'], metadata)
 
         new_metadata = {'key2': 'bah', 'key3': 'value3'}
         self.compute_api.update_instance_metadata(_context, instance,
@@ -3621,10 +3757,22 @@ class ComputeAPITestCase(BaseTestCase):
                     'key3': ['+', 'value3'],
                     }])
 
+        self.assertEquals(len(test_notifier.NOTIFICATIONS), 2)
+        msg = test_notifier.NOTIFICATIONS[1]
+        payload = msg['payload']
+        self.assertTrue('metadata' in payload)
+        self.assertEquals(payload['metadata'], metadata)
+
         self.compute_api.delete_instance_metadata(_context, instance, 'key2')
         metadata = self.compute_api.get_instance_metadata(_context, instance)
         self.assertEqual(metadata, {'key3': 'value3'})
         self.assertEqual(meta_changes, [{'key2': ['-']}])
+
+        self.assertEquals(len(test_notifier.NOTIFICATIONS), 3)
+        msg = test_notifier.NOTIFICATIONS[2]
+        payload = msg['payload']
+        self.assertTrue('metadata' in payload)
+        self.assertEquals(payload['metadata'], {})
 
         db.instance_destroy(_context, instance['uuid'])
 
@@ -4001,6 +4149,7 @@ class ComputeAPITestCase(BaseTestCase):
                 instance=jsonutils.to_primitive(instance))
         instance = self.compute_api.get(self.context, instance['uuid'])
         security_group_name = self._create_group()['name']
+
         self.security_group_api.add_to_instance(self.context,
                                                 instance,
                                                 security_group_name)

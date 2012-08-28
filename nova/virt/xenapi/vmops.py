@@ -42,8 +42,8 @@ from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
 from nova import utils
+from nova.virt import firewall
 from nova.virt.xenapi import agent
-from nova.virt.xenapi import firewall
 from nova.virt.xenapi import pool_states
 from nova.virt.xenapi import vm_utils
 from nova.virt.xenapi import volume_utils
@@ -70,6 +70,9 @@ FLAGS.register_opts(xenapi_vmops_opts)
 
 flags.DECLARE('vncserver_proxyclient_address', 'nova.vnc')
 
+DEFAULT_FIREWALL_DRIVER = "%s.%s" % (
+    firewall.__name__,
+    firewall.IptablesFirewallDriver.__name__)
 
 RESIZE_TOTAL_STEPS = 5
 
@@ -151,10 +154,9 @@ class VMOps(object):
         self.compute_api = compute.API()
         self._session = session
         self.poll_rescue_last_ran = None
-        if FLAGS.firewall_driver not in firewall.drivers:
-            FLAGS.set_default('firewall_driver', firewall.drivers[0])
-        fw_class = importutils.import_class(FLAGS.firewall_driver)
-        self.firewall_driver = fw_class(xenapi_session=self._session)
+        self.firewall_driver = firewall.load_driver(
+            default=DEFAULT_FIREWALL_DRIVER,
+            xenapi_session=self._session)
         vif_impl = importutils.import_class(FLAGS.xenapi_vif_driver)
         self.vif_driver = vif_impl(xenapi_session=self._session)
         self.default_root_dev = '/dev/sda'
@@ -787,17 +789,28 @@ class VMOps(object):
     def check_resize_func_name(self):
         """Check the function name used to resize an instance based
         on product_brand and product_version."""
-        if (self._session.product_brand == 'XCP' and
-            ((self._session.product_version[0] == 1 and
-              self._session.product_version[1] > 1) or
-             self._session.product_version[0] > 1)):
-            return 'VDI.resize'
 
-        if (self._session.product_brand == 'XenServer' and
-             self._session.product_version[0] > 5):
-            return 'VDI.resize'
+        brand = self._session.product_brand
+        version = self._session.product_version
 
-        return 'VDI.resize_online'
+        # To maintain backwards compatibility. All recent versions
+        # should use VDI.resize
+        if bool(version) and bool(brand):
+            xcp = brand == 'XCP'
+            r1_2_or_above = (
+                (
+                    version[0] == 1
+                    and version[1] > 1
+                )
+                or version[0] > 1)
+
+            xenserver = brand == 'XenServer'
+            r6_or_above = version[0] > 5
+
+            if (xcp and not r1_2_or_above) or (xenserver and not r6_or_above):
+                return 'VDI.resize_online'
+
+        return 'VDI.resize'
 
     def reboot(self, instance, reboot_type):
         """Reboot VM instance."""
@@ -900,28 +913,37 @@ class VMOps(object):
 
         raise exception.NotFound(_("Unable to find root VBD/VDI for VM"))
 
+    def _detach_vm_vols(self, instance, vm_ref, block_device_info=None):
+        """Detach any external nova/cinder volumes and purge the SRs.
+           This differs from a normal detach in that the VM has been
+           shutdown, so there is no need for unplugging VBDs. They do
+           need to be destroyed, so that the SR can be forgotten.
+        """
+        vbd_refs = self._session.call_xenapi("VM.get_VBDs", vm_ref)
+        for vbd_ref in vbd_refs:
+            other_config = self._session.call_xenapi("VBD.get_other_config",
+                                                   vbd_ref)
+            if other_config.get('osvol'):
+                # this is a nova/cinder volume
+                try:
+                    sr_ref = volume_utils.find_sr_from_vbd(self._session,
+                                                           vbd_ref)
+                    vm_utils.destroy_vbd(self._session, vbd_ref)
+                    # Forget SR only if not in use
+                    volume_utils.purge_sr(self._session, sr_ref)
+                except Exception as exc:
+                    LOG.exception(exc)
+                    raise
+
     def _destroy_vdis(self, instance, vm_ref, block_device_info=None):
         """Destroys all VDIs associated with a VM."""
         instance_uuid = instance['uuid']
         LOG.debug(_("Destroying VDIs for Instance %(instance_uuid)s")
                   % locals())
-        nodestroy = []
-        if block_device_info:
-            for bdm in block_device_info['block_device_mapping']:
-                LOG.debug(bdm)
-                # If there is no associated VDI, skip it
-                if 'vdi_uuid' not in bdm['connection_info']['data']:
-                    LOG.debug(_("BDM contains no vdi_uuid"), instance=instance)
-                    continue
-                # bdm vols should be left alone if delete_on_termination
-                # is false, or they will be destroyed on cleanup_volumes
-                nodestroy.append(bdm['connection_info']['data']['vdi_uuid'])
 
-        vdi_refs = vm_utils.lookup_vm_vdis(self._session, vm_ref, nodestroy)
-
+        vdi_refs = vm_utils.lookup_vm_vdis(self._session, vm_ref)
         if not vdi_refs:
             return
-
         for vdi_ref in vdi_refs:
             try:
                 vm_utils.destroy_vdi(self._session, vdi_ref)
@@ -1017,6 +1039,7 @@ class VMOps(object):
         vm_utils.shutdown_vm(self._session, instance, vm_ref)
 
         # Destroy VDIs
+        self._detach_vm_vols(instance, vm_ref, block_device_info)
         self._destroy_vdis(instance, vm_ref, block_device_info)
         self._destroy_kernel_ramdisk(instance, vm_ref)
 

@@ -42,6 +42,7 @@ from nova.network import api as network_api
 from nova.openstack.common import log as logging
 from nova.openstack.common import rpc
 from nova import test
+from nova.tests import fake_network
 from nova.tests.image import fake
 from nova import utils
 from nova.virt import fake as fake_virt
@@ -95,8 +96,7 @@ class CloudTestCase(test.TestCase):
         super(CloudTestCase, self).setUp()
         vol_tmpdir = tempfile.mkdtemp()
         self.flags(compute_driver='nova.virt.fake.FakeDriver',
-                   volumes_dir=vol_tmpdir,
-                   stub_network=True)
+                   volumes_dir=vol_tmpdir)
 
         def fake_show(meh, context, id):
             return {'id': id,
@@ -121,6 +121,8 @@ class CloudTestCase(test.TestCase):
             pass
 
         self.stubs.Set(compute_utils, 'notify_about_instance_usage', dumb)
+        fake_network.set_stub_network_methods(self.stubs)
+
         # set up our cloud
         self.cloud = cloud.CloudController()
         self.flags(compute_scheduler_driver='nova.scheduler.'
@@ -685,6 +687,27 @@ class CloudTestCase(test.TestCase):
                                          'availability_zone': "zone2"})
         result = self.cloud.describe_availability_zones(self.context)
         self.assertEqual(len(result['availabilityZoneInfo']), 3)
+        db.service_destroy(self.context, service1['id'])
+        db.service_destroy(self.context, service2['id'])
+
+    def test_describe_availability_zones_verbose(self):
+        """Makes sure describe_availability_zones works and filters results."""
+        service1 = db.service_create(self.context, {'host': 'host1_zones',
+                                         'binary': "nova-compute",
+                                         'topic': 'compute',
+                                         'report_count': 0,
+                                         'availability_zone': "zone1"})
+        service2 = db.service_create(self.context, {'host': 'host2_zones',
+                                         'binary': "nova-compute",
+                                         'topic': 'compute',
+                                         'report_count': 0,
+                                         'availability_zone': "zone2"})
+
+        admin_ctxt = context.get_admin_context(read_deleted="no")
+        result = self.cloud.describe_availability_zones(admin_ctxt,
+                                                        zone_name='verbose')
+
+        self.assertEqual(len(result['availabilityZoneInfo']), 15)
         db.service_destroy(self.context, service1['id'])
         db.service_destroy(self.context, service2['id'])
 
