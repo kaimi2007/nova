@@ -297,14 +297,14 @@ class LibvirtConnection(driver.ComputeDriver):
 
     def init_host(self, host):
         # NOTE(nsokolov): moved instance restarting to ComputeManager
+        context = nova.context.get_admin_context() 
+        self._get_instance_type_extra_specs_capabilities(context) 
         if FLAGS.connection_type == 'gpu':
             global gpus_available
             global num_gpus
             global gpu_arch
             global gpu_info
-            context = nova.context.get_admin_context() 
 #            gpus_available = range(FLAGS.xpus)
-            self._get_instance_type_extra_specs_capabilities(context) 
             if 'gpus' in extra_specs:
                 num_gpus = extra_specs['gpus']
                 gpus_available = range(int(extra_specs['gpus']))
@@ -677,6 +677,7 @@ class LibvirtConnection(driver.ComputeDriver):
             #disk.destroy_container(self.container)
         if FLAGS.libvirt_type == 'lxc':
             disk.destroy_container(self.container)
+            time.sleep(1) # added by dkang
         if os.path.exists(target):
             shutil.rmtree(target)
 
@@ -2904,9 +2905,9 @@ class HostState(object):
             print "*****************"
             if 'gpus' in extra_specs:
                 extra_specs["gpus"] = int(len(gpus_available)) 
-                extra_specs["hypervisor_type"] = \
-                          self.connection.get_hypervisor_type()
-            data.update({"instance_type_extra_specs": extra_specs})
+        extra_specs["hypervisor_type"] = \
+            self.connection.get_hypervisor_type()
+        data.update({"instance_type_extra_specs": extra_specs})
         data["disk_used"] = self.connection.get_local_gb_used()
         data["disk_available"] = data["disk_total"] - data["disk_used"]
         print data["disk_available"]

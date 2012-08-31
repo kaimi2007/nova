@@ -67,36 +67,37 @@ def upgrade(migrate_engine):
                    (name == 'm1.medium') or \
                    (name == 'm1.large') or \
                    (name == 'm1.xlarge'):
-                    extra_specs = {}
+                    extra_specs = dict( 
+                                      hypervisor_type='s== QEMU')
                 elif (name == 'cg1.small'):
                     extra_specs = dict(
-                                      cpu_arch='s== x86_64',
                                       gpu_arch='s== fermi',
+                                      hypervisor_type='s== LXC',
                                       gpus='= 1')
                 elif (name == 'cg1.medium'):
                     extra_specs = dict(
-                                      cpu_arch='s== x86_64',
                                       gpu_arch='s== fermi',
+                                      hypervisor_type='s== LXC',
                                       gpus='= 2')
                 elif (name == 'cg1.large'):
                     extra_specs = dict(
-                                      cpu_arch='s== x86_64',
                                       gpu_arch='s== fermi',
+                                      hypervisor_type='s== LXC',
                                       gpus='= 3')
                 elif (name == 'cg1.xlarge'):
                     extra_specs = dict(
-                                      cpu_arch='s== x86_64',
                                       gpu_arch='s== fermi',
+                                      hypervisor_type='s== LXC',
                                       gpus='= 4')
                 elif (name == 'cg1.2xlarge'):
                     extra_specs = dict(
-                                      cpu_arch='s== x86_64',
                                       gpu_arch='s== fermi',
+                                      hypervisor_type='s== LXC',
                                       gpus='= 4')
                 elif (name == 'cg1.4xlarge'):
                     extra_specs = dict(
-                                      cpu_arch='s== x86_64',
                                       gpu_arch='s== fermi',
+                                      hypervisor_type='s== LXC',
                                       gpus='= 4')
                 elif (name == 'sh1.small') or  \
                      (name == 'sh1.medium') or \
@@ -109,6 +110,7 @@ def upgrade(migrate_engine):
                      (name == 'sh1.32xlarge'):
                     extra_specs = dict(
                                       cpu_arch='s== x86_64',
+                                      hypervisor_type='s== QEMU',
                                       system_type='s== UV')
                 elif (name == 'tp64.8x8'):
                     extra_specs = dict(

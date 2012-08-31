@@ -109,6 +109,11 @@ class VolumeDriver(object):
     def _create_volume(self, volume_name, sizestr):
         self._try_execute('lvcreate', '-L', sizestr, '-n',
                           volume_name, FLAGS.volume_group, run_as_root=True)
+        # ISI
+        dev_name = '/dev/' + FLAGS.volume_group + '/' + volume_name
+        self._try_execute('mkfs.ext3',
+                          dev_name, run_as_root=True)
+        # !ISI
 
     def _copy_volume(self, srcstr, deststr, size_in_g):
         self._execute('dd', 'if=%s' % srcstr, 'of=%s' % deststr,
