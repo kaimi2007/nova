@@ -21,12 +21,17 @@ from lxml import etree
 from nova import flags
 from nova.openstack.common import jsonutils
 from nova.openstack.common.log import logging
+from nova import test
 from nova.tests import fake_network
 from nova.tests.image import fake
 from nova.tests.integrated import integrated_helpers
 
 FLAGS = flags.FLAGS
 LOG = logging.getLogger(__name__)
+
+
+class NoMatch(test.TestingException):
+    pass
 
 
 class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
@@ -50,9 +55,30 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
                     indent=4)
 
         else:
-            data = etree.tostring(etree.XML(data), encoding="UTF-8",
+            xml = etree.XML(data)
+            data = etree.tostring(xml, encoding="UTF-8",
                     xml_declaration=True, pretty_print=True)
-        return '\n'.join(line.rstrip() for line in data.split('\n'))
+        return '\n'.join(line.rstrip() for line in data.split('\n')).strip()
+
+    def _objectify(self, data):
+        if self.ctype == 'json':
+            return jsonutils.loads(data)
+        else:
+            def to_dict(node):
+                ret = {}
+                if node.items():
+                    ret.update(dict(node.items()))
+                if node.text:
+                    ret['__content__'] = node.text
+                if node.tag:
+                    ret['__tag__'] = node.tag
+                if node.nsmap:
+                    ret['__nsmap__'] = node.nsmap
+                for element in node:
+                    ret.setdefault(node.tag, [])
+                    ret[node.tag].append(to_dict(element))
+                return ret
+            return to_dict(etree.fromstring(data))
 
     @classmethod
     def _get_sample(cls, name, suffix=''):
@@ -65,57 +91,82 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
         parts.append(name + "." + cls.ctype + suffix)
         return os.path.join(*parts)
 
-    @classmethod
-    def _get_template(cls, name):
-        return cls._get_sample(name, suffix='.tpl')
-
     def _read_template(self, name):
-        with open(self._get_template(name)) as inf:
+        template = self._get_sample(name, suffix='.tpl')
+        if self.generate_samples and not os.path.exists(template):
+            with open(template, 'w') as outf:
+                pass
+        with open(template) as inf:
             return inf.read().strip()
 
     def _write_sample(self, name, data):
         with open(self._get_sample(name), 'w') as outf:
             outf.write(data)
 
+    def _compare_result(self, subs, expected, result):
+        matched_value = None
+        if isinstance(expected, dict):
+            if not isinstance(result, dict):
+                raise NoMatch(
+                        _('Result: %(result)s is not a dict.') % locals())
+            ex_keys = sorted(expected.keys())
+            res_keys = sorted(result.keys())
+            if ex_keys != res_keys:
+                raise NoMatch(_('Key mismatch:\n'
+                        '%(ex_keys)s\n%(res_keys)s') % locals())
+            for key in ex_keys:
+                res = self._compare_result(subs, expected[key], result[key])
+                matched_value = res or matched_value
+        elif isinstance(expected, list):
+            if not isinstance(result, list):
+                raise NoMatch(
+                        _('Result: %(result)s is not a list.') % locals())
+            for ex_obj, res_obj in zip(sorted(expected), sorted(result)):
+                res = self._compare_result(subs, ex_obj, res_obj)
+                matched_value = res or matched_value
+
+        elif isinstance(expected, basestring) and '%' in expected:
+            try:
+                # NOTE(vish): escape stuff for regex
+                for char in ['[', ']', '<', '>', '?']:
+                    expected = expected.replace(char, '\%s' % char)
+                expected = expected % subs
+                match = re.match(expected, result)
+            except Exception as exc:
+                raise NoMatch(_('Values do not match:\n'
+                        '%(expected)s\n%(result)s') % locals())
+            if not match:
+                raise NoMatch(_('Values do not match:\n'
+                        '%(expected)s\n%(result)s') % locals())
+            if match.groups():
+                matched_value = match.groups()[0]
+        else:
+            if expected != result:
+                raise NoMatch(_('Values do not match:\n'
+                        '%(expected)s\n%(result)s') % locals())
+        return matched_value
+
     def _verify_response(self, name, subs, response):
         expected = self._read_template(name)
-
-        # NOTE(vish): escape stuff for regex
-        for char in ['[', ']', '<', '>', '?']:
-            expected = expected.replace(char, '\%s' % char)
-
-        expected = expected % subs
-        data = response.read()
-        result = self._pretty_data(data).strip()
+        expected = self._objectify(expected)
+        result = self._pretty_data(response.read())
         if self.generate_samples:
             self._write_sample(name, result)
-        result_lines = result.split('\n')
-        expected_lines = expected.split('\n')
-        if len(result_lines) != len(expected_lines):
-            LOG.info(expected)
-            LOG.info(result)
-            self.fail('Number of lines (%s) incorrect' % (len(expected_lines)))
-        result = None
-        for line, result_line in zip(expected_lines, result_lines):
-            try:
-                match = re.match(line, result_line)
-            except Exception as exc:
-                self.fail(_('Response error on line:\n'
-                          '%(line)s\n%(result_line)s') % locals())
-            if not match:
-                self.fail(_('Response error on line:\n'
-                          '%(line)s\n%(result_line)s') % locals())
-            if match.groups():
-                result = match.groups()[0]
-        return result
+        result = self._objectify(result)
+        return self._compare_result(subs, expected, result)
 
     def _get_host(self):
         return 'http://openstack.example.com'
 
     def _get_regexes(self):
+        if self.ctype == 'json':
+            text = r'(\\"|[^"])*'
+        else:
+            text = r'[^<]*'
         return {
             'timestamp': '[0-9]{4}-[0,1][0-9]-[0-3][0-9]T'
-                         '[0-9]{2}:[0-9]{2}:[0-9]{2}Z',
+                         '[0-9]{2}:[0-9]{2}:[0-9]{2}'
+                         '(Z|(\+|-)[0-9]{2}:[0-9]{2})',
             'password': '[0-9a-zA-Z]{12}',
             'ip': '[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}',
             'id': '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}'
@@ -124,23 +175,35 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
                     '-[0-9a-f]{4}-[0-9a-f]{12}',
             'host': self._get_host(),
             'compute_host': self.compute.host,
+            'text': text,
         }
 
-    def _get_response(self, url, method, body=None):
+    def _get_response(self, url, method, body=None, strip_version=False):
         headers = {}
         headers['Content-Type'] = 'application/' + self.ctype
         headers['Accept'] = 'application/' + self.ctype
         return self.api.api_request(url, body=body, method=method,
-                headers=headers)
+                headers=headers, strip_version=strip_version)
 
-    def _do_get(self, url):
-        return self._get_response(url, 'GET')
+    def _do_get(self, url, strip_version=False):
+        return self._get_response(url, 'GET', strip_version=strip_version)
 
     def _do_post(self, url, name, subs):
         body = self._read_template(name) % subs
         if self.generate_samples:
-            self._write_sample(name, self._pretty_data(body))
+            self._write_sample(name, body)
         return self._get_response(url, 'POST', body)
+
+
+class VersionsSampleJsonTest(ApiSampleTestBase):
+    def test_servers_get(self):
+        response = self._do_get('', strip_version=True)
+        subs = self._get_regexes()
+        return self._verify_response('versions-get-resp', subs, response)
+
+
+class VersionsSampleXmlTest(VersionsSampleJsonTest):
+    ctype = 'xml'
 
 
 class ServersSampleJsonTest(ApiSampleTestBase):
@@ -172,3 +235,16 @@ class ServersSampleAllExtensionJsonTest(ServersSampleJsonTest):
 
 class ServersSampleAllExtensionXmlTest(ServersSampleXmlTest):
     all_extensions = True
+
+
+class ExtensionsSampleJsonTest(ApiSampleTestBase):
+    all_extensions = True
+
+    def test_extensions_get(self):
+        response = self._do_get('extensions')
+        subs = self._get_regexes()
+        return self._verify_response('extensions-get-resp', subs, response)
+
+
+class ExtensionsSampleXmlTest(ExtensionsSampleJsonTest):
+    ctype = 'xml'
