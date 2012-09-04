@@ -41,7 +41,8 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
 
     def setUp(self):
         self.flags(use_ipv6=False,
-                   osapi_compute_link_prefix=self._get_host())
+                   osapi_compute_link_prefix=self._get_host(),
+                   osapi_glance_link_prefix=self._get_glance_host())
         if not self.all_extensions:
             ext = [self.extension_name] if self.extension_name else []
             self.flags(osapi_compute_extension=ext)
@@ -61,6 +62,8 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
         return '\n'.join(line.rstrip() for line in data.split('\n')).strip()
 
     def _objectify(self, data):
+        if not data:
+            return {}
         if self.ctype == 'json':
             return jsonutils.loads(data)
         else:
@@ -158,6 +161,9 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
     def _get_host(self):
         return 'http://openstack.example.com'
 
+    def _get_glance_host(self):
+        return 'http://glance.openstack.example.com'
+
     def _get_regexes(self):
         if self.ctype == 'json':
             text = r'(\\"|[^"])*'
@@ -174,6 +180,7 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
             'uuid': '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}'
                     '-[0-9a-f]{4}-[0-9a-f]{12}',
             'host': self._get_host(),
+            'glance_host': self._get_glance_host(),
             'compute_host': self.compute.host,
             'text': text,
         }
@@ -188,11 +195,14 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
     def _do_get(self, url, strip_version=False):
         return self._get_response(url, 'GET', strip_version=strip_version)
 
-    def _do_post(self, url, name, subs):
+    def _do_post(self, url, name, subs, method='POST'):
         body = self._read_template(name) % subs
         if self.generate_samples:
             self._write_sample(name, body)
-        return self._get_response(url, 'POST', body)
+        return self._get_response(url, method, body)
+
+    def _do_put(self, url, name, subs):
+        return self._do_post(url, name, subs, method='PUT')
 
 
 class VersionsSampleJsonTest(ApiSampleTestBase):
@@ -273,3 +283,90 @@ class FlavorsSampleAllExtensionJsonTest(FlavorsSampleJsonTest):
 
 class FlavorsSampleAllExtensionXmlTest(FlavorsSampleXmlTest):
     all_extensions = True
+
+
+class ImagesSampleJsonTest(ApiSampleTestBase):
+    def test_images_list(self):
+        """Get api sample of images get list request"""
+        response = self._do_get('images')
+        subs = self._get_regexes()
+        return self._verify_response('images-list-get-resp', subs, response)
+
+    def test_image_get(self):
+        """Get api sample of one single image details request"""
+        image_id = fake.get_valid_image_id()
+        response = self._do_get('images/%s' % image_id)
+        self.assertEqual(response.status, 200)
+        subs = self._get_regexes()
+        subs['image_id'] = image_id
+        return self._verify_response('image-get-resp', subs, response)
+
+    def test_images_details(self):
+        """Get api sample of all images details request"""
+        response = self._do_get('images/detail')
+        subs = self._get_regexes()
+        return self._verify_response('images-details-get-resp', subs, response)
+
+    def test_image_metadata_get(self):
+        """Get api sample of a image metadata request"""
+        image_id = fake.get_valid_image_id()
+        response = self._do_get('images/%s/metadata' % image_id)
+        subs = self._get_regexes()
+        subs['image_id'] = image_id
+        return self._verify_response('image-metadata-get-resp', subs, response)
+
+    def test_image_metadata_post(self):
+        """Get api sample to update metadata of an image metadata request"""
+        image_id = fake.get_valid_image_id()
+        response = self._do_post(
+                'images/%s/metadata' % image_id,
+                'image-metadata-post-req', {})
+        self.assertEqual(response.status, 200)
+        subs = self._get_regexes()
+        return self._verify_response('image-metadata-post-resp',
+                                     subs, response)
+
+    def test_image_metadata_put(self):
+        """Get api sample of image metadata put request"""
+        image_id = fake.get_valid_image_id()
+        response = self._do_put('images/%s/metadata' % image_id,
+                                'image-metadata-put-req', {})
+        self.assertEqual(response.status, 200)
+        subs = self._get_regexes()
+        return self._verify_response('image-metadata-put-resp',
+                                     subs, response)
+
+    def test_image_meta_key_get(self):
+        """Get api sample of a image metadata key request"""
+        image_id = fake.get_valid_image_id()
+        key = "kernel_id"
+        response = self._do_get('images/%s/metadata/%s' % (image_id, key))
+        subs = self._get_regexes()
+        return self._verify_response('image-meta-key-get', subs, response)
+
+    def test_image_meta_key_put(self):
+        """Get api sample of image metadata key put request"""
+        image_id = fake.get_valid_image_id()
+        key = "auto_disk_config"
+        response = self._do_put('images/%s/metadata/%s' % (image_id, key),
+                                'image-meta-key-put-req', {})
+        self.assertEqual(response.status, 200)
+        subs = self._get_regexes()
+        return self._verify_response('image-meta-key-put-resp',
+                                     subs,
+                                     response)
+
+
+class ImagesSampleXmlTest(ImagesSampleJsonTest):
+    ctype = 'xml'
+
+
+class LimitsSampleJsonTest(ApiSampleTestBase):
+    def test_limits_get(self):
+        response = self._do_get('limits')
+        subs = self._get_regexes()
+        return self._verify_response('limit-get-resp', subs, response)
+
+
+class LimitsSampleXmlTest(LimitsSampleJsonTest):
+    ctype = 'xml'
