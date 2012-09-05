@@ -663,14 +663,16 @@ class ComputeTestCase(BaseTestCase):
         """Ensure instance can be rebuilt"""
         instance = jsonutils.to_primitive(self._create_fake_instance())
         image_ref = instance['image_ref']
-
+        sys_metadata = db.instance_system_metadata_get(self.context,
+                        instance['uuid'])
         self.compute.run_instance(self.context, instance=instance)
         db.instance_update(self.context, instance['uuid'],
                            {"task_state": task_states.REBUILDING})
         self.compute.rebuild_instance(self.context, instance,
                                       image_ref, image_ref,
                                       injected_files=[],
-                                      new_pass="new_password")
+                                      new_pass="new_password",
+                                      orig_sys_metadata=sys_metadata)
         self.compute.terminate_instance(self.context, instance=instance)
 
     def test_rebuild_launch_time(self):
@@ -1389,7 +1391,8 @@ class ComputeTestCase(BaseTestCase):
 
         test_notifier.NOTIFICATIONS = []
         instance = db.instance_get_by_uuid(self.context, inst_ref['uuid'])
-
+        orig_sys_metadata = db.instance_system_metadata_get(self.context,
+                inst_ref['uuid'])
         image_ref = instance["image_ref"]
         new_image_ref = image_ref + '-new_image_ref'
         db.instance_update(self.context, inst_ref['uuid'],
@@ -1405,7 +1408,8 @@ class ComputeTestCase(BaseTestCase):
                                       jsonutils.to_primitive(instance),
                                       image_ref, new_image_ref,
                                       injected_files=[],
-                                      new_pass=password)
+                                      new_pass=password,
+                                      orig_sys_metadata=orig_sys_metadata)
 
         instance = db.instance_get_by_uuid(self.context, inst_ref['uuid'])
 
@@ -3074,6 +3078,42 @@ class ComputeAPITestCase(BaseTestCase):
 
         db.instance_destroy(self.context, inst_ref['uuid'])
 
+    def test_hard_reboot_of_soft_rebooting_instance(self):
+        """Ensure instance can be hard rebooted while soft rebooting"""
+        instance = jsonutils.to_primitive(self._create_fake_instance())
+        self.compute.run_instance(self.context, instance=instance)
+
+        inst_ref = db.instance_get_by_uuid(self.context, instance['uuid'])
+
+        db.instance_update(self.context, instance['uuid'],
+                           {"task_state": task_states.REBOOTING})
+
+        reboot_type = "HARD"
+        self.compute_api.reboot(self.context, inst_ref, reboot_type)
+
+        inst_ref = db.instance_get_by_uuid(self.context, inst_ref['uuid'])
+        self.assertEqual(inst_ref['task_state'], task_states.REBOOTING_HARD)
+
+        db.instance_destroy(self.context, inst_ref['uuid'])
+
+    def test_soft_reboot_of_rebooting_instance(self):
+        """Ensure instance can't be soft rebooted while rebooting"""
+        instance = jsonutils.to_primitive(self._create_fake_instance())
+        self.compute.run_instance(self.context, instance=instance)
+
+        inst_ref = db.instance_get_by_uuid(self.context, instance['uuid'])
+
+        db.instance_update(self.context, instance['uuid'],
+                           {"task_state": task_states.REBOOTING})
+
+        inst_ref = db.instance_get_by_uuid(self.context, inst_ref['uuid'])
+        reboot_type = "SOFT"
+        self.assertRaises(exception.InstanceInvalidState,
+                          self.compute_api.reboot,
+                          self.context,
+                          inst_ref,
+                          reboot_type)
+
     def test_hostname_create(self):
         """Ensure instance hostname is set during creation."""
         inst_type = instance_types.get_instance_type_by_name('m1.tiny')
@@ -4104,7 +4144,7 @@ class ComputeAPITestCase(BaseTestCase):
                 self.context,
                 {'locked': False},
                 None,
-                '/dev/invalid')
+                '/invalid')
 
     def test_vnc_console(self):
         """Make sure we can a vnc console for an instance."""
@@ -4271,7 +4311,8 @@ class ComputeAPITestCase(BaseTestCase):
         rpc.cast(self.context, topic,
                 {"method": "refresh_instance_security_rules",
                  "args": {'instance': jsonutils.to_primitive(instance)},
-                 "version": compute_rpcapi.ComputeAPI.BASE_RPC_API_VERSION})
+                 "version":
+                    compute_rpcapi.SecurityGroupAPI.BASE_RPC_API_VERSION})
         self.mox.ReplayAll()
 
         self.security_group_api.trigger_members_refresh(self.context, [1])
@@ -4299,7 +4340,8 @@ class ComputeAPITestCase(BaseTestCase):
         rpc.cast(self.context, topic,
                 {"method": "refresh_instance_security_rules",
                  "args": {'instance': jsonutils.to_primitive(instance)},
-                 "version": compute_rpcapi.ComputeAPI.BASE_RPC_API_VERSION})
+                 "version":
+                   compute_rpcapi.SecurityGroupAPI.BASE_RPC_API_VERSION})
         self.mox.ReplayAll()
 
         self.security_group_api.trigger_members_refresh(self.context, [1, 2])
@@ -4339,7 +4381,8 @@ class ComputeAPITestCase(BaseTestCase):
         rpc.cast(self.context, topic,
                 {"method": "refresh_instance_security_rules",
                  "args": {'instance': jsonutils.to_primitive(instance)},
-                 "version": compute_rpcapi.ComputeAPI.BASE_RPC_API_VERSION})
+                 "version":
+                   compute_rpcapi.SecurityGroupAPI.BASE_RPC_API_VERSION})
         self.mox.ReplayAll()
 
         self.security_group_api.trigger_rules_refresh(self.context, [1])
@@ -4359,7 +4402,8 @@ class ComputeAPITestCase(BaseTestCase):
         rpc.cast(self.context, topic,
                 {"method": "refresh_instance_security_rules",
                  "args": {'instance': jsonutils.to_primitive(instance)},
-                 "version": compute_rpcapi.ComputeAPI.BASE_RPC_API_VERSION})
+                 "version":
+                   compute_rpcapi.SecurityGroupAPI.BASE_RPC_API_VERSION})
         self.mox.ReplayAll()
 
         self.security_group_api.trigger_rules_refresh(self.context, [1, 2])

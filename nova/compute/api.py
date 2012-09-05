@@ -1238,14 +1238,21 @@ class API(base.Base):
     @check_instance_lock
     @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.STOPPED,
                                     vm_states.RESCUED],
-                          task_state=[None])
+                          task_state=[None, task_states.REBOOTING])
     def reboot(self, context, instance, reboot_type):
         """Reboot the given instance."""
+        if (reboot_type == 'SOFT' and
+            instance['task_state'] == task_states.REBOOTING):
+            raise exception.InstanceInvalidState(
+                attr='task_state',
+                instance_uuid=instance['uuid'],
+                state=instance['task_state'])
         state = {'SOFT': task_states.REBOOTING,
                  'HARD': task_states.REBOOTING_HARD}[reboot_type]
         instance = self.update(context, instance, vm_state=vm_states.ACTIVE,
                                task_state=state,
-                               expected_task_state=None)
+                               expected_task_state=[None,
+                                                    task_states.REBOOTING])
         self.compute_rpcapi.reboot_instance(context, instance=instance,
                 reboot_type=reboot_type)
 
@@ -1292,6 +1299,7 @@ class API(base.Base):
             # layer overhaul.
             sys_metadata = self.db.instance_system_metadata_get(context,
                     instance['uuid'])
+            orig_sys_metadata = dict(sys_metadata)
             # Remove the old keys
             for key in sys_metadata.keys():
                 if key.startswith('image_'):
@@ -1302,6 +1310,7 @@ class API(base.Base):
                 sys_metadata['image_%s' % key] = new_value
             self.db.instance_system_metadata_update(context,
                     instance['uuid'], sys_metadata, True)
+            return orig_sys_metadata
 
         instance = self.update(context, instance,
                                task_state=task_states.REBUILDING,
@@ -1313,11 +1322,12 @@ class API(base.Base):
         # On a rebuild, since we're potentially changing images, we need to
         # wipe out the old image properties that we're storing as instance
         # system metadata... and copy in the properties for the new image.
-        _reset_image_metadata()
+        orig_sys_metadata = _reset_image_metadata()
 
         self.compute_rpcapi.rebuild_instance(context, instance=instance,
                 new_pass=admin_password, injected_files=files_to_inject,
-                image_ref=image_href, orig_image_ref=orig_image_ref)
+                image_ref=image_href, orig_image_ref=orig_image_ref,
+                orig_sys_metadata=orig_sys_metadata)
 
     @wrap_check_policy
     @check_instance_lock
@@ -1719,7 +1729,7 @@ class API(base.Base):
         #             will need to be removed along with the test if we
         #             change the logic in the manager for what constitutes
         #             a valid device.
-        if device and not re.match("^/dev/x{0,1}[a-z]d[a-z]+$", device):
+        if device and not block_device.match_device(device):
             raise exception.InvalidDevicePath(path=device)
         # NOTE(vish): This is done on the compute host because we want
         #             to avoid a race where two devices are requested at
