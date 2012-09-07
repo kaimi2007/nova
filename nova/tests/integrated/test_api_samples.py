@@ -19,6 +19,7 @@ import re
 from lxml import etree
 
 from nova import flags
+from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
 from nova.openstack.common.log import logging
 from nova import test
@@ -84,18 +85,30 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
             return to_dict(etree.fromstring(data))
 
     @classmethod
-    def _get_sample(cls, name, suffix=''):
-        parts = [os.path.dirname(os.path.abspath(__file__))]
+    def _get_sample_path(cls, name, dirname, suffix=''):
+        parts = [dirname]
         parts.append('api_samples')
         if cls.all_extensions:
             parts.append('all_extensions')
         if cls.extension_name:
-            parts.append(cls.extension_name)
+            alias = importutils.import_class(cls.extension_name).alias
+            parts.append(alias)
         parts.append(name + "." + cls.ctype + suffix)
         return os.path.join(*parts)
 
+    @classmethod
+    def _get_sample(cls, name):
+        dirname = os.path.dirname(os.path.abspath(__file__))
+        dirname = os.path.join(dirname, "../../../doc")
+        return cls._get_sample_path(name, dirname)
+
+    @classmethod
+    def _get_template(cls, name):
+        dirname = os.path.dirname(os.path.abspath(__file__))
+        return cls._get_sample_path(name, dirname, suffix='.tpl')
+
     def _read_template(self, name):
-        template = self._get_sample(name, suffix='.tpl')
+        template = self._get_template(name)
         if self.generate_samples and not os.path.exists(template):
             with open(template, 'w') as outf:
                 pass
