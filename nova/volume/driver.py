@@ -104,8 +104,9 @@ class VolumeDriver(object):
                                 run_as_root=True)
         volume_groups = out.split()
         if not FLAGS.volume_group in volume_groups:
-            raise exception.NovaException(_("volume group %s doesn't exist")
+            exception_message = (_("volume group %s doesn't exist")
                                   % FLAGS.volume_group)
+            raise exception.VolumeBackendAPIException(data=exception_message)
 
     def _create_volume(self, volume_name, sizestr):
         self._try_execute('lvcreate', '-L', sizestr, '-n',
@@ -243,6 +244,14 @@ class VolumeDriver(object):
     def terminate_connection(self, volume, connector):
         """Disallow connection from connector"""
         raise NotImplementedError()
+
+    def attach_volume(self, context, volume_id, instance_uuid, mountpoint):
+        """ Callback for volume attached to instance."""
+        pass
+
+    def detach_volume(self, context, volume_id):
+        """ Callback for volume detached."""
+        pass
 
     def get_volume_stats(self, refresh=False):
         """Return the current state of the volume service. If 'refresh' is
@@ -434,9 +443,9 @@ class ISCSIDriver(VolumeDriver):
             location = self._do_iscsi_discovery(volume)
 
             if not location:
-                raise exception.NovaException(_("Could not find iSCSI export "
-                                        " for volume %s") %
-                                      (volume['name']))
+                raise exception.InvalidVolume(_("Could not find iSCSI export "
+                                                " for volume %s") %
+                                              (volume['name']))
 
             LOG.debug(_("ISCSI Discovery: Found %s") % (location))
             properties['target_discovered'] = True
@@ -568,8 +577,9 @@ class RBDDriver(VolumeDriver):
         (stdout, stderr) = self._execute('rados', 'lspools')
         pools = stdout.split("\n")
         if not FLAGS.rbd_pool in pools:
-            raise exception.NovaException(_("rbd has no pool %s") %
-                                  FLAGS.rbd_pool)
+            exception_message = (_("rbd has no pool %s") %
+                                    FLAGS.rbd_pool)
+            raise exception.VolumeBackendAPIException(data=exception_message)
 
     def create_volume(self, volume):
         """Creates a logical volume."""
@@ -646,10 +656,13 @@ class SheepdogDriver(VolumeDriver):
             #  use it and just check if 'running' is in the output.
             (out, err) = self._execute('collie', 'cluster', 'info')
             if not 'running' in out.split():
-                msg = _("Sheepdog is not working: %s") % out
-                raise exception.NovaException(msg)
+                exception_message = _("Sheepdog is not working: %s") % out
+                raise exception.VolumeBackendAPIException(
+                                                data=exception_message)
+
         except exception.ProcessExecutionError:
-            raise exception.NovaException(_("Sheepdog is not working"))
+            exception_message = _("Sheepdog is not working")
+            raise exception.NovaException(data=exception_message)
 
     def create_volume(self, volume):
         """Creates a sheepdog volume"""

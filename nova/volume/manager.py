@@ -164,10 +164,11 @@ class VolumeManager(manager.SchedulerDependentManager):
         context = context.elevated()
         volume_ref = self.db.volume_get(context, volume_id)
         if volume_ref['attach_status'] == "attached":
-            raise exception.NovaException(_("Volume is still attached"))
+            # Volume is still attached, need to detach first
+            raise exception.VolumeAttached(volume_id=volume_id)
         if volume_ref['host'] != self.host:
-            msg = _("Volume is not local to this node")
-            raise exception.NovaException(msg)
+            raise exception.InvalidVolume(
+                reason=_("Volume is not local to this node"))
 
         self._notify_about_volume_usage(context, volume_ref, "delete.start")
         self._reset_stats()
@@ -262,6 +263,17 @@ class VolumeManager(manager.SchedulerDependentManager):
         if not utils.is_uuid_like(instance_uuid):
             raise exception.InvalidUUID(instance_uuid)
 
+        try:
+            self.driver.attach_volume(context,
+                                      volume_id,
+                                      instance_uuid,
+                                      mountpoint)
+        except Exception:
+            with excutils.save_and_reraise_exception():
+                self.db.volume_update(context,
+                                      volume_id,
+                                      {'status': 'error_attaching'})
+
         self.db.volume_attached(context,
                                 volume_id,
                                 instance_uuid,
@@ -270,6 +282,14 @@ class VolumeManager(manager.SchedulerDependentManager):
     def detach_volume(self, context, volume_id):
         """Updates db to show volume is detached"""
         # TODO(vish): refactor this into a more general "unreserve"
+        try:
+            self.driver.detach_volume(context, volume_id)
+        except Exception:
+            with excutils.save_and_reraise_exception():
+                self.db.volume_update(context,
+                                      volume_id,
+                                      {'status': 'error_detaching'})
+
         self.db.volume_detached(context, volume_id)
 
     def initialize_connection(self, context, volume_id, connector):
