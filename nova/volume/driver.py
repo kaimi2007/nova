@@ -20,6 +20,7 @@ Drivers for volumes.
 
 """
 
+import os
 import time
 
 from nova import exception
@@ -103,8 +104,9 @@ class VolumeDriver(object):
                                 run_as_root=True)
         volume_groups = out.split()
         if not FLAGS.volume_group in volume_groups:
-            raise exception.NovaException(_("volume group %s doesn't exist")
+            exception_message = (_("volume group %s doesn't exist")
                                   % FLAGS.volume_group)
+            raise exception.VolumeBackendAPIException(data=exception_message)
 
     def _create_volume(self, volume_name, sizestr):
         self._try_execute('lvcreate', '-L', sizestr, '-n',
@@ -116,9 +118,20 @@ class VolumeDriver(object):
         # !ISI
 
     def _copy_volume(self, srcstr, deststr, size_in_g):
+        # Use O_DIRECT to avoid thrashing the system buffer cache
+        direct_flags = ('iflag=direct', 'oflag=direct')
+
+        # Check whether O_DIRECT is supported
+        try:
+            self._execute('dd', 'count=0', 'if=%s' % srcstr, 'of=%s' % deststr,
+                          *direct_flags, run_as_root=True)
+        except exception.ProcessExecutionError:
+            direct_flags = ()
+
+        # Perform the copy
         self._execute('dd', 'if=%s' % srcstr, 'of=%s' % deststr,
                       'count=%d' % (size_in_g * 1024), 'bs=1M',
-                      run_as_root=True)
+                      *direct_flags, run_as_root=True)
 
     def _volume_not_present(self, volume_name):
         path_name = '%s/%s' % (FLAGS.volume_group, volume_name)
@@ -232,6 +245,14 @@ class VolumeDriver(object):
         """Disallow connection from connector"""
         raise NotImplementedError()
 
+    def attach_volume(self, context, volume_id, instance_uuid, mountpoint):
+        """ Callback for volume attached to instance."""
+        pass
+
+    def detach_volume(self, context, volume_id):
+        """ Callback for volume detached."""
+        pass
+
     def get_volume_stats(self, refresh=False):
         """Return the current state of the volume service. If 'refresh' is
            True, run the update first."""
@@ -268,65 +289,103 @@ class ISCSIDriver(VolumeDriver):
 
     def ensure_export(self, context, volume):
         """Synchronously recreates an export for a logical volume."""
-        try:
-            iscsi_target = self.db.volume_get_iscsi_target_num(context,
-                                                           volume['id'])
-        except exception.NotFound:
-            LOG.info(_("Skipping ensure_export. No iscsi_target "
-                       "provisioned for volume: %s"), volume['id'])
-            return
+        # NOTE(jdg): tgtadm doesn't use the iscsi_targets table
+        # TODO(jdg): In the future move all of the dependent stuff into the
+        # cooresponding target admin class
+        if not isinstance(self.tgtadm, iscsi.TgtAdm):
+            try:
+                iscsi_target = self.db.volume_get_iscsi_target_num(context,
+                                                               volume['id'])
+            except exception.NotFound:
+                LOG.info(_("Skipping ensure_export. No iscsi_target "
+                           "provisioned for volume: %s"), volume['id'])
+                return
+        else:
+            iscsi_target = 1  # dummy value when using TgtAdm
 
         iscsi_name = "%s%s" % (FLAGS.iscsi_target_prefix, volume['name'])
         volume_path = "/dev/%s/%s" % (FLAGS.volume_group, volume['name'])
 
+        # NOTE(jdg): For TgtAdm case iscsi_name is the ONLY param we need
+        # should clean this all up at some point in the future
         self.tgtadm.create_iscsi_target(iscsi_name, iscsi_target,
-                0, volume_path, check_exit_code=False)
+                                        0, volume_path,
+                                        check_exit_code=False)
 
     def _ensure_iscsi_targets(self, context, host):
         """Ensure that target ids have been created in datastore."""
-        host_iscsi_targets = self.db.iscsi_target_count_by_host(context, host)
-        if host_iscsi_targets >= FLAGS.iscsi_num_targets:
-            return
-        # NOTE(vish): Target ids start at 1, not 0.
-        for target_num in xrange(1, FLAGS.iscsi_num_targets + 1):
-            target = {'host': host, 'target_num': target_num}
-            self.db.iscsi_target_create_safe(context, target)
+        # NOTE(jdg): tgtadm doesn't use the iscsi_targets table
+        # TODO(jdg): In the future move all of the dependent stuff into the
+        # cooresponding target admin class
+        if not isinstance(self.tgtadm, iscsi.TgtAdm):
+            host_iscsi_targets = self.db.iscsi_target_count_by_host(context,
+                                                                    host)
+            if host_iscsi_targets >= FLAGS.iscsi_num_targets:
+                return
+
+            # NOTE(vish): Target ids start at 1, not 0.
+            for target_num in xrange(1, FLAGS.iscsi_num_targets + 1):
+                target = {'host': host, 'target_num': target_num}
+                self.db.iscsi_target_create_safe(context, target)
 
     def create_export(self, context, volume):
         """Creates an export for a logical volume."""
-        self._ensure_iscsi_targets(context, volume['host'])
-        iscsi_target = self.db.volume_allocate_iscsi_target(context,
-                                                      volume['id'],
-                                                      volume['host'])
+        #BOOKMARK(jdg)
+
         iscsi_name = "%s%s" % (FLAGS.iscsi_target_prefix, volume['name'])
         volume_path = "/dev/%s/%s" % (FLAGS.volume_group, volume['name'])
 
-        self.tgtadm.create_iscsi_target(iscsi_name, iscsi_target,
-                0, volume_path)
-
         model_update = {}
-        if FLAGS.iscsi_helper == 'tgtadm':
-            lun = 1
-        else:
+
+        # TODO(jdg): In the future move all of the dependent stuff into the
+        # cooresponding target admin class
+        if not isinstance(self.tgtadm, iscsi.TgtAdm):
             lun = 0
+            self._ensure_iscsi_targets(context, volume['host'])
+            iscsi_target = self.db.volume_allocate_iscsi_target(context,
+                                                                volume['id'],
+                                                                volume['host'])
+        else:
+            lun = 1  # For tgtadm the controller is lun 0, dev starts at lun 1
+            iscsi_target = 0  # NOTE(jdg): Not used by tgtadm
+
+        # NOTE(jdg): For TgtAdm case iscsi_name is the ONLY param we need
+        # should clean this all up at some point in the future
+        tid = self.tgtadm.create_iscsi_target(iscsi_name,
+                                              iscsi_target,
+                                              0,
+                                              volume_path)
         model_update['provider_location'] = _iscsi_location(
-            FLAGS.iscsi_ip_address, iscsi_target, iscsi_name, lun)
+            FLAGS.iscsi_ip_address, tid, iscsi_name, lun)
         return model_update
 
     def remove_export(self, context, volume):
         """Removes an export for a logical volume."""
-        try:
-            iscsi_target = self.db.volume_get_iscsi_target_num(context,
-                                                           volume['id'])
-        except exception.NotFound:
-            LOG.info(_("Skipping remove_export. No iscsi_target "
-                       "provisioned for volume: %s"), volume['id'])
+
+        # NOTE(jdg): tgtadm doesn't use the iscsi_targets table
+        # TODO(jdg): In the future move all of the dependent stuff into the
+        # cooresponding target admin class
+        if not isinstance(self.tgtadm, iscsi.TgtAdm):
+            try:
+                iscsi_target = self.db.volume_get_iscsi_target_num(context,
+                                                               volume['id'])
+            except exception.NotFound:
+                LOG.info(_("Skipping remove_export. No iscsi_target "
+                           "provisioned for volume: %s"), volume['id'])
             return
+        else:
+            iscsi_target = 0
 
         try:
+
+            # NOTE: provider_location may be unset if the volume hasn't
+            # been exported
+            location = volume['provider_location'].split(' ')
+            iqn = location[1]
+
             # ietadm show will exit with an error
             # this export has already been removed
-            self.tgtadm.show_target(iscsi_target)
+            self.tgtadm.show_target(iscsi_target, iqn=iqn)
         except Exception as e:
             LOG.info(_("Skipping remove_export. No iscsi_target "
                        "is presently exported for volume: %s"), volume['id'])
@@ -384,9 +443,9 @@ class ISCSIDriver(VolumeDriver):
             location = self._do_iscsi_discovery(volume)
 
             if not location:
-                raise exception.NovaException(_("Could not find iSCSI export "
-                                        " for volume %s") %
-                                      (volume['name']))
+                raise exception.InvalidVolume(_("Could not find iSCSI export "
+                                                " for volume %s") %
+                                              (volume['name']))
 
             LOG.debug(_("ISCSI Discovery: Found %s") % (location))
             properties['target_discovered'] = True
@@ -458,10 +517,23 @@ class ISCSIDriver(VolumeDriver):
 
     def check_for_export(self, context, volume_id):
         """Make sure volume is exported."""
+        vol_uuid_file = 'volume-%s' % volume_id
+        volume_path = os.path.join(FLAGS.volumes_dir, vol_uuid_file)
+        if os.path.isfile(volume_path):
+            iqn = '%s%s' % (FLAGS.iscsi_target_prefix,
+                            vol_uuid_file)
+        else:
+            raise exception.PersistentVolumeFileNotFound(volume_id=volume_id)
 
-        tid = self.db.volume_get_iscsi_target_num(context, volume_id)
+        # TODO(jdg): In the future move all of the dependent stuff into the
+        # cooresponding target admin class
+        if not isinstance(self.tgtadm, iscsi.TgtAdm):
+            tid = self.db.volume_get_iscsi_target_num(context, volume_id)
+        else:
+            tid = 0
+
         try:
-            self.tgtadm.show_target(tid)
+            self.tgtadm.show_target(tid, iqn=iqn)
         except exception.ProcessExecutionError, e:
             # Instances remount read-only in this case.
             # /etc/init.d/iscsitarget restart and rebooting nova-volume
@@ -505,8 +577,13 @@ class RBDDriver(VolumeDriver):
         (stdout, stderr) = self._execute('rados', 'lspools')
         pools = stdout.split("\n")
         if not FLAGS.rbd_pool in pools:
-            raise exception.NovaException(_("rbd has no pool %s") %
-                                  FLAGS.rbd_pool)
+            exception_message = (_("rbd has no pool %s") %
+                                    FLAGS.rbd_pool)
+            raise exception.VolumeBackendAPIException(data=exception_message)
+
+    def _supports_layering(self):
+        stdout, _ = self._execute('rbd', '--help')
+        return 'clone' in stdout
 
     def create_volume(self, volume):
         """Creates a logical volume."""
@@ -514,24 +591,72 @@ class RBDDriver(VolumeDriver):
             size = 100
         else:
             size = int(volume['size']) * 1024
-        self._try_execute('rbd', '--pool', FLAGS.rbd_pool,
-                          '--size', size, 'create', volume['name'])
+        args = ['rbd', 'create',
+                '--pool', FLAGS.rbd_pool,
+                '--size', size,
+                volume['name']]
+        if self._supports_layering():
+            args += ['--new-format']
+        self._try_execute(*args)
+
+    def _clone(self, volume, src_pool, src_image, src_snap):
+        self._try_execute('rbd', 'clone',
+                          '--pool', src_pool,
+                          '--image', src_image,
+                          '--snap', src_snap,
+                          '--dest-pool', FLAGS.rbd_pool,
+                          '--dest', volume['name'])
+
+    def _resize(self, volume):
+        size = int(volume['size']) * 1024
+        self._try_execute('rbd', 'resize',
+                          '--pool', FLAGS.rbd_pool,
+                          '--image', volume['name'],
+                          '--size', size)
+
+    def create_volume_from_snapshot(self, volume, snapshot):
+        """Creates a volume from a snapshot."""
+        self._clone(volume, FLAGS.rbd_pool,
+                    snapshot['volume_name'], snapshot['name'])
+        if int(volume['size']):
+            self._resize(volume)
 
     def delete_volume(self, volume):
         """Deletes a logical volume."""
-        self._try_execute('rbd', '--pool', FLAGS.rbd_pool,
-                          'rm', volume['name'])
+        stdout, _ = self._execute('rbd', 'snap', 'ls',
+                                  '--pool', FLAGS.rbd_pool,
+                                  volume['name'])
+        if stdout.count('\n') > 1:
+            raise exception.VolumeIsBusy(volume_name=volume['name'])
+        self._try_execute('rbd', 'rm',
+                          '--pool', FLAGS.rbd_pool,
+                          volume['name'])
 
     def create_snapshot(self, snapshot):
         """Creates an rbd snapshot"""
-        self._try_execute('rbd', '--pool', FLAGS.rbd_pool,
-                          'snap', 'create', '--snap', snapshot['name'],
+        self._try_execute('rbd', 'snap', 'create',
+                          '--pool', FLAGS.rbd_pool,
+                          '--snap', snapshot['name'],
                           snapshot['volume_name'])
+        if self._supports_layering():
+            self._try_execute('rbd', 'snap', 'protect',
+                              '--pool', FLAGS.rbd_pool,
+                              '--snap', snapshot['name'],
+                              snapshot['volume_name'])
 
     def delete_snapshot(self, snapshot):
         """Deletes an rbd snapshot"""
-        self._try_execute('rbd', '--pool', FLAGS.rbd_pool,
-                          'snap', 'rm', '--snap', snapshot['name'],
+        if self._supports_layering():
+            try:
+                self._try_execute('rbd', 'snap', 'unprotect',
+                                  '--pool', FLAGS.rbd_pool,
+                                  '--snap', snapshot['name'],
+                                  snapshot['volume_name'])
+            except exception.ProcessExecutionError:
+                raise exception.SnapshotIsBusy(snapshot_name=snapshot['name'])
+        self._try_execute('rbd', 'snap', 'rm',
+                          '--pool', FLAGS.rbd_pool,
+                          '--snap', snapshot['name'],
                           snapshot['volume_name'])
 
     def local_path(self, volume):
@@ -583,10 +708,13 @@ class SheepdogDriver(VolumeDriver):
             #  use it and just check if 'running' is in the output.
             (out, err) = self._execute('collie', 'cluster', 'info')
             if not 'running' in out.split():
-                msg = _("Sheepdog is not working: %s") % out
-                raise exception.NovaException(msg)
+                exception_message = _("Sheepdog is not working: %s") % out
+                raise exception.VolumeBackendAPIException(
+                                                data=exception_message)
+
         except exception.ProcessExecutionError:
-            raise exception.NovaException(_("Sheepdog is not working"))
+            exception_message = _("Sheepdog is not working")
+            raise exception.NovaException(data=exception_message)
 
     def create_volume(self, volume):
         """Creates a sheepdog volume"""

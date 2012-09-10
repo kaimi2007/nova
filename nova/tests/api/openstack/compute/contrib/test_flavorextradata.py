@@ -35,12 +35,9 @@ def fake_get_instance_type_by_flavor_id(flavorid):
         'updated_at': None,
         'memory_mb': 512,
         'vcpus': 1,
-        'swap': 512,
-        'rxtx_factor': 1.0,
         'extra_specs': {},
         'deleted_at': None,
         'vcpu_weight': None,
-        'is_public': True
     }
 
 
@@ -54,11 +51,14 @@ def fake_get_all_types(inactive=0, filters=None):
 class FlavorextradataTest(test.TestCase):
     def setUp(self):
         super(FlavorextradataTest, self).setUp()
+        ext = ('nova.api.openstack.compute.contrib'
+              '.flavorextradata.Flavorextradata')
+        self.flags(osapi_compute_extension=[ext])
         self.stubs.Set(instance_types, 'get_instance_type_by_flavor_id',
                                         fake_get_instance_type_by_flavor_id)
         self.stubs.Set(instance_types, 'get_all_types', fake_get_all_types)
 
-    def _verify_server_response(self, flavor, expected):
+    def _verify_flavor_response(self, flavor, expected):
         for key in expected:
             self.assertEquals(flavor[key], expected[key])
 
@@ -71,9 +71,6 @@ class FlavorextradataTest(test.TestCase):
                 'vcpus': 1,
                 'disk': 1,
                 'OS-FLV-EXT-DATA:ephemeral': 1,
-                'swap': 512,
-                'rxtx_factor': 1,
-                'os-flavor-access:is_public': True,
             }
         }
 
@@ -82,7 +79,7 @@ class FlavorextradataTest(test.TestCase):
         req.headers['Content-Type'] = 'application/json'
         res = req.get_response(fakes.wsgi_app())
         body = jsonutils.loads(res.body)
-        self._verify_server_response(body['flavor'], expected['flavor'])
+        self._verify_flavor_response(body['flavor'], expected['flavor'])
 
     def test_detail(self):
         expected = [
@@ -93,9 +90,6 @@ class FlavorextradataTest(test.TestCase):
                 'vcpus': 1,
                 'disk': 1,
                 'OS-FLV-EXT-DATA:ephemeral': 1,
-                'swap': 512,
-                'rxtx_factor': 1,
-                'os-flavor-access:is_public': True,
             },
             {
                 'id': '2',
@@ -104,9 +98,6 @@ class FlavorextradataTest(test.TestCase):
                 'vcpus': 1,
                 'disk': 1,
                 'OS-FLV-EXT-DATA:ephemeral': 1,
-                'swap': 512,
-                'rxtx_factor': 1,
-                'os-flavor-access:is_public': True,
             },
         ]
 
@@ -116,4 +107,4 @@ class FlavorextradataTest(test.TestCase):
         res = req.get_response(fakes.wsgi_app())
         body = jsonutils.loads(res.body)
         for i, flavor in enumerate(body['flavors']):
-            self._verify_server_response(flavor, expected[i])
+            self._verify_flavor_response(flavor, expected[i])

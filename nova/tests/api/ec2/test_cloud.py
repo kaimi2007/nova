@@ -46,6 +46,7 @@ from nova.tests import fake_network
 from nova.tests.image import fake
 from nova import utils
 from nova.virt import fake as fake_virt
+from nova.volume import iscsi
 
 
 LOG = logging.getLogger(__name__)
@@ -97,6 +98,9 @@ class CloudTestCase(test.TestCase):
         vol_tmpdir = tempfile.mkdtemp()
         self.flags(compute_driver='nova.virt.fake.FakeDriver',
                    volumes_dir=vol_tmpdir)
+        self.stubs.Set(iscsi.TgtAdm, '_get_target', self.fake_get_target)
+        self.stubs.Set(iscsi.TgtAdm, 'remove_iscsi_target',
+                       self.fake_remove_iscsi_target)
 
         def fake_show(meh, context, id):
             return {'id': id,
@@ -157,6 +161,12 @@ class CloudTestCase(test.TestCase):
             pass
         super(CloudTestCase, self).tearDown()
         fake.FakeImageService_reset()
+
+    def fake_get_target(obj, iqn):
+        return 1
+
+    def fake_remove_iscsi_target(obj, tid, lun, vol_id, **kwargs):
+        pass
 
     def _stub_instance_get_with_fixed_ips(self, func_name):
         orig_func = getattr(self.cloud.compute_api, func_name)
@@ -1993,9 +2003,12 @@ class CloudTestCase(test.TestCase):
         self.assertTrue(result)
 
     def _volume_create(self, volume_id=None):
+        location = '10.0.2.15:3260'
+        iqn = 'iqn.2010-10.org.openstack:%s' % volume_id
         kwargs = {'status': 'available',
                   'host': self.volume.host,
                   'size': 1,
+                  'provider_location': '1 %s,fake %s' % (location, iqn),
                   'attach_status': 'detached', }
         if volume_id:
             kwargs['id'] = volume_id
@@ -2090,7 +2103,7 @@ class CloudTestCase(test.TestCase):
         kwargs = {'image_id': 'ami-1',
                   'instance_type': FLAGS.default_instance_type,
                   'max_count': 1,
-                  'block_device_mapping': [{'device_name': '/dev/vdb',
+                  'block_device_mapping': [{'device_name': '/dev/sdb',
                                             'volume_id': vol1['id'],
                                             'delete_on_termination': True}]}
         ec2_instance_id = self._run_instance(**kwargs)
@@ -2102,7 +2115,7 @@ class CloudTestCase(test.TestCase):
         self.assertEqual(len(vols), 1)
         for vol in vols:
             self.assertEqual(vol['id'], vol1['id'])
-            self._assert_volume_attached(vol, instance_uuid, '/dev/vdb')
+            self._assert_volume_attached(vol, instance_uuid, '/dev/sdb')
 
         vol = db.volume_get(self.context, vol2['id'])
         self._assert_volume_detached(vol)
@@ -2113,7 +2126,7 @@ class CloudTestCase(test.TestCase):
                                              volume_id=vol2['id'],
                                              device='/dev/vdc')
         vol = db.volume_get(self.context, vol2['id'])
-        self._assert_volume_attached(vol, instance_uuid, '/dev/vdc')
+        self._assert_volume_attached(vol, instance_uuid, '/dev/sdc')
 
         self.cloud.compute_api.detach_volume(self.context,
                                              volume_id=vol1['id'])
@@ -2124,14 +2137,14 @@ class CloudTestCase(test.TestCase):
         self.assertTrue(result)
 
         vol = db.volume_get(self.context, vol2['id'])
-        self._assert_volume_attached(vol, instance_uuid, '/dev/vdc')
+        self._assert_volume_attached(vol, instance_uuid, '/dev/sdc')
 
         self.cloud.start_instances(self.context, [ec2_instance_id])
         vols = db.volume_get_all_by_instance_uuid(self.context, instance_uuid)
         self.assertEqual(len(vols), 1)
         for vol in vols:
             self.assertEqual(vol['id'], vol2['id'])
-            self._assert_volume_attached(vol, instance_uuid, '/dev/vdc')
+            self._assert_volume_attached(vol, instance_uuid, '/dev/sdc')
 
         vol = db.volume_get(self.context, vol1['id'])
         self._assert_volume_detached(vol)

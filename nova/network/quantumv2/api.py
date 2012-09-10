@@ -1,5 +1,6 @@
 # Copyright 2012 OpenStack LLC.
 # All Rights Reserved
+# Copyright (c) 2012 NEC Corporation
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -56,31 +57,49 @@ LOG = logging.getLogger(__name__)
 class API(base.Base):
     """API for interacting with the quantum 2.x API."""
 
+    security_group_api = None
+
     def setup_networks_on_host(self, context, instance, host=None,
                                teardown=False):
         """Setup or teardown the network structures."""
+
+    def _get_available_networks(self, context, project_id,
+                                net_ids=None):
+        """Return a network list available for the tenant.
+        The list contains networks owned by the tenant and public networks.
+        If net_ids specified, it searches networks with requested IDs only.
+        """
+        quantum = quantumv2.get_client(context)
+
+        # If user has specified to attach instance only to specific
+        # networks, add them to **search_opts
+        # (1) Retrieve non-public network list owned by the tenant.
+        search_opts = {"tenant_id": project_id, 'shared': False}
+        if net_ids:
+            search_opts['id'] = net_ids
+        nets = quantum.list_networks(**search_opts).get('networks', [])
+        # (2) Retrieve public network list.
+        search_opts = {'shared': True}
+        if net_ids:
+            search_opts['id'] = net_ids
+        nets += quantum.list_networks(**search_opts).get('networks', [])
+
+        return nets
 
     def allocate_for_instance(self, context, instance, **kwargs):
         """Allocate all network resources for the instance."""
         quantum = quantumv2.get_client(context)
         LOG.debug(_('allocate_for_instance() for %s'),
                   instance['display_name'])
-        search_opts = {}
-        if instance['project_id']:
-            search_opts.update({"tenant_id": instance['project_id']})
-        else:
+        if not instance['project_id']:
             msg = _('empty project id for instance %s')
             raise exception.InvalidInput(
                 reason=msg % instance['display_name'])
-
-        # If user has specified to attach instance only to specific
-        # networks, add them to **search_opts
-        # Tenant-only network only allowed so far
         requested_networks = kwargs.get('requested_networks')
         ports = {}
         fixed_ips = {}
+        net_ids = []
         if requested_networks:
-            net_ids = []
             for network_id, fixed_ip, port_id in requested_networks:
                 if port_id:
                     port = quantum.show_port(port_id).get('port')
@@ -89,10 +108,9 @@ class API(base.Base):
                 elif fixed_ip:
                     fixed_ips[network_id] = fixed_ip
                 net_ids.append(network_id)
-            search_opts['id'] = net_ids
 
-        data = quantum.list_networks(**search_opts)
-        nets = data.get('networks', [])
+        nets = self._get_available_networks(context, instance['project_id'],
+                                            net_ids)
 
         touched_port_ids = []
         created_port_ids = []
@@ -131,6 +149,9 @@ class API(base.Base):
                                     " failure: %(exception)s")
                             LOG.debug(msg, {'portid': port_id,
                                             'exception': ex})
+
+        self.trigger_security_group_members_refresh(context, instance)
+
         return self.get_instance_nw_info(context, instance, networks=nets)
 
     def deallocate_for_instance(self, context, instance, **kwargs):
@@ -146,6 +167,7 @@ class API(base.Base):
             except Exception as ex:
                 LOG.exception(_("Failed to delete quantum port %(portid)s ")
                               % {'portid': port['id']})
+        self.trigger_security_group_members_refresh(context, instance)
 
     @refresh_cache
     def get_instance_nw_info(self, context, instance, networks=None):
@@ -166,12 +188,11 @@ class API(base.Base):
         raise NotImplementedError()
 
     def validate_networks(self, context, requested_networks):
-        """Validate that the tenant has the requested networks."""
+        """Validate that the tenant can use the requested networks."""
         LOG.debug(_('validate_networks() for %s'),
                   requested_networks)
         if not requested_networks:
             return
-        search_opts = {"tenant_id": context.project_id}
         net_ids = []
 
         for (net_id, _i, port_id) in requested_networks:
@@ -188,9 +209,8 @@ class API(base.Base):
                 raise exception.NetworkDuplicated(network_id=net_id)
             net_ids.append(net_id)
 
-        search_opts['id'] = net_ids
-        data = quantumv2.get_client(context).list_networks(**search_opts)
-        nets = data.get('networks', [])
+        nets = self._get_available_networks(context, context.project_id,
+                                            net_ids)
         if len(nets) != len(net_ids):
             requsted_netid_set = set(net_ids)
             returned_netid_set = set([net['id'] for net in nets])
@@ -218,6 +238,21 @@ class API(base.Base):
 
         return [{'instance_uuid': port['device_id']} for port in ports
                 if port['device_id']]
+
+    def trigger_security_group_members_refresh(self, context, instance_ref):
+
+        # used to avoid circular import
+        if not self.security_group_api:
+            from nova.compute import api as compute_api
+            self.security_group_api = compute_api.SecurityGroupAPI()
+
+        admin_context = context.elevated()
+        group_ids = [group['id'] for group in instance_ref['security_groups']]
+
+        self.security_group_api.trigger_members_refresh(admin_context,
+                                                        group_ids)
+        self.security_group_api.trigger_handler('security_group_members',
+                                                admin_context, group_ids)
 
     @refresh_cache
     def associate_floating_ip(self, context, instance,
@@ -294,11 +329,8 @@ class API(base.Base):
         data = quantumv2.get_client(context).list_ports(**search_opts)
         ports = data.get('ports', [])
         if not networks:
-            search_opts = {}
-            if instance['project_id']:
-                search_opts.update({"tenant_id": instance['project_id']})
-            data = quantumv2.get_client(context).list_networks(**search_opts)
-            networks = data.get('networks', [])
+            networks = self._get_available_networks(context,
+                                                    instance['project_id'])
         nw_info = network_model.NetworkInfo()
         for port in ports:
             network_name = None
@@ -307,12 +339,12 @@ class API(base.Base):
                     network_name = net['name']
                     break
 
-            subnets = self._get_subnets_from_port(context, port)
             network_IPs = [network_model.FixedIP(address=ip_address)
                            for ip_address in [ip['ip_address']
                                               for ip in port['fixed_ips']]]
             # TODO(gongysh) get floating_ips for each fixed_ip
 
+            subnets = self._get_subnets_from_port(context, port)
             for subnet in subnets:
                 subnet['ips'] = [fixed_ip for fixed_ip in network_IPs
                                  if fixed_ip.is_in_subnet(subnet)]
@@ -339,13 +371,24 @@ class API(base.Base):
         data = quantumv2.get_client(context).list_subnets(**search_opts)
         ipam_subnets = data.get('subnets', [])
         subnets = []
+
         for subnet in ipam_subnets:
             subnet_dict = {'cidr': subnet['cidr'],
                            'gateway': network_model.IP(
                                 address=subnet['gateway_ip'],
                                 type='gateway'),
             }
-            # TODO(gongysh) deal with dhcp
+
+            # attempt to populate DHCP server field
+            search_opts = {'network_id': subnet['network_id'],
+                           'device_owner': 'network:dhcp'}
+            data = quantumv2.get_client(context).list_ports(**search_opts)
+            dhcp_ports = data.get('ports', [])
+            for p in dhcp_ports:
+                for ip_pair in p['fixed_ips']:
+                    if ip_pair['subnet_id'] == subnet['id']:
+                        subnet_dict['dhcp_server'] = ip_pair['ip_address']
+                        break
 
             subnet_object = network_model.Subnet(**subnet_dict)
             for dns in subnet.get('dns_nameservers', []):

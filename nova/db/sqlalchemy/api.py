@@ -26,6 +26,7 @@ import functools
 import warnings
 
 from nova import block_device
+from nova.common.sqlalchemyutils import paginate_query
 from nova.compute import vm_states
 from nova import db
 from nova.db.sqlalchemy import models
@@ -652,7 +653,7 @@ def compute_node_get_by_host(context, host):
     session = get_session()
     with session.begin():
         node = session.query(models.ComputeNode).\
-                             options(joinedload('service')).\
+                             join('service').\
                              filter(models.Service.host == host).\
                              filter_by(deleted=False)
         return node.first()
@@ -798,10 +799,21 @@ def floating_ip_allocate_address(context, project_id, pool):
 
 @require_context
 def floating_ip_bulk_create(context, ips):
+    existing_ips = {}
+    for floating in _floating_ip_get_all(context).all():
+        existing_ips[floating['address']] = floating
+
     session = get_session()
     with session.begin():
         for ip in ips:
-            floating_ip_create(context, ip, session)
+            addr = ip['address']
+            if (addr in existing_ips and
+                ip.get('id') != existing_ips[addr]['id']):
+                raise exception.FloatingIpExists(**dict(existing_ips[addr]))
+
+            model = models.FloatingIp()
+            model.update(ip)
+            session.add(model)
 
 
 @require_context
@@ -1574,7 +1586,8 @@ def instance_get_all(context, columns_to_join=None):
 
 
 @require_context
-def instance_get_all_by_filters(context, filters, sort_key, sort_dir):
+def instance_get_all_by_filters(context, filters, sort_key, sort_dir,
+                                limit=None, marker=None):
     """Return instances that match all filters.  Deleted instances
     will be returned by default, unless there's a filter that says
     otherwise"""
@@ -1628,6 +1641,13 @@ def instance_get_all_by_filters(context, filters, sort_key, sort_dir):
                                 filters, exact_match_filter_names)
 
     query_prefix = regex_filter(query_prefix, models.Instance, filters)
+
+    # paginate query
+    query_prefix = paginate_query(query_prefix, models.Instance, limit,
+                           [sort_key, 'created_at', 'id'],
+                           marker=marker,
+                           sort_dir=sort_dir)
+
     instances = query_prefix.all()
     return instances
 
@@ -1827,6 +1847,10 @@ def instance_update_and_get_original(context, instance_uuid, values):
     :param instance_uuid: = instance uuid
     :param values: = dict containing column values
 
+    If "expected_task_state" exists in values, the update can only happen
+    when the task state before update matches expected_task_state. Otherwise
+    a UnexpectedTaskStateError is thrown.
+
     :returns: a tuple of the form (old_instance_ref, new_instance_ref)
 
     Raises NotFound if instance does not exist.
@@ -1844,6 +1868,15 @@ def _instance_update(context, instance_uuid, values, copy_old_instance=False):
     with session.begin():
         instance_ref = instance_get_by_uuid(context, instance_uuid,
                                             session=session)
+        if "expected_task_state" in values:
+            # it is not a db column so always pop out
+            expected = values.pop("expected_task_state")
+            if not isinstance(expected, (tuple, list, set)):
+                expected = (expected,)
+            actual_state = instance_ref["task_state"]
+            if actual_state not in expected:
+                raise exception.UnexpectedTaskStateError(actual=actual_state,
+                                                         expected=expected)
 
         if copy_old_instance:
             old_instance_ref = copy.copy(instance_ref)

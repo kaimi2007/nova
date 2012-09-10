@@ -49,10 +49,11 @@ class FilterSchedulerTestCase(test_scheduler.SchedulerTestCase):
         fake_context = context.RequestContext('user', 'project')
         request_spec = {'instance_type': {'memory_mb': 1, 'root_gb': 1,
                                           'ephemeral_gb': 0},
-                        'instance_properties': {'project_id': 1}}
+                        'instance_properties': {'project_id': 1},
+                        'instance_uuids': ['fake-uuid1']}
         self.assertRaises(exception.NoValidHost, sched.schedule_run_instance,
                           fake_context, request_spec, None, None, None,
-                          None, {}, None)
+                          None, {})
 
     def test_run_instance_non_admin(self):
         """Test creating an instance locally using run_instance, passing
@@ -71,10 +72,11 @@ class FilterSchedulerTestCase(test_scheduler.SchedulerTestCase):
         fake_context = context.RequestContext('user', 'project')
 
         request_spec = {'instance_type': {'memory_mb': 1, 'local_gb': 1},
-                        'instance_properties': {'project_id': 1}}
+                        'instance_properties': {'project_id': 1},
+                        'instance_uuids': ['fake-uuid1']}
         self.assertRaises(exception.NoValidHost, sched.schedule_run_instance,
                           fake_context, request_spec, None, None, None,
-                          None, {}, None)
+                          None, {})
         self.assertTrue(self.was_admin)
 
     def test_schedule_bad_topic(self):
@@ -89,7 +91,7 @@ class FilterSchedulerTestCase(test_scheduler.SchedulerTestCase):
         fake_kwargs = {'fake_kwarg1': 'fake_value1',
                        'fake_kwarg2': 'fake_value2'}
         instance_opts = {'fake_opt1': 'meow'}
-        request_spec = {'num_instances': 2,
+        request_spec = {'instance_uuids': ['fake-uuid1', 'fake-uuid2'],
                         'instance_properties': instance_opts}
         instance1 = {'uuid': 'fake-uuid1'}
         instance2 = {'uuid': 'fake-uuid2'}
@@ -114,22 +116,24 @@ class FilterSchedulerTestCase(test_scheduler.SchedulerTestCase):
         self.mox.StubOutWithMock(self.driver, '_provision_resource')
 
         self.driver._schedule(context_fake, 'compute',
-                              request_spec, {}
+                              request_spec, {}, ['fake-uuid1', 'fake-uuid2']
                               ).AndReturn(['host1', 'host2'])
         # instance 1
         self.driver._provision_resource(
             ctxt, 'host1',
             mox.Func(_has_launch_index(0)), {},
-            None, None, None, None, reservations=None).AndReturn(instance1)
+            None, None, None, None,
+            instance_uuid='fake-uuid1').AndReturn(instance1)
         # instance 2
         self.driver._provision_resource(
             ctxt, 'host2',
             mox.Func(_has_launch_index(1)), {},
-            None, None, None, None, reservations=None).AndReturn(instance2)
+            None, None, None, None,
+            instance_uuid='fake-uuid2').AndReturn(instance2)
         self.mox.ReplayAll()
 
         self.driver.schedule_run_instance(context_fake, request_spec,
-                None, None, None, None, {}, None)
+                None, None, None, None, {})
 
     def test_schedule_happy_day(self):
         """Make sure there's nothing glaringly wrong with _schedule()
@@ -191,7 +195,8 @@ class FilterSchedulerTestCase(test_scheduler.SchedulerTestCase):
 
         instance = {'uuid': 'fake-uuid', 'host': 'host1'}
 
-        sched.schedule_prep_resize(fake_context, {}, {}, {}, instance, {})
+        sched.schedule_prep_resize(fake_context, {}, {}, {},
+                                   instance, {}, None)
         self.assertEqual(info['called'], 0)
 
     def test_get_cost_functions(self):
@@ -203,8 +208,8 @@ class FilterSchedulerTestCase(test_scheduler.SchedulerTestCase):
         self.assertEquals(weight, -1.0)
         hostinfo = host_manager.HostState('host', 'compute')
         hostinfo.update_from_compute_node(dict(memory_mb=1000,
-                local_gb=0, vcpus=1, free_disk_gb=1000, free_ram_mb=1000,
-                vcpus_used=0))
+                local_gb=0, vcpus=1, disk_available_least=1000,
+                free_disk_mb=1000, free_ram_mb=1000, vcpus_used=0))
         self.assertEquals(1000 - 128, fn(hostinfo, {}))
 
     def test_max_attempts(self):

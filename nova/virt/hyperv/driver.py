@@ -87,8 +87,8 @@ class HyperVDriver(driver.ComputeDriver):
     def list_instances(self):
         return self._vmops.list_instances()
 
-    def spawn(self, context, instance, image_meta, network_info,
-        block_device_info=None):
+    def spawn(self, context, instance, image_meta, injected_files,
+              admin_password, network_info=None, block_device_info=None):
         self._vmops.spawn(context, instance, image_meta, network_info,
             block_device_info)
 
@@ -120,8 +120,8 @@ class HyperVDriver(driver.ComputeDriver):
     def poll_rescued_instances(self, timeout):
         pass
 
-    def update_available_resource(self, context, host):
-        self._vmops.update_available_resource(context, host)
+    def get_available_resource(self):
+        return self._vmops.get_available_resource()
 
     def update_host_status(self):
         """See xenapi_conn.py implementation."""

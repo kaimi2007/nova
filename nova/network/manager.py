@@ -388,6 +388,9 @@ class FloatingIP(object):
 
     def _floating_ip_owned_by_project(self, context, floating_ip):
         """Raises if floating ip does not belong to project"""
+        if context.is_admin:
+            return
+
         if floating_ip['project_id'] != context.project_id:
             if floating_ip['project_id'] is None:
                 LOG.warn(_('Address |%(address)s| is not allocated'),
@@ -1001,7 +1004,8 @@ class NetworkManager(manager.SchedulerDependentManager):
                   context=read_deleted_context)
         # deallocate fixed ips
         for fixed_ip in fixed_ips:
-            self.deallocate_fixed_ip(context, fixed_ip['address'])
+            self.deallocate_fixed_ip(context, fixed_ip['address'],
+                host=kwargs.get('host'))
 
         # deallocate vifs (mac addresses)
         self.db.virtual_interface_delete_by_instance(read_deleted_context,

@@ -362,14 +362,14 @@ class ResourceTracker(object):
             LOG.info(_('Compute_service record updated for %s ') % self.host)
 
     @utils.synchronized(COMPUTE_RESOURCE_SEMAPHORE)
-    def update_load_stats_for_instance(self, context, old_ref, instance_ref):
+    def update_load_stats_for_instance(self, context, instance_ref):
         """Update workload stats for the local compute host."""
 
         if self.disabled:
             return
 
         values = {}
-        self.stats.update_stats_for_instance(old_ref, instance_ref)
+        self.stats.update_stats_for_instance(instance_ref)
         values['stats'] = self.stats
 
         values['current_workload'] = self.stats.calculate_workload()
@@ -411,11 +411,10 @@ class ResourceTracker(object):
 
             # grab all instances that are not yet DELETED
             filters = {'host': self.host, 'deleted': False}
-            instances = db.instance_get_all_by_filters(context,
-                    {'host': self.host})
+            instances = db.instance_get_all_by_filters(context, filters)
 
         for instance in instances:
-            self.stats.add_stats_for_instance(instance)
+            self.stats.update_stats_for_instance(instance)
 
         values['current_workload'] = self.stats.calculate_workload()
         values['running_vms'] = self.stats.num_instances

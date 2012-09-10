@@ -230,6 +230,10 @@ class VolumeUnattached(Invalid):
     message = _("Volume %(volume_id)s is not attached to anything")
 
 
+class VolumeAttached(Invalid):
+    message = _("Volume %(volume_id)s is still attached, detach volume first.")
+
+
 class InvalidKeypair(Invalid):
     message = _("Keypair data is invalid")
 
@@ -292,6 +296,10 @@ class InvalidAggregateAction(Invalid):
 
 class InvalidGroup(Invalid):
     message = _("Group not valid. Reason: %(reason)s")
+
+
+class InvalidSortKey(Invalid):
+    message = _("Sort key supplied was not valid.")
 
 
 class InstanceInvalidState(Invalid):
@@ -425,6 +433,10 @@ class VirtDriverNotFound(NotFound):
     message = _("Could not find driver for connection_type %(name)s")
 
 
+class PersistentVolumeFileNotFound(NotFound):
+    message = _("Volume %(volume_id)s persistence file could not be found.")
+
+
 class VolumeNotFound(NotFound):
     message = _("Volume %(volume_id)s could not be found.")
 
@@ -468,6 +480,14 @@ class SnapshotIsBusy(NovaException):
 
 class ISCSITargetNotFoundForVolume(NotFound):
     message = _("No target id found for volume %(volume_id)s.")
+
+
+class ISCSITargetCreateFailed(NovaException):
+    message = _("Failed to create iscsi target for volume %(volume_id)s.")
+
+
+class ISCSITargetRemoveFailed(NovaException):
+    message = _("Failed to remove iscsi target for volume %(volume_id)s.")
 
 
 class DiskNotFound(NotFound):
@@ -864,7 +884,11 @@ class VolumeTypeExists(Duplicate):
 
 
 class InvalidSharedStorage(NovaException):
-    message = _("%(path)s is on shared storage: %(reason)s")
+    message = _("%(path)s is not on shared storage: %(reason)s")
+
+
+class InvalidLocalStorage(NovaException):
+    message = _("%(path)s is not on local storage: %(reason)s")
 
 
 class MigrationError(NovaException):
@@ -1002,7 +1026,7 @@ class VolumeTypeCreateFailed(NovaException):
 
 class VolumeBackendAPIException(NovaException):
     message = _("Bad or unexpected response from the storage volume "
-                "backend API: data=%(data)s")
+                "backend API: %(data)s")
 
 
 class InstanceTypeCreateFailed(NovaException):
@@ -1069,6 +1093,11 @@ class InstanceUserDataTooLarge(NovaException):
 
 class InstanceUserDataMalformed(NovaException):
     message = _("User data needs to be valid base 64.")
+
+
+class UnexpectedTaskStateError(NovaException):
+    message = _("unexpected task state: expecting %(expected)s but "
+                "the actual state is %(actual)s")
 
 
 def get_context_from_function_and_args(function, args, kwargs):
