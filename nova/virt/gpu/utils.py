@@ -109,7 +109,7 @@ def allow_gpus(inst):
     dev_whitelist = os.path.join(FLAGS.dev_cgroups_path,
                                   inst['name'],
                                   'devices.allow')
-    # Allow Nvidia Conroller
+    # Allow Nvidia Controller
     perm = 'c %d:255 rwm\n' % FLAGS.gpu_dev_major_number
     _PIPE = subprocess.PIPE
     utils.execute('tee', dev_whitelist, process_input=perm,
@@ -121,24 +121,22 @@ def allow_gpus(inst):
                       run_as_root=True)
 
 
-def assign_gpus(inst):
+def assign_gpus(context, inst, lxc_container_root):
     """Assigns gpus to a specific instance"""
     global gpus_available
     global gpus_assigned
-    ctxt = nova_context.get_admin_context()
+    LOG.debug(_("dkang: assign_gpus"))
+#    ctxt = nova_context.get_admin_context()
     gpus_in_meta = 0
     gpus_in_extra = 0
-    env_file = os.path.join(FLAGS.instances_path,
-                            inst['name'],
-                            'rootfs/etc/environment')
-    msg = _("instance_type_id is %d .") % inst.instance_type_id
-    LOG.info(msg)
-    instance_extra = db.instance_type_extra_specs_get(ctxt,
-                                                      inst.instance_type_id)
+
+    env_file = lxc_container_root + '/etc/environment'
+    instance_extra = db.instance_type_extra_specs_get(context,
+                                                      inst['instance_type_id'])
     msg = _("instance_extra is %s .") % instance_extra
-    LOG.info(msg)
-    msg = _("vcpus for this instance are %d .") % inst.vcpus
-    LOG.info(msg)
+    LOG.debug(msg)
+    msg = _("vcpus for this instance are %d .") % inst['vcpus']
+    LOG.debug(msg)
     if 'gpus' in inst['metadata']:
         gpus_in_meta = int(inst['metadata']['gpus'])
         msg = _("gpus in metadata asked, %d .") % gpus_in_meta
