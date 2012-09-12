@@ -1,0 +1,4 @@
+spec: install-script.spec
+copy: nova-install/nova-install-hpc-essex.sh
+copy: nova-install/dhcp_release
+tar.gz: nova-install name=nova-install-@version@

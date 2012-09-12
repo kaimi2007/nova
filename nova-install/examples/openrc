@@ -1,0 +1,7 @@
+export EC2_SECRET_KEY=f4aac74258d142399bfac161ffeb2506
+export EC2_URL=http://127.0.0.1:8773/services/Cloud
+export EC2_ACCESS_KEY=937971096ce745d59096c8e6be9a1ed4
+export OS_PASSWORD=secrete
+export OS_AUTH_URL=http://65.123.202.101:5000/v2.0/
+export OS_USERNAME=admin
+export OS_TENANT_NAME=admin
