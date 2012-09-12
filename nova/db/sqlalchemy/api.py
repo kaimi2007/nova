@@ -816,6 +816,35 @@ def floating_ip_bulk_create(context, ips):
             session.add(model)
 
 
+def _ip_range_splitter(ips, block_size=256):
+    """Yields blocks of IPs no more than block_size elements long."""
+    out = []
+    count = 0
+    for ip in ips:
+        out.append(ip['address'])
+        count += 1
+
+        if count > block_size - 1:
+            yield out
+            out = []
+            count = 0
+
+    if out:
+        yield out
+
+
+@require_context
+def floating_ip_bulk_destroy(context, ips):
+    session = get_session()
+    with session.begin():
+        for ip_block in _ip_range_splitter(ips):
+            model_query(context, models.FloatingIp).\
+                filter(models.FloatingIp.address.in_(ip_block)).\
+                update({'deleted': True,
+                        'deleted_at': timeutils.utcnow()},
+                       synchronize_session='fetch')
+
+
 @require_context
 def floating_ip_create(context, values, session=None):
     if not session:
@@ -920,8 +949,9 @@ def floating_ip_set_auto_assigned(context, address):
         floating_ip_ref.save(session=session)
 
 
-def _floating_ip_get_all(context):
-    return model_query(context, models.FloatingIp, read_deleted="no")
+def _floating_ip_get_all(context, session=None):
+    return model_query(context, models.FloatingIp, read_deleted="no",
+                       session=session)
 
 
 @require_admin_context
