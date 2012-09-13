@@ -1580,11 +1580,8 @@ class API(base.Base):
         # NOTE(markwash): look up the image early to avoid auth problems later
         image = self.image_service.show(context, instance['image_ref'])
 
-        current_memory_mb = current_instance_type['memory_mb']
-        new_memory_mb = new_instance_type['memory_mb']
-
-        if (current_memory_mb == new_memory_mb) and flavor_id:
-            raise exception.CannotResizeToSameSize()
+        if same_instance_type and flavor_id:
+            raise exception.CannotResizeToSameFlavor()
 
         # ensure there is sufficient headroom for upsizes
         deltas = self._upsize_quota_delta(context, new_instance_type,
@@ -1842,6 +1839,7 @@ class API(base.Base):
 
         volume = self.volume_api.get(context, volume_id)
         self.volume_api.check_detach(context, volume)
+        self.volume_api.begin_detaching(context, volume)
 
         self.compute_rpcapi.detach_volume(context, instance=instance,
                 volume_id=volume_id)
@@ -1938,8 +1936,13 @@ class API(base.Base):
     def live_migrate(self, context, instance, block_migration,
                      disk_over_commit, host):
         """Migrate a server lively to a new host."""
-        LOG.debug(_("Going to try to live migrate instance"),
-                  instance=instance)
+        LOG.debug(_("Going to try to live migrate instance to %s"),
+                  host, instance=instance)
+
+        instance = self.update(context, instance,
+                               task_state=task_states.MIGRATING,
+                               expected_task_state=None)
+
         self.scheduler_rpcapi.live_migration(context, block_migration,
                 disk_over_commit, instance, host)
 

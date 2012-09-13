@@ -1627,14 +1627,11 @@ class LibvirtConnTestCase(test.TestCase):
         conn = libvirt_driver.LibvirtDriver(False)
 
         self.mox.StubOutWithMock(conn, '_get_compute_info')
-        self.mox.StubOutWithMock(conn, 'get_instance_disk_info')
         self.mox.StubOutWithMock(conn, '_create_shared_storage_test_file')
         self.mox.StubOutWithMock(conn, '_compare_cpu')
 
         conn._get_compute_info(self.context, FLAGS.host).AndReturn(
                                               {'disk_available_least': 400})
-        conn.get_instance_disk_info(instance_ref["name"]).AndReturn(
-                                            '[{"virt_disk_size":2}]')
         # _check_cpu_match
         conn._get_compute_info(self.context,
                                src).AndReturn({'cpu_info': "asdf"})
@@ -1646,9 +1643,12 @@ class LibvirtConnTestCase(test.TestCase):
 
         self.mox.ReplayAll()
         return_value = conn.check_can_live_migrate_destination(self.context,
-                                instance_ref, True, False)
+                                instance_ref, True)
         self.assertDictMatch(return_value,
-                             {"filename": "file", "block_migration": True})
+                             {"filename": "file",
+                              'disk_available_mb': 409600,
+                              "disk_over_commit": False,
+                              "block_migration": True})
 
     def test_check_can_live_migrate_dest_all_pass_no_block_migration(self):
         instance_ref = db.instance_create(self.context, self.test_instance)
@@ -1671,28 +1671,12 @@ class LibvirtConnTestCase(test.TestCase):
 
         self.mox.ReplayAll()
         return_value = conn.check_can_live_migrate_destination(self.context,
-                                instance_ref, False, False)
+                                instance_ref, False)
         self.assertDictMatch(return_value,
-                            {"filename": "file", "block_migration": False})
-
-    def test_check_can_live_migrate_dest_fails_not_enough_disk(self):
-        instance_ref = db.instance_create(self.context, self.test_instance)
-        dest = "fake_host_2"
-        src = instance_ref['host']
-        conn = libvirt_driver.LibvirtDriver(False)
-
-        self.mox.StubOutWithMock(conn, '_get_compute_info')
-        self.mox.StubOutWithMock(conn, 'get_instance_disk_info')
-
-        conn._get_compute_info(self.context, FLAGS.host).AndReturn(
-                                              {'disk_available_least': 0})
-        conn.get_instance_disk_info(instance_ref["name"]).AndReturn(
-                                            '[{"virt_disk_size":2}]')
-
-        self.mox.ReplayAll()
-        self.assertRaises(exception.MigrationError,
-                          conn.check_can_live_migrate_destination,
-                          self.context, instance_ref, True, False)
+                            {"filename": "file",
+                             "block_migration": False,
+                             "disk_over_commit": False,
+                             "disk_available_mb": None})
 
     def test_check_can_live_migrate_dest_incompatible_cpu_raises(self):
         instance_ref = db.instance_create(self.context, self.test_instance)
@@ -1710,29 +1694,14 @@ class LibvirtConnTestCase(test.TestCase):
         self.mox.ReplayAll()
         self.assertRaises(exception.InvalidCPUInfo,
                           conn.check_can_live_migrate_destination,
-                          self.context, instance_ref, False, False)
-
-    def test_check_can_live_migrate_dest_fail_space_with_block_migration(self):
-        instance_ref = db.instance_create(self.context, self.test_instance)
-        dest = "fake_host_2"
-        src = instance_ref['host']
-        conn = libvirt_driver.LibvirtDriver(False)
-
-        self.mox.StubOutWithMock(conn, '_get_compute_info')
-        self.mox.StubOutWithMock(conn, 'get_instance_disk_info')
-
-        conn._get_compute_info(self.context, FLAGS.host).AndReturn(
-                                              {'disk_available_least': 0})
-        conn.get_instance_disk_info(instance_ref["name"]).AndReturn(
-                                            '[{"virt_disk_size":2}]')
-
-        self.mox.ReplayAll()
-        self.assertRaises(exception.MigrationError,
-                          conn.check_can_live_migrate_destination,
-                          self.context, instance_ref, True, False)
+                          self.context, instance_ref, False)
 
     def test_check_can_live_migrate_dest_cleanup_works_correctly(self):
-        dest_check_data = {"filename": "file", "block_migration": True}
+        instance_ref = db.instance_create(self.context, self.test_instance)
+        dest_check_data = {"filename": "file",
+                           "block_migration": True,
+                           "disk_over_commit": False,
+                           "disk_available_mb": 1024}
         conn = libvirt_driver.LibvirtDriver(False)
 
         self.mox.StubOutWithMock(conn, '_cleanup_shared_storage_test_file')
@@ -1744,11 +1713,19 @@ class LibvirtConnTestCase(test.TestCase):
 
     def test_check_can_live_migrate_source_works_correctly(self):
         instance_ref = db.instance_create(self.context, self.test_instance)
-        dest_check_data = {"filename": "file", "block_migration": True}
+        dest_check_data = {"filename": "file",
+                           "block_migration": True,
+                           "disk_over_commit": False,
+                           "disk_available_mb": 1024}
         conn = libvirt_driver.LibvirtDriver(False)
 
         self.mox.StubOutWithMock(conn, "_check_shared_storage_test_file")
         conn._check_shared_storage_test_file("file").AndReturn(False)
+
+        self.mox.StubOutWithMock(conn, "_assert_dest_node_has_enough_disk")
+        conn._assert_dest_node_has_enough_disk(self.context, instance_ref,
+                                        dest_check_data['disk_available_mb'],
+                                               False)
 
         self.mox.ReplayAll()
         conn.check_can_live_migrate_source(self.context, instance_ref,
@@ -1756,7 +1733,10 @@ class LibvirtConnTestCase(test.TestCase):
 
     def test_check_can_live_migrate_dest_fail_shared_storage_with_blockm(self):
         instance_ref = db.instance_create(self.context, self.test_instance)
-        dest_check_data = {"filename": "file", "block_migration": True}
+        dest_check_data = {"filename": "file",
+                           "block_migration": True,
+                           "disk_over_commit": False,
+                           'disk_available_mb': 1024}
         conn = libvirt_driver.LibvirtDriver(False)
 
         self.mox.StubOutWithMock(conn, "_check_shared_storage_test_file")
@@ -1769,7 +1749,10 @@ class LibvirtConnTestCase(test.TestCase):
 
     def test_check_can_live_migrate_no_shared_storage_no_blck_mig_raises(self):
         instance_ref = db.instance_create(self.context, self.test_instance)
-        dest_check_data = {"filename": "file", "block_migration": False}
+        dest_check_data = {"filename": "file",
+                           "block_migration": False,
+                           "disk_over_commit": False,
+                           'disk_available_mb': 1024}
         conn = libvirt_driver.LibvirtDriver(False)
 
         self.mox.StubOutWithMock(conn, "_check_shared_storage_test_file")
@@ -1777,6 +1760,28 @@ class LibvirtConnTestCase(test.TestCase):
 
         self.mox.ReplayAll()
         self.assertRaises(exception.InvalidSharedStorage,
+                          conn.check_can_live_migrate_source,
+                          self.context, instance_ref, dest_check_data)
+
+    def test_check_can_live_migrate_source_with_dest_not_enough_disk(self):
+        instance_ref = db.instance_create(self.context, self.test_instance)
+        dest = "fake_host_2"
+        src = instance_ref['host']
+        conn = libvirt_driver.LibvirtDriver(False)
+
+        self.mox.StubOutWithMock(conn, "_check_shared_storage_test_file")
+        conn._check_shared_storage_test_file("file").AndReturn(False)
+
+        self.mox.StubOutWithMock(conn, "get_instance_disk_info")
+        conn.get_instance_disk_info(instance_ref["name"]).AndReturn(
+                                            '[{"virt_disk_size":2}]')
+
+        dest_check_data = {"filename": "file",
+                           "disk_available_mb": 0,
+                           "block_migration": True,
+                           "disk_over_commit": False}
+        self.mox.ReplayAll()
+        self.assertRaises(exception.MigrationError,
                           conn.check_can_live_migrate_source,
                           self.context, instance_ref, dest_check_data)
 
