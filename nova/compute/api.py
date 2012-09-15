@@ -862,7 +862,7 @@ class API(base.Base):
                                               cores=-instance['vcpus'],
                                               ram=-instance['memory_mb'])
 
-            if not instance['host']:
+            if not host:
                 # Just update database, nothing else we can do
                 constraint = self.db.constraint(host=self.db.equal_any(host))
                 try:
@@ -901,7 +901,20 @@ class API(base.Base):
                             host=src_host, cast=False,
                             reservations=downsize_reservations)
 
-            self.compute_rpcapi.terminate_instance(context, instance)
+            services = self.db.service_get_all_compute_by_host(
+                    context.elevated(), instance['host'])
+            is_up = False
+            #Note(jogo): db allows for multiple compute services per host
+            for service in services:
+                if utils.service_is_up(service):
+                    is_up = True
+                    self.compute_rpcapi.terminate_instance(context, instance)
+                    break
+            if is_up == False:
+                # If compute node isn't up, just delete from DB
+                LOG.warning(_('host for instance is down, deleting from '
+                        'database'), instance=instance)
+                self.db.instance_destroy(context, instance['uuid'])
 
             if reservations:
                 QUOTAS.commit(context, reservations)
@@ -2268,7 +2281,8 @@ class SecurityGroupAPI(base.Base):
             else:
                 raise
 
-    def list(self, context, names=None, ids=None, project=None):
+    def list(self, context, names=None, ids=None, project=None,
+             search_opts=None):
         self.ensure_default(context)
 
         groups = []
@@ -2283,7 +2297,14 @@ class SecurityGroupAPI(base.Base):
                     groups.append(self.db.security_group_get(context, id))
 
         elif context.is_admin:
-            groups = self.db.security_group_get_all(context)
+            # TODO(eglynn): support a wider set of search options than just
+            # all_tenants, at least include the standard filters defined for
+            # the EC2 DescribeSecurityGroups API for the non-admin case also
+            if (search_opts and 'all_tenants' in search_opts):
+                groups = self.db.security_group_get_all(context)
+            else:
+                groups = self.db.security_group_get_by_project(context,
+                                                               project)
 
         elif project:
             groups = self.db.security_group_get_by_project(context, project)

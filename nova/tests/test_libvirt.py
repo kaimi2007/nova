@@ -2166,8 +2166,7 @@ class LibvirtConnTestCase(test.TestCase):
         instance = db.instance_create(self.context, self.test_instance)
         conn.destroy(instance, {})
 
-    def test_destroy(self):
-        """Ensure destroy calls virDomain.undefineFlags"""
+    def test_destroy_undefines(self):
         mock = self.mox.CreateMock(libvirt.virDomain)
         mock.destroy()
         mock.undefineFlags(1).AndReturn(1)
@@ -2187,12 +2186,55 @@ class LibvirtConnTestCase(test.TestCase):
                     "uuid": "875a8070-d0b9-4949-8b31-104d125c9a64"}
         conn.destroy(instance, [])
 
-    def test_destroy_noflag(self):
-        """Ensure destroy calls virDomain.undefine
-        if mock.undefineFlags raises an error"""
+    def test_destroy_undefines_no_undefine_flags(self):
         mock = self.mox.CreateMock(libvirt.virDomain)
         mock.destroy()
         mock.undefineFlags(1).AndRaise(libvirt.libvirtError('Err'))
+        mock.undefine()
+
+        self.mox.ReplayAll()
+
+        def fake_lookup_by_name(instance_name):
+            return mock
+
+        def fake_get_info(instance_name):
+            return {'state': power_state.SHUTDOWN}
+
+        conn = libvirt_driver.LibvirtDriver(False)
+        self.stubs.Set(conn, '_lookup_by_name', fake_lookup_by_name)
+        self.stubs.Set(conn, 'get_info', fake_get_info)
+        instance = {"name": "instancename", "id": "instanceid",
+                    "uuid": "875a8070-d0b9-4949-8b31-104d125c9a64"}
+        conn.destroy(instance, [])
+
+    def test_destroy_undefines_no_attribute_with_managed_save(self):
+        mock = self.mox.CreateMock(libvirt.virDomain)
+        mock.destroy()
+        mock.undefineFlags(1).AndRaise(AttributeError())
+        mock.hasManagedSaveImage(0).AndReturn(True)
+        mock.managedSaveRemove(0)
+        mock.undefine()
+
+        self.mox.ReplayAll()
+
+        def fake_lookup_by_name(instance_name):
+            return mock
+
+        def fake_get_info(instance_name):
+            return {'state': power_state.SHUTDOWN}
+
+        conn = libvirt_driver.LibvirtDriver(False)
+        self.stubs.Set(conn, '_lookup_by_name', fake_lookup_by_name)
+        self.stubs.Set(conn, 'get_info', fake_get_info)
+        instance = {"name": "instancename", "id": "instanceid",
+                    "uuid": "875a8070-d0b9-4949-8b31-104d125c9a64"}
+        conn.destroy(instance, [])
+
+    def test_destroy_undefines_no_attribute_no_managed_save(self):
+        mock = self.mox.CreateMock(libvirt.virDomain)
+        mock.destroy()
+        mock.undefineFlags(1).AndRaise(AttributeError())
+        mock.hasManagedSaveImage(0).AndRaise(AttributeError())
         mock.undefine()
 
         self.mox.ReplayAll()
@@ -3807,6 +3849,55 @@ class LibvirtDriverTestCase(test.TestCase):
             f.close()
 
             self.libvirtconnection.finish_revert_migration(ins_ref, None)
+
+    def test_confirm_migration(self):
+        ins_ref = self._create_instance()
+
+        self.mox.StubOutWithMock(self.libvirtconnection, "_cleanup_resize")
+        self.libvirtconnection._cleanup_resize(ins_ref,
+                             _fake_network_info(self.stubs, 1))
+
+        self.mox.ReplayAll()
+        self.libvirtconnection.confirm_migration("migration_ref", ins_ref,
+                                            _fake_network_info(self.stubs, 1))
+
+    def test_cleanup_resize_same_host(self):
+        ins_ref = self._create_instance({'host': FLAGS.host})
+
+        def fake_os_path_exists(path):
+            return True
+
+        def fake_shutil_rmtree(target):
+            pass
+
+        self.stubs.Set(os.path, 'exists', fake_os_path_exists)
+        self.stubs.Set(shutil, 'rmtree', fake_shutil_rmtree)
+
+        self.mox.ReplayAll()
+        self.libvirtconnection._cleanup_resize(ins_ref,
+                                            _fake_network_info(self.stubs, 1))
+
+    def test_cleanup_resize_not_same_host(self):
+        host = 'not' + FLAGS.host
+        ins_ref = self._create_instance({'host': host})
+
+        def fake_os_path_exists(path):
+            return True
+
+        def fake_shutil_rmtree(target):
+            pass
+
+        def fake_unfilter_instance(instance, network_info):
+            pass
+
+        self.stubs.Set(os.path, 'exists', fake_os_path_exists)
+        self.stubs.Set(shutil, 'rmtree', fake_shutil_rmtree)
+        self.stubs.Set(self.libvirtconnection.firewall_driver,
+                       'unfilter_instance', fake_unfilter_instance)
+
+        self.mox.ReplayAll()
+        self.libvirtconnection._cleanup_resize(ins_ref,
+                                            _fake_network_info(self.stubs, 1))
 
 
 class LibvirtNonblockingTestCase(test.TestCase):

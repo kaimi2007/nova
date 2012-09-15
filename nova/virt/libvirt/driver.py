@@ -501,9 +501,19 @@ class LibvirtDriver(driver.ComputeDriver):
                 try:
                     virt_dom.undefineFlags(
                         libvirt.VIR_DOMAIN_UNDEFINE_MANAGED_SAVE)
-                except libvirt.libvirtError as e:
+                except libvirt.libvirtError:
                     LOG.debug(_("Error from libvirt during undefineFlags."
                         " Retrying with undefine"), instance=instance)
+                    virt_dom.undefine()
+                except AttributeError:
+                    # NOTE(vish): Older versions of libvirt don't support
+                    #             undefine flags, so attempt to do the
+                    #             right thing.
+                    try:
+                        if virt_dom.hasManagedSaveImage(0):
+                            virt_dom.managedSaveRemove(0)
+                    except AttributeError:
+                        pass
                     virt_dom.undefine()
             except libvirt.libvirtError as e:
                 errcode = e.get_error_code()
@@ -594,11 +604,14 @@ class LibvirtDriver(driver.ComputeDriver):
             'host': FLAGS.host
         }
 
-    def _cleanup_resize(self, instance):
+    def _cleanup_resize(self, instance, network_info):
         target = os.path.join(FLAGS.instances_path,
                               instance['name'] + "_resize")
         if os.path.exists(target):
             shutil.rmtree(target)
+
+        if instance['host'] != FLAGS.host:
+            self.firewall_driver.unfilter_instance(instance, network_info)
 
     def volume_driver_method(self, method_name, connection_info,
                              *args, **kwargs):
@@ -2889,7 +2902,7 @@ class LibvirtDriver(driver.ComputeDriver):
 
     def confirm_migration(self, migration, instance, network_info):
         """Confirms a resize, destroying the source VM"""
-        self._cleanup_resize(instance)
+        self._cleanup_resize(instance, network_info)
 
     def get_diagnostics(self, instance):
         def get_io_devices(xml_doc):
