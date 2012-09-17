@@ -125,7 +125,9 @@ Requires:   %{name}-network = %{epoch}:%{version}-%{release}
 Requires:   %{name}-objectstore = %{epoch}:%{version}-%{release}
 Requires:   %{name}-scheduler = %{epoch}:%{version}-%{release}
 Requires:   %{name}-volume = %{epoch}:%{version}-%{release}
-Requires:   openstack-client = %{epoch}:2012.1-%{release}
+#AP: since python-novaclient has the files in openstack-client, this is
+#no longer required
+#Requires:   openstack-client = %{epoch}:2012.1-%{release}  
 Requires:   openstack-glance = %{epoch}:2012.1.1-%{release}
 #Requires:   openstack-client = %{epoch}:%{version}
 #Requires:   openstack-glance = %{epoch}:%{version}
