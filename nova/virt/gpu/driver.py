@@ -91,8 +91,8 @@ class GPULibvirtDriver(driver.LibvirtDriver):
             raise Exception(_('no such process(%(init_pid)s) or ' \
                   'mount point(%(lxc_container_device)s)') % locals())
         dir_name = lxc_mounts[dev_key]
-    
-        # unmount the directory 
+
+        # unmount the directory
         LOG.info(_('detach_volume: init_pid(%s)') % init_pid)
         cmd_lxc = 'sudo lxc-attach -n %s -- ' % str(init_pid)
         cmd = cmd_lxc + ' /bin/umount ' + dir_name
@@ -101,11 +101,11 @@ class GPULibvirtDriver(driver.LibvirtDriver):
             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         x = p.communicate()
 
-        # remove the directory 
+        # remove the directory
         cmd = cmd_lxc + ' /bin/rmdir  ' + dir_name
         LOG.info(_('detach_volume: cmd(%s)') % cmd)
         subprocess.call(cmd, shell=True)
-    
+
         del lxc_mounts[dev_key]  # delete dictionary entry
 
     @exception.wrap_exception()
@@ -123,7 +123,7 @@ class GPULibvirtDriver(driver.LibvirtDriver):
         # get id of the virt_dom
         spid = str(virt_dom.ID())
         LOG.info(_('detach_volume: pid(%s)') % spid)
-    
+
         # get PID of the init process
         ps_command = subprocess.Popen("ps -o pid --ppid %s --noheaders" \
                               % spid, shell=True, stdout=subprocess.PIPE)
@@ -131,8 +131,8 @@ class GPULibvirtDriver(driver.LibvirtDriver):
         init_pid = str(int(init_pid))
         retcode = ps_command.wait()
         assert retcode == 0, "ps command returned %d" % retcode
-   
-        self._umount_lxc_volume(init_pid, lxc_container_device) 
+
+        self._umount_lxc_volume(init_pid, lxc_container_device)
 
         cmd_lxc = 'sudo lxc-attach -n %s -- ' % init_pid
         cmd = cmd_lxc + ' /bin/rm ' + '/' + lxc_container_device
@@ -145,14 +145,14 @@ class GPULibvirtDriver(driver.LibvirtDriver):
 
         # check if 'mountpoint' already exists
         LOG.info(_('attach_volume: mountpoint(%s)') % lxc_container_device)
-        dev_key = init_pid + lxc_container_device 
+        dev_key = init_pid + lxc_container_device
         LOG.info(_('attach_volume: dev_key(%s)') % dev_key)
         if dev_key in lxc_mounts:
             LOG.info(_('attach_volume: dev_key(%s) is already used') \
                         % dev_key)
             raise Exception(_('the same mount point(%s) is already used.')\
                         % lxc_container_device)
-    
+
         # create device(s) for mount
         # sudo lxc-attach -n pid -- mknod -m 777
         #                 <mountpoint> b <major #> <minor #>
@@ -163,7 +163,7 @@ class GPULibvirtDriver(driver.LibvirtDriver):
         cmd = cmd_lxc + cmd
         LOG.info(_('attach_volume: cmd (%s)') % cmd)
         subprocess.call(cmd, shell=True)
-    
+
         # create a sub-directory for mount
         found = 0
         for n in range(0, 100):
@@ -190,19 +190,19 @@ class GPULibvirtDriver(driver.LibvirtDriver):
             LOG.info(_('attach_volume: cmd (%s)') % cmd)
             subprocess.call(cmd, shell=True)
             raise Exception(_('cannot find mounting directories'))
-    
+
         lxc_mounts[dev_key] = dir_name
         cmd = cmd_lxc + '/bin/chmod 777 ' + lxc_container_device
         LOG.info(_('attach_volume: cmd (%s)') % cmd)
         subprocess.call(cmd, shell=True)
-    
+
         # mount
         cmd = cmd_lxc + ' /bin/mount ' + lxc_container_device + ' ' + dir_name
         LOG.info(_('attach_volume: cmd (%s)') % cmd)
         p = subprocess.Popen(cmd, shell=True, \
             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         x = p.communicate()
-    
+
         # change owner
         user = FLAGS.user
         user = user.rsplit("/")
@@ -211,16 +211,15 @@ class GPULibvirtDriver(driver.LibvirtDriver):
         cmd = cmd_lxc + cmd
         LOG.info(_('attach_volume: cmd (%s)') % cmd)
         subprocess.call(cmd, shell=True)
-    
+
         cmd = '/bin/chown %s %s ' % (user, dir_name)
         cmd = cmd_lxc + cmd
         LOG.info(_('attach_volume: cmd (%s)') % cmd)
         subprocess.call(cmd, shell=True)
-    
+
         cmd = cmd_lxc + " /bin/chmod 'og+w' " + ' ' + dir_name
         LOG.info(_('attach_volume: cmd (%s)') % cmd)
         subprocess.call(cmd, shell=True)
-
 
     @exception.wrap_exception()
     def _attach_lxc_volume(self, xml, virt_dom, instance_name):
@@ -240,7 +239,7 @@ class GPULibvirtDriver(driver.LibvirtDriver):
         # get id of the virt_dom
         spid = str(virt_dom.ID())
         LOG.info(_('attach_volume: pid(%s)') % spid)
-    
+
         # get PID of the init process
         ps_command = subprocess.Popen("ps -o pid --ppid %s --noheaders" % \
                            spid, shell=True, stdout=subprocess.PIPE)
@@ -248,7 +247,7 @@ class GPULibvirtDriver(driver.LibvirtDriver):
         init_pid = str(int(init_pid))
         retcode = ps_command.wait()
         assert retcode == 0, "ps command returned %d" % retcode
-    
+
         LOG.info(_('attach_volume: init_pid(%s)') % init_pid)
         # get major, minor number of the device
         s = os.stat(lxc_host_volume)
@@ -257,7 +256,7 @@ class GPULibvirtDriver(driver.LibvirtDriver):
         LOG.info(_('attach_volume: path(%s)') % lxc_container_device)
         LOG.info(_('attach_volume: major_num(%(major_num)d) ' \
                    'minor_num(%(minor_num)d)') % locals())
-    
+
         # allow the device
         dev_whitelist = os.path.join("/cgroup/devices/libvirt/lxc/",
                                      instance_name,
@@ -267,16 +266,16 @@ class GPULibvirtDriver(driver.LibvirtDriver):
         cmd = "echo %s | sudo tee -a %s" % (perm, dev_whitelist)
         LOG.info(_('attach_volume: cmd(%s)') % cmd)
         subprocess.Popen(cmd, shell=True)
-    
+
         cmd_lxc = 'sudo lxc-attach -n %s -- ' % init_pid
         cmd = '/bin/mknod -m 777 /%s b %d %d '\
              % (lxc_container_device, major_num, minor_num)
         cmd = cmd_lxc + cmd
         LOG.info(_('attach_volume: cmd (%s)') % cmd)
         subprocess.call(cmd, shell=True)
-   
+
         self._mount_lxc_volume(init_pid, lxc_container_device)
-    
+
 
 class GPUHostState(driver.HostState):
     """Manages information about the compute node through libvirt"""
@@ -289,8 +288,6 @@ class GPUHostState(driver.HostState):
         data = super(GPUHostState, self).update_status()
         data = gpu_utils.update_status(data)
         return data
-
-
 
 '''
 _cleanup
@@ -638,7 +635,7 @@ _create_image
 
         # get id of the virt_dom
         spid = str(virt_dom.ID())
-    
+
         # get PID of the init process
         ps_command = subprocess.Popen("ps -o pid --ppid %s --noheaders" % \
                            spid, shell=True, stdout=subprocess.PIPE)
@@ -646,12 +643,12 @@ _create_image
         init_pid = str(int(init_pid))
         retcode = ps_command.wait()
         assert retcode == 0, "ps command returned %d" % retcode
-    
+
         # get major, minor number of the device
         s = os.stat(lxc_host_volume)
         major_num = os.major(s.st_rdev)
         minor_num = os.minor(s.st_rdev)
-    
+
         # allow the device
         dev_whitelist = os.path.join("/cgroup/devices/libvirt/lxc/",
                                      instance_name,
@@ -660,15 +657,15 @@ _create_image
         perm = "b %d:%d rwm" % (major_num, minor_num)
         cmd = "echo %s | sudo tee -a %s" % (perm, dev_whitelist)
         subprocess.Popen(cmd, shell=True)
-    
+
         cmd_lxc = 'sudo lxc-attach -n %s -- ' % init_pid
         # check if 'mountpoint' already exists
-    
+
         cmd = '/bin/mknod -m 777 /%s b %d %d '\
              % (lxc_container_device, major_num, minor_num)
         cmd = cmd_lxc + cmd
         subprocess.call(cmd, shell=True)
-    
+
     @exception.wrap_exception()
     def _detach_lxc_volume(self, xml, virt_dom, instance_name):
         LOG.info(_('ISI: detaching LXC block device'))
@@ -684,7 +681,7 @@ _create_image
         # get id of the virt_dom
         spid = str(virt_dom.ID())
         LOG.info(_('detach_volume: pid(%s)') % spid)
-    
+
         # get PID of the init process
         ps_command = subprocess.Popen("ps -o pid --ppid %s --noheaders" \
                               % spid, shell=True, stdout=subprocess.PIPE)
@@ -692,7 +689,7 @@ _create_image
         init_pid = str(int(init_pid))
         retcode = ps_command.wait()
         assert retcode == 0, "ps command returned %d" % retcode
-    
+
         cmd = cmd_lxc + ' /bin/rm ' + '/' + lxc_container_device
         LOG.info(_('detach_volume: cmd(%s)') % cmd)
         subprocess.call(cmd, shell=True)
