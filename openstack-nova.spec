@@ -343,7 +343,7 @@ This package contains documentation files for %{name}.
 
 %prep
 %setup -q -n nova-%{version}
-
+rm -rf nova-%{version}/nova-install
 %patch0001 -p1
 
 install %{SOURCE1} README.rhel6
