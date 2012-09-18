@@ -4,8 +4,6 @@
 #%global os_release essex
 #KDS
 %global isi_prj openstack-nova
-#AP
-%define _binaries_in_noarch_packages_terminate_build   0
 %if ! (0%{?fedora} > 12 || 0%{?rhel} > 5)
 %{!?python_sitelib: %global python_sitelib %(%{__python} -c "from distutils.sysconfig import get_python_lib; print(get_python_lib())")}
 %endif
@@ -343,6 +341,9 @@ This package contains documentation files for %{name}.
 
 %prep
 %setup -q -n nova-%{version}
+#AP nova-install directory is not part of this package. It is there because
+#the nova repository contains source for multiple spec files, and should
+#be removed for this package
 rm -rf nova-install
 %patch0001 -p1
 
