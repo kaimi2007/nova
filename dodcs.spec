@@ -55,7 +55,7 @@ Writes Release-Notes to /usr/local/nova
 %install
 install -m 0755 -d $RPM_BUILD_ROOT/usr/local/nova
 install -m 0755 README.1st $RPM_BUILD_ROOT/usr/local/nova/README.1st
-install -m 0755 README.1st $RPM_BUILD_ROOT/usr/local/nova/Release-Notes
+install -m 0755 Release-Notes $RPM_BUILD_ROOT/usr/local/nova/Release-Notes
 
 %clean
 rm -rf $RPM_BUILD_ROOT
