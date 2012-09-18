@@ -1,0 +1,36 @@
+DODCS OpenStack Essex Release
+----------------------------------------
+June, 2012
+
+This DVD contains the Essex release of the DODCS OpenStack distribution, which supports
+heterogeneous, high-performance computing.  The Essex release is based on a development
+version of the Essex version of OpenStack and is being provided to early adopters.  Subsequent
+releases are expected to correlate with release versions of OpenStack, starting with Essex.
+
+The Essex release supports single-node or multi-node installations with LXC and
+KVM instances on x86, GPU, and SGI Altix UV100 platforms.
+
+Known Issues
+============
+The following features have known issues:
+
+ * VNC - can not get VNC consoles for instances from command line or from Horizon.
+ * Resource overcommitting - For GPU provisioning, if all available GPUs are committed to 
+   existing instances, then any attempt to provision another GPU
+   should fail with an "Overcommitted" message. That is broken right now. 
+ * Tilera support has not been well-tested and images are not included.  
+ * Availability zones are not currently supported.
+ * There are known compatibility issues with some EC2 commands, specifically:
+
+   * Image management commands except euca-describe-images
+   * Availability zone and region commands
+   * euca-get-console-output
+   * euca-create-snapshot
+   * euca-authorize
+   * euca-revoke
+   * euca-confirm-product-instance
+
+For any questions about the release or to obtain release materials, contact: 
+Dr. Stephen Crago - crago@isi.edu.
+
+For any technical support questions contact: dodcs-support@mailman.isi.edu.
