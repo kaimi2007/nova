@@ -74,7 +74,7 @@ class VolumeTestCase(test.TestCase):
         return 1
 
     @staticmethod
-    def _create_volume(size=0, snapshot_id=None):
+    def _create_volume(size=0, snapshot_id=None, metadata=None):
         """Create a volume object."""
         vol = {}
         vol['size'] = size
@@ -84,6 +84,8 @@ class VolumeTestCase(test.TestCase):
         vol['availability_zone'] = FLAGS.storage_availability_zone
         vol['status'] = "creating"
         vol['attach_status'] = "detached"
+        if metadata is not None:
+            vol['metadata'] = metadata
         return db.volume_create(context.get_admin_context(), vol)
 
     def test_ec2_uuid_mapping(self):
@@ -127,6 +129,22 @@ class VolumeTestCase(test.TestCase):
 
         self.volume.delete_volume(self.context, volume_id)
         self.assertEquals(len(test_notifier.NOTIFICATIONS), 4)
+        self.assertRaises(exception.NotFound,
+                          db.volume_get,
+                          self.context,
+                          volume_id)
+
+    def test_create_delete_volume_with_metadata(self):
+        """Test volume can be created and deleted."""
+        test_meta = {'fake_key': 'fake_value'}
+        volume = self._create_volume('0', None, test_meta)
+        volume_id = volume['id']
+        self.volume.create_volume(self.context, volume_id)
+        result_meta = {
+            volume.volume_metadata[0].key: volume.volume_metadata[0].value}
+        self.assertEqual(result_meta, test_meta)
+
+        self.volume.delete_volume(self.context, volume_id)
         self.assertRaises(exception.NotFound,
                           db.volume_get,
                           self.context,
@@ -320,6 +338,51 @@ class VolumeTestCase(test.TestCase):
                           db.snapshot_get,
                           self.context,
                           snapshot_id)
+        self.volume.delete_volume(self.context, volume['id'])
+
+    def test_cant_delete_volume_in_use(self):
+        """Test volume can't be deleted in invalid stats."""
+        # create a volume and assign to host
+        volume = self._create_volume()
+        self.volume.create_volume(self.context, volume['id'])
+        volume['status'] = 'in-use'
+        volume['host'] = 'fakehost'
+
+        volume_api = nova.volume.api.API()
+
+        # 'in-use' status raises InvalidVolume
+        self.assertRaises(exception.InvalidVolume,
+                          volume_api.delete,
+                          self.context,
+                          volume)
+
+        # clean up
+        self.volume.delete_volume(self.context, volume['id'])
+
+    def test_force_delete_volume(self):
+        """Test volume can be forced to delete."""
+        # create a volume and assign to host
+        volume = self._create_volume()
+        self.volume.create_volume(self.context, volume['id'])
+        volume['status'] = 'error_deleting'
+        volume['host'] = 'fakehost'
+
+        volume_api = nova.volume.api.API()
+
+        # 'error_deleting' volumes can't be deleted
+        self.assertRaises(exception.InvalidVolume,
+                          volume_api.delete,
+                          self.context,
+                          volume)
+
+        # delete with force
+        volume_api.delete(self.context, volume, force=True)
+
+        # status is deleting
+        volume = db.volume_get(context.get_admin_context(), volume['id'])
+        self.assertEquals(volume['status'], 'deleting')
+
+        # clean up
         self.volume.delete_volume(self.context, volume['id'])
 
     def test_cant_delete_volume_with_snapshots(self):

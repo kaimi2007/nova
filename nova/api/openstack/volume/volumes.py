@@ -192,11 +192,12 @@ class CreateDeserializer(CommonDeserializer):
         return {'body': {'volume': volume}}
 
 
-class VolumeController(object):
+class VolumeController(wsgi.Controller):
     """The Volumes API controller for the OpenStack API."""
 
-    def __init__(self):
+    def __init__(self, ext_mgr=None):
         self.volume_api = volume.API()
+        self.ext_mgr = ext_mgr
         super(VolumeController, self).__init__()
 
     @wsgi.serializers(xml=VolumeTemplate)
@@ -253,11 +254,10 @@ class VolumeController(object):
     @wsgi.deserializers(xml=CreateDeserializer)
     def create(self, req, body):
         """Creates a new volume."""
-        context = req.environ['nova.context']
-
-        if not body:
+        if not self.is_valid_body(body, 'volume'):
             raise exc.HTTPUnprocessableEntity()
 
+        context = req.environ['nova.context']
         volume = body['volume']
 
         kwargs = {}
@@ -309,8 +309,8 @@ class VolumeController(object):
         return ('name', 'status')
 
 
-def create_resource():
-    return wsgi.Resource(VolumeController())
+def create_resource(ext_mgr):
+    return wsgi.Resource(VolumeController(ext_mgr))
 
 
 def remove_invalid_options(context, search_options, allowed_search_options):

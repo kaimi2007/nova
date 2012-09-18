@@ -265,6 +265,14 @@ class XMLDeserializer(TextDeserializer):
                 return child.nodeValue
         return ""
 
+    def extract_elements(self, node):
+        """Get only Element type childs from node"""
+        elements = []
+        for child in node.childNodes:
+            if child.nodeType == child.ELEMENT_NODE:
+                elements.append(child)
+        return elements
+
     def find_attribute_or_element(self, parent, name):
         """Get an attribute value; fallback to an element if not found"""
         if parent.hasAttribute(name):
@@ -1070,6 +1078,9 @@ class ControllerMetaclass(type):
         # Find all actions
         actions = {}
         extensions = []
+        # start with wsgi actions from base classes
+        for base in bases:
+            actions.update(getattr(base, 'wsgi_actions', {}))
         for key, value in cls_dict.items():
             if not callable(value):
                 continue

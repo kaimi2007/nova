@@ -85,11 +85,12 @@ class SnapshotsTemplate(xmlutil.TemplateBuilder):
         return xmlutil.MasterTemplate(root, 1)
 
 
-class SnapshotsController(object):
+class SnapshotsController(wsgi.Controller):
     """The Volumes API controller for the OpenStack API."""
 
-    def __init__(self):
+    def __init__(self, ext_mgr=None):
         self.volume_api = volume.API()
+        self.ext_mgr = ext_mgr
         super(SnapshotsController, self).__init__()
 
     @wsgi.serializers(xml=SnapshotTemplate)
@@ -145,8 +146,8 @@ class SnapshotsController(object):
         """Creates a new snapshot."""
         context = req.environ['nova.context']
 
-        if not body:
-            return exc.HTTPUnprocessableEntity()
+        if not self.is_valid_body(body, 'snapshot'):
+            raise exc.HTTPUnprocessableEntity()
 
         snapshot = body['snapshot']
         volume_id = snapshot['volume_id']
@@ -175,5 +176,5 @@ class SnapshotsController(object):
         return {'snapshot': retval}
 
 
-def create_resource():
-    return wsgi.Resource(SnapshotsController())
+def create_resource(ext_mgr):
+    return wsgi.Resource(SnapshotsController(ext_mgr))

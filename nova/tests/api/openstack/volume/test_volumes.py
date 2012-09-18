@@ -18,6 +18,7 @@ import datetime
 from lxml import etree
 import webob
 
+from nova.api.openstack.volume import extensions
 from nova.api.openstack.volume import volumes
 from nova import db
 from nova import exception
@@ -34,7 +35,9 @@ FLAGS = flags.FLAGS
 class VolumeApiTest(test.TestCase):
     def setUp(self):
         super(VolumeApiTest, self).setUp()
-        self.controller = volumes.VolumeController()
+        self.ext_mgr = extensions.ExtensionManager()
+        self.ext_mgr.extensions = {}
+        self.controller = volumes.VolumeController(self.ext_mgr)
 
         self.stubs.Set(db, 'volume_get_all', fakes.stub_volume_get_all)
         self.stubs.Set(db, 'volume_get_all_by_project',
@@ -79,14 +82,6 @@ class VolumeApiTest(test.TestCase):
         body = {"volume": vol}
         req = fakes.HTTPRequest.blank('/v1/volumes')
         self.assertRaises(exception.InvalidInput,
-                          self.controller.create,
-                          req,
-                          body)
-
-    def test_volume_create_no_body(self):
-        body = {}
-        req = fakes.HTTPRequest.blank('/v1/volumes')
-        self.assertRaises(webob.exc.HTTPUnprocessableEntity,
                           self.controller.create,
                           req,
                           body)
@@ -470,3 +465,32 @@ class TestVolumeCreateRequestXMLDeserializer(test.TestCase):
         }
         self.maxDiff = None
         self.assertEquals(request['body'], expected)
+
+
+class VolumesUnprocessableEntityTestCase(test.TestCase):
+
+    """
+    Tests of places we throw 422 Unprocessable Entity from
+    """
+
+    def setUp(self):
+        super(VolumesUnprocessableEntityTestCase, self).setUp()
+        self.controller = volumes.VolumeController()
+
+    def _unprocessable_volume_create(self, body):
+        req = fakes.HTTPRequest.blank('/v2/fake/volumes')
+        req.method = 'POST'
+
+        self.assertRaises(webob.exc.HTTPUnprocessableEntity,
+                          self.controller.create, req, body)
+
+    def test_create_no_body(self):
+        self._unprocessable_volume_create(body=None)
+
+    def test_create_missing_volume(self):
+        body = {'foo': {'a': 'b'}}
+        self._unprocessable_volume_create(body=body)
+
+    def test_create_malformed_entity(self):
+        body = {'volume': 'string'}
+        self._unprocessable_volume_create(body=body)
