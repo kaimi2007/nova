@@ -4,7 +4,8 @@
 #%global os_release essex
 #KDS
 %global isi_prj openstack-nova
-
+#AP
+%define _binaries_in_noarch_packages_terminate_build   0
 %if ! (0%{?fedora} > 12 || 0%{?rhel} > 5)
 %{!?python_sitelib: %global python_sitelib %(%{__python} -c "from distutils.sysconfig import get_python_lib; print(get_python_lib())")}
 %endif
