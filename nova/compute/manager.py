@@ -198,7 +198,7 @@ def wrap_instance_fault(function):
             raise
         except Exception, e:
             with excutils.save_and_reraise_exception():
-                self._add_instance_fault_from_exc(context,
+                compute_utils.add_instance_fault_from_exc(context,
                         kwargs['instance']['uuid'], e, sys.exc_info())
 
     return decorated_function
@@ -1096,8 +1096,8 @@ class ComputeManager(manager.SchedulerDependentManager):
         except Exception, exc:
             LOG.error(_('Cannot reboot instance: %(exc)s'), locals(),
                       context=context, instance=instance)
-            self._add_instance_fault_from_exc(context, instance['uuid'], exc,
-                                             sys.exc_info())
+            compute_utils.add_instance_fault_from_exc(context,
+                    instance['uuid'], exc, sys.exc_info())
             # Fall through and reset task_state to None
 
         current_power_state = self._get_power_state(context, instance)
@@ -1442,8 +1442,12 @@ class ComputeManager(manager.SchedulerDependentManager):
             old_instance_type = migration_ref['old_instance_type_id']
             instance_type = instance_types.get_instance_type(old_instance_type)
 
+            block_device_info = self._get_instance_volume_block_device_info(
+                                context, instance['uuid'])
+
             self.driver.finish_revert_migration(instance,
-                                       self._legacy_nw_info(network_info))
+                                       self._legacy_nw_info(network_info),
+                                       block_device_info)
 
             # Just roll back the record. There's no need to resize down since
             # the 'old' VM already has the preferred attributes
@@ -1555,9 +1559,13 @@ class ComputeManager(manager.SchedulerDependentManager):
             self._notify_about_instance_usage(
                 context, instance, "resize.start", network_info=network_info)
 
+            block_device_info = self._get_instance_volume_block_device_info(
+                                context, instance['uuid'])
+
             disk_info = self.driver.migrate_disk_and_power_off(
                     context, instance, migration_ref['dest_host'],
-                    instance_type_ref, self._legacy_nw_info(network_info))
+                    instance_type_ref, self._legacy_nw_info(network_info),
+                    block_device_info)
 
             self.db.migration_update(context,
                                      migration_id,
@@ -1606,10 +1614,14 @@ class ComputeManager(manager.SchedulerDependentManager):
             context, instance, "finish_resize.start",
             network_info=network_info)
 
+        block_device_info = self._get_instance_volume_block_device_info(
+                            context, instance['uuid'])
+
         self.driver.finish_migration(context, migration_ref, instance,
                                      disk_info,
                                      self._legacy_nw_info(network_info),
-                                     image, resize_instance)
+                                     image, resize_instance,
+                                     block_device_info)
 
         instance = self._instance_update(context,
                                          instance['uuid'],
@@ -2713,27 +2725,6 @@ class ComputeManager(manager.SchedulerDependentManager):
         :param context: security context
         """
         self.resource_tracker.update_available_resource(context)
-
-    def _add_instance_fault_from_exc(self, context, instance_uuid, fault,
-                                    exc_info=None):
-        """Adds the specified fault to the database."""
-
-        code = 500
-        if hasattr(fault, "kwargs"):
-            code = fault.kwargs.get('code', 500)
-
-        details = unicode(fault)
-        if exc_info and code == 500:
-            tb = exc_info[2]
-            details += '\n' + ''.join(traceback.format_tb(tb))
-
-        values = {
-            'instance_uuid': instance_uuid,
-            'code': code,
-            'message': fault.__class__.__name__,
-            'details': unicode(details),
-        }
-        self.db.instance_fault_create(context, values)
 
     @manager.periodic_task(
         ticks_between_runs=FLAGS.running_deleted_instance_poll_interval)

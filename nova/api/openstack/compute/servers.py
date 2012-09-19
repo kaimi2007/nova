@@ -159,14 +159,19 @@ class CommonDeserializer(wsgi.MetadataXMLDeserializer):
         server_node = self.find_first_child_named(node, 'server')
 
         attributes = ["name", "imageRef", "flavorRef", "adminPass",
-                      "accessIPv4", "accessIPv6", "key_name"]
+                      "accessIPv4", "accessIPv6", "key_name",
+                      "availability_zone", "min_count", "max_count"]
         for attr in attributes:
             if server_node.getAttribute(attr):
                 server[attr] = server_node.getAttribute(attr)
 
+        res_id = server_node.getAttribute('return_reservation_id')
+        if res_id:
+            server['return_reservation_id'] = utils.bool_from_str(res_id)
+
         scheduler_hints = self._extract_scheduler_hints(server_node)
         if scheduler_hints:
-            server['os:scheduler_hints'] = scheduler_hints
+            server['OS-SCH-HNT:scheduler_hints'] = scheduler_hints
 
         metadata_node = self.find_first_child_named(server_node, "metadata")
         if metadata_node is not None:
@@ -188,19 +193,34 @@ class CommonDeserializer(wsgi.MetadataXMLDeserializer):
         if security_groups is not None:
             server["security_groups"] = security_groups
 
+        # NOTE(vish): Support this incorrect version because it was in the code
+        #             base for a while and we don't want to accidentally break
+        #             anyone that might be using it.
         auto_disk_config = server_node.getAttribute('auto_disk_config')
         if auto_disk_config:
-            server['auto_disk_config'] = utils.bool_from_str(auto_disk_config)
+            server['OS-DCF:diskConfig'] = utils.bool_from_str(auto_disk_config)
+
+        auto_disk_config = server_node.getAttribute('OS-DCF:diskConfig')
+        if auto_disk_config:
+            server['OS-DCF:diskConfig'] = utils.bool_from_str(auto_disk_config)
 
         return server
 
     def _extract_scheduler_hints(self, server_node):
         """Marshal the scheduler hints attribute of a parsed request"""
-        node = self.find_first_child_named(server_node, "scheduler_hints")
+        node = self.find_first_child_named(server_node,
+                                           "OS-SCH-HNT:scheduler_hints")
+        # NOTE(vish): Support the os: prefix because it is what we use
+        #             for json, even though OS-SCH-HNT: is more correct
+        if not node:
+            node = self.find_first_child_named(server_node,
+                                               "os:scheduler_hints")
         if node:
             scheduler_hints = {}
             for child in self.extract_elements(node):
-                scheduler_hints[child.nodeName] = self.extract_text(child)
+                scheduler_hints.setdefault(child.nodeName, [])
+                value = self.extract_text(child).strip()
+                scheduler_hints[child.nodeName].append(value)
             return scheduler_hints
         else:
             return None
@@ -769,7 +789,7 @@ class Controller(wsgi.Controller):
             auto_disk_config = server_dict.get('auto_disk_config')
 
         scheduler_hints = {}
-        if self.ext_mgr.is_loaded('os-scheduler-hints'):
+        if self.ext_mgr.is_loaded('OS-SCH-HNT'):
             scheduler_hints = server_dict.get('scheduler_hints', {})
 
         try:
@@ -822,6 +842,9 @@ class Controller(wsgi.Controller):
         except rpc_common.RemoteError as err:
             msg = "%(err_type)s: %(err_msg)s" % {'err_type': err.exc_type,
                                                  'err_msg': err.value}
+            raise exc.HTTPBadRequest(explanation=msg)
+        except UnicodeDecodeError as error:
+            msg = "UnicodeError: %s" % unicode(error)
             raise exc.HTTPBadRequest(explanation=msg)
         # Let the caller deal with unhandled exceptions.
 

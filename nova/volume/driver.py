@@ -21,7 +21,9 @@ Drivers for volumes.
 """
 
 import os
+import tempfile
 import time
+import urllib
 
 from nova import exception
 from nova import flags
@@ -65,6 +67,10 @@ volume_opts = [
                default=None,
                help='the libvirt uuid of the secret for the rbd_user'
                     'volumes'),
+    cfg.StrOpt('volume_tmp_dir',
+               default=None,
+               help='where to store temporary image files if the volume '
+                    'driver does not write them directly to the volume'),
     ]
 
 FLAGS = flags.FLAGS
@@ -147,6 +153,10 @@ class VolumeDriver(object):
         # zero out old volumes to prevent data leaking between users
         # TODO(ja): reclaiming space should be done lazy and low priority
         self._copy_volume('/dev/zero', self.local_path(volume), size_in_g)
+        dev_path = self.local_path(volume)
+        if os.path.exists(dev_path):
+            self._try_execute('dmsetup', 'remove', '-f', dev_path,
+                              run_as_root=True)
         self._try_execute('lvremove', '-f', "%s/%s" %
                           (FLAGS.volume_group,
                            self._escape_snapshot(volume['name'])),
@@ -261,6 +271,25 @@ class VolumeDriver(object):
     def do_setup(self, context):
         """Any initialization the volume driver does while starting"""
         pass
+
+    def copy_image_to_volume(self, context, volume, image_service, image_id):
+        """Fetch the image from image_service and write it to the volume."""
+        raise NotImplementedError()
+
+    def copy_volume_to_image(self, context, volume, image_service, image_id):
+        """Copy the volume to the specified image."""
+        raise NotImplementedError()
+
+    def clone_image(self, volume, image_location):
+        """Create a volume efficiently from an existing image.
+
+        image_location is a string whose format depends on the
+        image service backend in use. The driver should use it
+        to determine whether cloning is possible.
+
+        Returns a boolean indicating whether cloning occurred
+        """
+        return False
 
 
 class ISCSIDriver(VolumeDriver):
@@ -542,6 +571,20 @@ class ISCSIDriver(VolumeDriver):
                         "id:%(volume_id)s.") % locals())
             raise
 
+    def copy_image_to_volume(self, context, volume, image_service, image_id):
+        """Fetch the image from image_service and write it to the volume."""
+        volume_path = self.local_path(volume)
+        with utils.temporary_chown(volume_path):
+            with utils.file_open(volume_path, "wb") as image_file:
+                image_service.download(context, image_id, image_file)
+
+    def copy_volume_to_image(self, context, volume, image_service, image_id):
+        """Copy the volume to the specified image."""
+        volume_path = self.local_path(volume)
+        with utils.temporary_chown(volume_path):
+            with utils.file_open(volume_path) as volume_file:
+                image_service.update(context, image_id, {}, volume_file)
+
 
 class FakeISCSIDriver(ISCSIDriver):
     """Logs calls instead of executing."""
@@ -695,6 +738,72 @@ class RBDDriver(VolumeDriver):
 
     def terminate_connection(self, volume, connector):
         pass
+
+    def _parse_location(self, location):
+        prefix = 'rbd://'
+        if not location.startswith(prefix):
+            reason = _('Image %s is not stored in rbd') % location
+            raise exception.ImageUnacceptable(reason)
+        pieces = map(urllib.unquote, location[len(prefix):].split('/'))
+        if any(map(lambda p: p == '', pieces)):
+            reason = _('Image %s has blank components') % location
+            raise exception.ImageUnacceptable(reason)
+        if len(pieces) != 4:
+            reason = _('Image %s is not an rbd snapshot') % location
+            raise exception.ImageUnacceptable(reason)
+        return pieces
+
+    def _get_fsid(self):
+        stdout, _ = self._execute('ceph', 'fsid')
+        return stdout.rstrip('\n')
+
+    def _is_cloneable(self, image_location):
+        try:
+            fsid, pool, image, snapshot = self._parse_location(image_location)
+        except exception.ImageUnacceptable:
+            return False
+
+        if self._get_fsid() != fsid:
+            reason = _('%s is in a different ceph cluster') % image_location
+            LOG.debug(reason)
+            return False
+
+        # check that we can read the image
+        try:
+            self._execute('rbd', 'info',
+                          '--pool', pool,
+                          '--image', image,
+                          '--snap', snapshot)
+        except exception.ProcessExecutionError:
+            LOG.debug(_('Unable to read image %s') % image_location)
+            return False
+
+        return True
+
+    def clone_image(self, volume, image_location):
+        if image_location is None or not self._is_cloneable(image_location):
+            return False
+        _, pool, image, snapshot = self._parse_location(image_location)
+        self._clone(volume, pool, image, snapshot)
+        self._resize(volume)
+        return True
+
+    def copy_image_to_volume(self, context, volume, image_service, image_id):
+        # TODO(jdurgin): replace with librbd
+        # this is a temporary hack, since rewriting this driver
+        # to use librbd would take too long
+        if FLAGS.volume_tmp_dir and not os.exists(FLAGS.volume_tmp_dir):
+            os.makedirs(FLAGS.volume_tmp_dir)
+
+        with tempfile.NamedTemporaryFile(dir=FLAGS.volume_tmp_dir) as tmp:
+            image_service.download(context, image_id, tmp)
+            # import creates the image, so we must remove it first
+            self._try_execute('rbd', 'rm',
+                              '--pool', FLAGS.rbd_pool,
+                              volume['name'])
+            self._try_execute('rbd', 'import',
+                              '--pool', FLAGS.rbd_pool,
+                              tmp.name, volume['name'])
 
 
 class SheepdogDriver(VolumeDriver):

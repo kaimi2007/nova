@@ -761,14 +761,16 @@ class CloudController(object):
                         kwargs.get('size'),
                         context=context)
 
+        create_kwargs = dict(snapshot=snapshot,
+                             volume_type=kwargs.get('volume_type'),
+                             metadata=kwargs.get('metadata'),
+                             availability_zone=kwargs.get('availability_zone'))
+
         volume = self.volume_api.create(context,
                                         kwargs.get('size'),
                                         kwargs.get('name'),
                                         kwargs.get('description'),
-                                        snapshot,
-                                        kwargs.get('volume_type'),
-                                        kwargs.get('metadata'),
-                                        kwargs.get('availability_zone'))
+                                        **create_kwargs)
 
         db.ec2_volume_create(context, volume['id'])
         # TODO(vish): Instance should be None at db layer instead of
@@ -1377,7 +1379,7 @@ class CloudController(object):
         image = self._get_image(context, image_id)
         internal_id = image['id']
         self.image_service.delete(context, internal_id)
-        return {'imageId': image_id}
+        return True
 
     def _register_image(self, context, metadata):
         image = self.image_service.create(context, metadata)

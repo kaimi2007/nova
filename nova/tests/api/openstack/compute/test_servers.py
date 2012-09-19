@@ -1972,7 +1972,7 @@ class ServersControllerCreateTest(test.TestCase):
         self._test_create_extra(params)
 
     def test_create_instance_with_scheduler_hints_enabled(self):
-        self.ext_mgr.extensions = {'os-scheduler-hints': 'fake'}
+        self.ext_mgr.extensions = {'OS-SCH-HNT': 'fake'}
         hints = {'a': 'b'}
         params = {'scheduler_hints': hints}
         old_create = nova.compute.api.API.create
@@ -2803,6 +2803,43 @@ class ServersControllerCreateTest(test.TestCase):
         # The fact that the action doesn't raise is enough validation
         self.controller.create(req, body)
 
+    def test_create_instance_invalid_personality(self):
+
+        def fake_create(*args, **kwargs):
+            codec = 'utf8'
+            content = 'b25zLiINCg0KLVJpY2hhcmQgQ$$%QQmFjaA=='
+            start_position = 19
+            end_position = 20
+            msg = 'invalid start byte'
+            raise UnicodeDecodeError(codec, content, start_position,
+                                                    end_position, msg)
+
+        self.stubs.Set(nova.compute.api.API,
+                                'create',
+                                fake_create)
+        image_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
+        flavor_ref = 'http://localhost/v2/flavors/3'
+        body = {
+            'server': {
+                'name': 'server_test',
+                'imageRef': image_uuid,
+                'flavorRef': flavor_ref,
+                'personality': [
+                    {
+                        "path": "/etc/banner.txt",
+                        "contents": "b25zLiINCg0KLVJpY2hhcmQgQ$$%QQmFjaA==",
+                    },
+                ],
+            },
+        }
+
+        req = fakes.HTTPRequest.blank('/v2/fake/servers')
+        req.method = 'POST'
+        req.body = jsonutils.dumps(body)
+        req.headers["content-type"] = "application/json"
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.create, req, body)
+
     def test_create_location(self):
         selfhref = 'http://localhost/v2/fake/servers/%s' % FAKE_UUID
         bookhref = 'http://localhost/fake/servers/%s' % FAKE_UUID
@@ -3253,6 +3290,83 @@ class TestServerCreateRequestXMLDeserializer(test.TestCase):
                 "flavorRef": "1",
                 "networks": [{"uuid": "1", "fixed_ip": "10.0.1.12"},
                              {"uuid": "1", "fixed_ip": "10.0.2.12"}],
+                }}
+        self.assertEquals(request['body'], expected)
+
+    def test_request_with_availability_zone(self):
+        serial_request = """
+    <server xmlns="http://docs.openstack.org/compute/api/v2"
+     name="new-server-test" imageRef="1" flavorRef="1"
+     availability_zone="some_zone:some_host">
+    </server>"""
+        request = self.deserializer.deserialize(serial_request)
+        expected = {"server": {
+                "name": "new-server-test",
+                "imageRef": "1",
+                "flavorRef": "1",
+                "availability_zone": "some_zone:some_host",
+                }}
+        self.assertEquals(request['body'], expected)
+
+    def test_request_with_multiple_create_args(self):
+        serial_request = """
+    <server xmlns="http://docs.openstack.org/compute/api/v2"
+     name="new-server-test" imageRef="1" flavorRef="1"
+     min_count="1" max_count="3" return_reservation_id="True">
+    </server>"""
+        request = self.deserializer.deserialize(serial_request)
+        expected = {"server": {
+                "name": "new-server-test",
+                "imageRef": "1",
+                "flavorRef": "1",
+                "min_count": "1",
+                "max_count": "3",
+                "return_reservation_id": True,
+                }}
+        self.assertEquals(request['body'], expected)
+
+    def test_request_with_disk_config(self):
+        serial_request = """
+    <server xmlns="http://docs.openstack.org/compute/api/v2"
+     xmlns:OS-DCF="http://docs.openstack.org/compute/ext/disk_config/api/v1.1"
+     name="new-server-test" imageRef="1" flavorRef="1"
+     OS-DCF:diskConfig="True">
+    </server>"""
+        request = self.deserializer.deserialize(serial_request)
+        expected = {"server": {
+                "name": "new-server-test",
+                "imageRef": "1",
+                "flavorRef": "1",
+                "OS-DCF:diskConfig": True,
+                }}
+        self.assertEquals(request['body'], expected)
+
+    def test_request_with_scheduler_hints(self):
+        serial_request = """
+    <server xmlns="http://docs.openstack.org/compute/api/v2"
+     xmlns:OS-SCH-HNT=
+     "http://docs.openstack.org/compute/ext/scheduler-hints/api/v2"
+     name="new-server-test" imageRef="1" flavorRef="1">
+       <OS-SCH-HNT:scheduler_hints>
+         <different_host>
+           7329b667-50c7-46a6-b913-cb2a09dfeee0
+         </different_host>
+         <different_host>
+           f31efb24-34d2-43e1-8b44-316052956a39
+         </different_host>
+       </OS-SCH-HNT:scheduler_hints>
+    </server>"""
+        request = self.deserializer.deserialize(serial_request)
+        expected = {"server": {
+                "name": "new-server-test",
+                "imageRef": "1",
+                "flavorRef": "1",
+                "OS-SCH-HNT:scheduler_hints": {
+                    "different_host": [
+                        "7329b667-50c7-46a6-b913-cb2a09dfeee0",
+                        "f31efb24-34d2-43e1-8b44-316052956a39",
+                    ]
+                }
                 }}
         self.assertEquals(request['body'], expected)
 
