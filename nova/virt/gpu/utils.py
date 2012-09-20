@@ -104,6 +104,9 @@ def get_instance_type_extra_specs_capabilities():
     return extra_specs
 
 
+def get_gpu_total():
+    return len(gpus_available)
+
 def allow_gpus(inst):
     global num_gpus
     dev_whitelist = os.path.join(FLAGS.dev_cgroups_path,
@@ -126,6 +129,7 @@ def assign_gpus(context, inst, lxc_container_root):
     global gpus_available
     global gpus_assigned
     LOG.debug(_("dkang: assign_gpus"))
+    print "dkang: assign_gpus"
 #    ctxt = nova_context.get_admin_context()
     gpus_in_meta = 0
     gpus_in_extra = 0
