@@ -67,8 +67,6 @@ from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.openstack.common.notifier import api as notifier
 from nova.openstack.common import rpc
-from nova.openstack.common.rpc import common as rpc_common
-from nova.openstack.common.rpc import dispatcher as rpc_dispatcher
 from nova.openstack.common import timeutils
 from nova import quota
 from nova.scheduler import rpcapi as scheduler_rpcapi
@@ -213,7 +211,7 @@ def _get_image_meta(context, image_ref):
 class ComputeManager(manager.SchedulerDependentManager):
     """Manages the running instances from creation to destruction."""
 
-    RPC_API_VERSION = '2.1'
+    RPC_API_VERSION = '2.2'
 
     def __init__(self, compute_driver=None, *args, **kwargs):
         """Load configuration options and connect to the hypervisor."""
@@ -925,7 +923,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         """Stopping an instance on this host.
 
         Alias for power_off_instance for compatibility"""
-        self.power_off_instance(context, instance,
+        self.power_off_instance(context, instance=instance,
                                 final_state=vm_states.STOPPED)
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
@@ -935,7 +933,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         """Starting an instance on this host.
 
         Alias for power_on_instance for compatibility"""
-        self.power_on_instance(context, instance)
+        self.power_on_instance(context, instance=instance)
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @reverts_task_state
@@ -1406,6 +1404,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         source machine.
 
         """
+        context = context.elevated()
         migration_ref = self.db.migration_get(context, migration_id)
         with self._error_out_instance_on_exception(context, instance['uuid'],
                                                    reservations):
@@ -1540,6 +1539,7 @@ class ComputeManager(manager.SchedulerDependentManager):
     def resize_instance(self, context, instance,
                         migration_id, image, reservations=None):
         """Starts the migration of a running instance to another host."""
+        context = context.elevated()
         migration_ref = self.db.migration_get(context, migration_id)
         with self._error_out_instance_on_exception(context, instance['uuid'],
                                                    reservations):
@@ -2432,9 +2432,6 @@ class ComputeManager(manager.SchedulerDependentManager):
                                         {'status': 'error'})
 
             for migration in migrations:
-                # NOTE(comstud): Yield to other greenthreads.  Putting this
-                # at the top so we make sure to do it on each iteration.
-                greenthread.sleep(0)
                 migration_id = migration['id']
                 instance_uuid = migration['instance_uuid']
                 LOG.info(_("Automatically confirming migration "
@@ -2536,8 +2533,6 @@ class ComputeManager(manager.SchedulerDependentManager):
 
             refreshed = timeutils.utcnow()
             for usage in bw_usage:
-                # Allow switching of greenthreads between queries.
-                greenthread.sleep(0)
                 self.db.bw_usage_update(context,
                                         usage['uuid'],
                                         usage['mac_address'],
@@ -2581,8 +2576,6 @@ class ComputeManager(manager.SchedulerDependentManager):
                        "%(num_vm_instances)s on the hypervisor.") % locals())
 
         for db_instance in db_instances:
-            # Allow other periodic tasks to do some work...
-            greenthread.sleep(0)
             db_power_state = db_instance['power_state']
             if db_instance['task_state'] is not None:
                 LOG.info(_("During sync_power_state the instance has a "
@@ -2809,11 +2802,12 @@ class ComputeManager(manager.SchedulerDependentManager):
                 self._set_instance_error_state(context, instance_uuid)
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
-    def add_aggregate_host(self, context, aggregate_id, host):
+    def add_aggregate_host(self, context, aggregate_id, host, slave_info=None):
         """Notify hypervisor of change (for hypervisor pools)."""
         aggregate = self.db.aggregate_get(context, aggregate_id)
         try:
-            self.driver.add_to_aggregate(context, aggregate, host)
+            self.driver.add_to_aggregate(context, aggregate, host,
+                                         slave_info=slave_info)
         except exception.AggregateError:
             with excutils.save_and_reraise_exception():
                 self.driver.undo_aggregate_operation(context,
@@ -2821,11 +2815,13 @@ class ComputeManager(manager.SchedulerDependentManager):
                                                aggregate.id, host)
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
-    def remove_aggregate_host(self, context, aggregate_id, host):
+    def remove_aggregate_host(self, context, aggregate_id,
+                              host, slave_info=None):
         """Removes a host from a physical hypervisor pool."""
         aggregate = self.db.aggregate_get(context, aggregate_id)
         try:
-            self.driver.remove_from_aggregate(context, aggregate, host)
+            self.driver.remove_from_aggregate(context, aggregate, host,
+                                              slave_info=slave_info)
         except (exception.AggregateError,
                 exception.InvalidAggregateAction) as e:
             with excutils.save_and_reraise_exception():

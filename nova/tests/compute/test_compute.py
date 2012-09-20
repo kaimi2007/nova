@@ -1279,7 +1279,10 @@ class ComputeTestCase(BaseTestCase):
                 instance=jsonutils.to_primitive(instance))
 
     def _test_state_revert(self, operation, pre_task_state,
-                           post_task_state):
+                           post_task_state=None, kwargs=None):
+        if kwargs is None:
+            kwargs = {}
+
         instance = self._create_fake_instance()
         self.compute.run_instance(self.context, instance=instance)
 
@@ -1292,17 +1295,18 @@ class ComputeTestCase(BaseTestCase):
         orig_notify = self.compute._notify_about_instance_usage
 
         def _get_an_exception(*args, **kwargs):
-            raise Exception("This fails every single time!")
+            raise test.TestingException()
 
         self.stubs.Set(self.context, 'elevated', _get_an_exception)
         self.stubs.Set(self.compute,
                        '_notify_about_instance_usage', _get_an_exception)
 
+        func = getattr(self.compute, operation)
+
         raised = False
         try:
-            ret_val = getattr(self.compute, operation)(self.context,
-                                                       instance=instance)
-        except Exception:
+            ret_val = func(self.context, instance=instance, **kwargs)
+        except test.TestingException:
             raised = True
         finally:
             # self.context.elevated() is called in tearDown()
@@ -1320,28 +1324,37 @@ class ComputeTestCase(BaseTestCase):
     def test_state_revert(self):
         """ensure that task_state is reverted after a failed operation"""
         actions = [
-            ("reboot_instance", task_states.REBOOTING, None),
-            ("stop_instance", task_states.STOPPING, None),
-            ("start_instance", task_states.STARTING, None),
+            ("reboot_instance", task_states.REBOOTING),
+            ("stop_instance", task_states.STOPPING),
+            ("start_instance", task_states.STARTING),
             ("terminate_instance", task_states.DELETING,
                                    task_states.DELETING),
-            ("power_off_instance", task_states.POWERING_OFF, None),
-            ("power_on_instance", task_states.POWERING_ON, None),
-            ("rebuild_instance", task_states.REBUILDING, None),
-            ("set_admin_password", task_states.UPDATING_PASSWORD, None),
-            ("rescue_instance", task_states.RESCUING, None),
-            ("unrescue_instance", task_states.UNRESCUING, None),
-            ("revert_resize", task_states.RESIZE_REVERTING, None),
-            ("prep_resize", task_states.RESIZE_PREP, None),
-            ("resize_instance", task_states.RESIZE_PREP, None),
-            ("pause_instance", task_states.PAUSING, None),
-            ("unpause_instance", task_states.UNPAUSING, None),
-            ("suspend_instance", task_states.SUSPENDING, None),
-            ("resume_instance", task_states.RESUMING, None),
+            ("power_off_instance", task_states.POWERING_OFF),
+            ("power_on_instance", task_states.POWERING_ON),
+            ("rebuild_instance", task_states.REBUILDING, None,
+                                 {'orig_image_ref': None,
+                                  'image_ref': None,
+                                  'injected_files': [],
+                                  'new_pass': ''}),
+            ("set_admin_password", task_states.UPDATING_PASSWORD),
+            ("rescue_instance", task_states.RESCUING),
+            ("unrescue_instance", task_states.UNRESCUING),
+            ("revert_resize", task_states.RESIZE_REVERTING, None,
+                              {'migration_id': None}),
+            ("prep_resize", task_states.RESIZE_PREP, None,
+                            {'image': {},
+                             'instance_type': {}}),
+            ("resize_instance", task_states.RESIZE_PREP, None,
+                                {'migration_id': None,
+                                 'image': {}}),
+            ("pause_instance", task_states.PAUSING),
+            ("unpause_instance", task_states.UNPAUSING),
+            ("suspend_instance", task_states.SUSPENDING),
+            ("resume_instance", task_states.RESUMING),
             ]
 
-        for operation, pre_state, post_state in actions:
-            self._test_state_revert(operation, pre_state, post_state)
+        for operation in actions:
+            self._test_state_revert(*operation)
 
     def _ensure_quota_reservations_committed(self):
         """Mock up commit of quota reservations"""
@@ -4671,7 +4684,7 @@ class ComputeAggrTestCase(BaseTestCase):
         self.aggr = db.aggregate_create(self.context, values)
 
     def test_add_aggregate_host(self):
-        def fake_driver_add_to_aggregate(context, aggregate, host):
+        def fake_driver_add_to_aggregate(context, aggregate, host, **_ignore):
             fake_driver_add_to_aggregate.called = True
             return {"foo": "bar"}
         self.stubs.Set(self.compute.driver, "add_to_aggregate",
@@ -4681,7 +4694,8 @@ class ComputeAggrTestCase(BaseTestCase):
         self.assertTrue(fake_driver_add_to_aggregate.called)
 
     def test_remove_aggregate_host(self):
-        def fake_driver_remove_from_aggregate(context, aggregate, host):
+        def fake_driver_remove_from_aggregate(context, aggregate, host,
+                                              **_ignore):
             fake_driver_remove_from_aggregate.called = True
             self.assertEqual("host", host, "host")
             return {"foo": "bar"}
@@ -4690,6 +4704,32 @@ class ComputeAggrTestCase(BaseTestCase):
 
         self.compute.remove_aggregate_host(self.context, self.aggr.id, "host")
         self.assertTrue(fake_driver_remove_from_aggregate.called)
+
+    def test_add_aggregate_host_passes_slave_info_to_driver(self):
+        def driver_add_to_aggregate(context, aggregate, host, **kwargs):
+            self.assertEquals(self.context, context)
+            self.assertEquals(aggregate.id, self.aggr.id)
+            self.assertEquals(host, "the_host")
+            self.assertEquals("SLAVE_INFO", kwargs.get("slave_info"))
+
+        self.stubs.Set(self.compute.driver, "add_to_aggregate",
+                       driver_add_to_aggregate)
+
+        self.compute.add_aggregate_host(self.context, self.aggr.id,
+            "the_host", slave_info="SLAVE_INFO")
+
+    def test_remove_from_aggregate_passes_slave_info_to_driver(self):
+        def driver_remove_from_aggregate(context, aggregate, host, **kwargs):
+            self.assertEquals(self.context, context)
+            self.assertEquals(aggregate.id, self.aggr.id)
+            self.assertEquals(host, "the_host")
+            self.assertEquals("SLAVE_INFO", kwargs.get("slave_info"))
+
+        self.stubs.Set(self.compute.driver, "remove_from_aggregate",
+                       driver_remove_from_aggregate)
+
+        self.compute.remove_aggregate_host(self.context,
+            self.aggr.id, "the_host", slave_info="SLAVE_INFO")
 
 
 class ComputePolicyTestCase(BaseTestCase):
