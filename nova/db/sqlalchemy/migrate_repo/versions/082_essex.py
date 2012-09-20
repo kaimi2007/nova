@@ -21,9 +21,6 @@ from sqlalchemy import Index, Integer, MetaData, String, Table, Text
 from nova import flags
 from nova.openstack.common import log as logging
 
-from nova import context
-from nova import db
-
 FLAGS = flags.FLAGS
 
 LOG = logging.getLogger(__name__)
@@ -39,8 +36,7 @@ def _populate_instance_types(instance_types_table):
         'm1.small': dict(mem=2048, vcpus=1, root_gb=10, eph_gb=20, flavid=2),
         'm1.medium': dict(mem=4096, vcpus=2, root_gb=10, eph_gb=40, flavid=3),
         'm1.large': dict(mem=8192, vcpus=4, root_gb=10, eph_gb=80, flavid=4),
-        'm1.xlarge':
-              dict(mem=16384, vcpus=8, root_gb=20, eph_gb=160, flavid=5),
+        'm1.xlarge': dict(mem=16384, vcpus=8, root_gb=10, eph_gb=160, flavid=5),
         'cg1.small':
               dict(mem=2048, vcpus=1, root_gb=20, eph_gb=20, flavid=101),
         'cg1.medium':
@@ -81,37 +77,38 @@ def _populate_instance_types(instance_types_table):
         'm1.medium': dict(mem=4096, vcpus=2, root_gb=40, eph_gb=0, flavid=3),
         'm1.large': dict(mem=8192, vcpus=4, root_gb=80, eph_gb=0, flavid=4),
         'm1.xlarge': dict(mem=16384, vcpus=8, root_gb=160, eph_gb=0, flavid=5),
-        'cg1.small': dict(mem=2048, vcpus=1, root_gb=20, eph_gb=0, flavid=101),
+        'cg1.small':
+              dict(mem=2048, vcpus=1, root_gb=20, eph_gb=20, flavid=101),
         'cg1.medium':
-              dict(mem=4096, vcpus=2, root_gb=40, eph_gb=0, flavid=102),
+              dict(mem=4096, vcpus=2, root_gb=20, eph_gb=40, flavid=102),
         'cg1.large':
-              dict(mem=8192, vcpus=4, root_gb=80, eph_gb=0, flavid=103),
+              dict(mem=8192, vcpus=4, root_gb=20, eph_gb=80, flavid=103),
         'cg1.xlarge':
-              dict(mem=16384, vcpus=8, root_gb=160, eph_gb=0, flavid=104),
+              dict(mem=16384, vcpus=8, root_gb=20, eph_gb=160, flavid=104),
         'cg1.2xlarge':
-              dict(mem=16384, vcpus=8, root_gb=320, eph_gb=0, flavid=105),
+              dict(mem=16384, vcpus=8, root_gb=20, eph_gb=320, flavid=105),
         'cg1.4xlarge':
-              dict(mem=22000, vcpus=8, root_gb=640, eph_gb=0, flavid=106),
+              dict(mem=22000, vcpus=8, root_gb=20, eph_gb=640, flavid=106),
         'sh1.small':
-              dict(mem=2048, vcpus=1, root_gb=20, eph_gb=0, flavid=201),
+              dict(mem=2048, vcpus=1, root_gb=20, eph_gb=20, flavid=201),
         'sh1.medium':
-              dict(mem=4096, vcpus=2, root_gb=40, eph_gb=0, flavid=202),
+              dict(mem=4096, vcpus=2, root_gb=20, eph_gb=40, flavid=202),
         'sh1.large':
-              dict(mem=8192, vcpus=4, root_gb=80, eph_gb=0, flavid=203),
+              dict(mem=8192, vcpus=4, root_gb=20, eph_gb=80, flavid=203),
         'sh1.xlarge':
-              dict(mem=16384, vcpus=8, root_gb=160, eph_gb=0, flavid=204),
+              dict(mem=16384, vcpus=8, root_gb=20, eph_gb=160, flavid=204),
         'sh1.2xlarge':
-              dict(mem=32768, vcpus=16, root_gb=320, eph_gb=0, flavid=205),
+              dict(mem=32768, vcpus=16, root_gb=20, eph_gb=320, flavid=205),
         'sh1.4xlarge':
-              dict(mem=65536, vcpus=32, root_gb=320, eph_gb=0, flavid=206),
+              dict(mem=65536, vcpus=32, root_gb=20, eph_gb=320, flavid=206),
         'sh1.8xlarge':
-              dict(mem=131072, vcpus=64, root_gb=500, eph_gb=0, flavid=207),
+              dict(mem=131072, vcpus=64, root_gb=20, eph_gb=500, flavid=207),
         'sh1.16xlarge':
-              dict(mem=262144, vcpus=128, root_gb=500, eph_gb=0, flavid=208),
+              dict(mem=262144, vcpus=128, root_gb=20, eph_gb=500, flavid=208),
         'sh1.32xlarge':
-              dict(mem=524288, vcpus=256, root_gb=1000, eph_gb=0, flavid=209),
+              dict(mem=524288, vcpus=256, root_gb=20, eph_gb=1000, flavid=209),
         'tp64.8x8':
-              dict(mem=16384, vcpus=1, root_gb=500, eph_gb=0, flavid=302)
+              dict(mem=16384, vcpus=1, root_gb=20, eph_gb=500, flavid=302)
         }
 
     try:
@@ -128,85 +125,6 @@ def _populate_instance_types(instance_types_table):
         LOG.info(repr(instance_types_table))
         LOG.exception('Exception while seeding instance_types table')
         raise
-
-
-def _populate_instance_type_extra_specs(instance_types):
-    try:
-        instance_type_rows = list(instance_types.select().execute())
-        for instance_type in instance_type_rows:
-            id = instance_type.id
-            name = instance_type.name
-            if (name == 'm1.tiny') or \
-                   (name == 'm1.small') or \
-                   (name == 'm1.medium') or \
-                   (name == 'm1.large') or \
-                   (name == 'm1.xlarge'):
-                    extra_specs = dict(cpu_arch='s== x86_64',
-                                       hypervisor_type='s== QEMU')
-            elif (name == 'cg1.small'):
-                    extra_specs = dict(
-                                      cpu_arch='s== x86_64',
-                                      gpu_arch='s== fermi',
-                                      gpus='= 1',
-                                      hypervisor_type='s== LXC')
-            elif (name == 'cg1.medium'):
-                    extra_specs = dict(
-                                      cpu_arch='s== x86_64',
-                                      gpu_arch='s== fermi',
-                                      gpus='= 2',
-                                      hypervisor_type='s== LXC')
-            elif (name == 'cg1.large'):
-                    extra_specs = dict(
-                                      cpu_arch='s== x86_64',
-                                      gpu_arch='s== fermi',
-                                      gpus='= 3',
-                                      hypervisor_type='s== LXC')
-            elif (name == 'cg1.xlarge'):
-                    extra_specs = dict(
-                                      cpu_arch='s== x86_64',
-                                      gpu_arch='s== fermi',
-                                      gpus='= 4',
-                                      hypervisor_type='s== LXC')
-            elif (name == 'cg1.2xlarge'):
-                    extra_specs = dict(
-                                      cpu_arch='s== x86_64',
-                                      gpu_arch='s== fermi',
-                                      gpus='= 4',
-                                      hypervisor_type='s== LXC')
-            elif (name == 'cg1.4xlarge'):
-                    extra_specs = dict(
-                                      cpu_arch='s== x86_64',
-                                      gpu_arch='s== fermi',
-                                      gpus='= 4',
-                                      hypervisor_type='s== LXC')
-            elif (name == 'sh1.small') or  \
-                     (name == 'sh1.medium') or \
-                     (name == 'sh1.large') or \
-                     (name == 'sh1.xlarge') or \
-                     (name == 'sh1.2xlarge') or \
-                     (name == 'sh1.4xlarge') or \
-                     (name == 'sh1.8xlarge') or \
-                     (name == 'sh1.16xlarge') or \
-                     (name == 'sh1.32xlarge'):
-                    extra_specs = dict(
-                                      cpu_arch='s== x86_64',
-                                      system_type='s== UV',
-                                      hypervisor_type='s== QEMU')
-            elif (name == 'tp64.8x8'):
-                    extra_specs = dict(
-                                      cpu_arch='s== tilepro64',
-                                      hypervisor_type='s== tilera_hv',
-                                      vcores='=64')
-
-            db.instance_type_extra_specs_update_or_create(
-                                          context.get_admin_context(),
-                                          id,
-                                          extra_specs)
-
-    except Exception:
-        LOG.exception('Exception while creating extra_specs table')
-        raise
-
 
 def upgrade(migrate_engine):
     meta = MetaData()
@@ -1135,7 +1053,6 @@ def upgrade(migrate_engine):
 
     # populate initial instance types
     _populate_instance_types(instance_types)
-    _populate_instance_type_extra_specs(instance_types)
 
 
 def downgrade(migrate_engine):
