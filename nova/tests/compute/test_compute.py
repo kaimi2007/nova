@@ -275,23 +275,36 @@ class ComputeTestCase(BaseTestCase):
         finally:
             db.instance_destroy(self.context, instance['uuid'])
 
-    def test_create_instance_insufficient_memory(self):
+    def test_create_instance_unlimited_memory(self):
+        """Default of memory limit=None is unlimited"""
+        self.flags(reserved_host_disk_mb=0, reserved_host_memory_mb=0)
+        self.compute.resource_tracker.update_available_resource(self.context)
         params = {"memory_mb": 999999999999}
+        filter_properties = {'limits': {'memory_mb': None}}
         instance = self._create_fake_instance(params)
-        self.assertRaises(exception.ComputeResourcesUnavailable,
-                self.compute.run_instance, self.context, instance=instance)
+        self.compute.run_instance(self.context, instance=instance,
+                filter_properties=filter_properties)
+        self.assertEqual(999999999999,
+                self.compute.resource_tracker.compute_node['memory_mb_used'])
 
-    def test_create_instance_insufficient_disk(self):
+    def test_create_instance_unlimited_disk(self):
+        self.flags(reserved_host_disk_mb=0, reserved_host_memory_mb=0)
+        self.compute.resource_tracker.update_available_resource(self.context)
         params = {"root_gb": 999999999999,
                   "ephemeral_gb": 99999999999}
+        filter_properties = {'limits': {'disk_gb': None}}
         instance = self._create_fake_instance(params)
-        self.assertRaises(exception.ComputeResourcesUnavailable,
-                self.compute.run_instance, self.context, instance=instance)
+        self.compute.run_instance(self.context, instance=instance,
+                filter_properties=filter_properties)
 
     def test_create_multiple_instances_then_starve(self):
+        self.flags(reserved_host_disk_mb=0, reserved_host_memory_mb=0)
+        self.compute.resource_tracker.update_available_resource(self.context)
+        filter_properties = {'limits': {'memory_mb': 4096, 'disk_gb': 1000}}
         params = {"memory_mb": 1024, "root_gb": 128, "ephemeral_gb": 128}
         instance = self._create_fake_instance(params)
-        self.compute.run_instance(self.context, instance=instance)
+        self.compute.run_instance(self.context, instance=instance,
+                                  filter_properties=filter_properties)
         self.assertEquals(1024,
                 self.compute.resource_tracker.compute_node['memory_mb_used'])
         self.assertEquals(256,
@@ -299,7 +312,8 @@ class ComputeTestCase(BaseTestCase):
 
         params = {"memory_mb": 2048, "root_gb": 256, "ephemeral_gb": 256}
         instance = self._create_fake_instance(params)
-        self.compute.run_instance(self.context, instance=instance)
+        self.compute.run_instance(self.context, instance=instance,
+                                  filter_properties=filter_properties)
         self.assertEquals(3072,
                 self.compute.resource_tracker.compute_node['memory_mb_used'])
         self.assertEquals(768,
@@ -308,10 +322,14 @@ class ComputeTestCase(BaseTestCase):
         params = {"memory_mb": 8192, "root_gb": 8192, "ephemeral_gb": 8192}
         instance = self._create_fake_instance(params)
         self.assertRaises(exception.ComputeResourcesUnavailable,
-                self.compute.run_instance, self.context, instance=instance)
+                self.compute.run_instance, self.context, instance=instance,
+                filter_properties=filter_properties)
 
     def test_create_instance_with_oversubscribed_ram(self):
         """Test passing of oversubscribed ram policy from the scheduler."""
+
+        self.flags(reserved_host_disk_mb=0, reserved_host_memory_mb=0)
+        self.compute.resource_tracker.update_available_resource(self.context)
 
         # get total memory as reported by virt driver:
         resources = self.compute.driver.get_available_resource()
@@ -326,7 +344,8 @@ class ComputeTestCase(BaseTestCase):
                   "ephemeral_gb": 128}
         instance = self._create_fake_instance(params)
 
-        filter_properties = dict(memory_mb_limit=oversub_limit_mb)
+        limits = {'memory_mb': oversub_limit_mb}
+        filter_properties = {'limits': limits}
         self.compute.run_instance(self.context, instance=instance,
                 filter_properties=filter_properties)
 
@@ -337,6 +356,9 @@ class ComputeTestCase(BaseTestCase):
         """Test passing of oversubscribed ram policy from the scheduler, but
         with insufficient memory.
         """
+        self.flags(reserved_host_disk_mb=0, reserved_host_memory_mb=0)
+        self.compute.resource_tracker.update_available_resource(self.context)
+
         # get total memory as reported by virt driver:
         resources = self.compute.driver.get_available_resource()
         total_mem_mb = resources['memory_mb']
@@ -350,8 +372,111 @@ class ComputeTestCase(BaseTestCase):
                   "ephemeral_gb": 128}
         instance = self._create_fake_instance(params)
 
-        filter_properties = dict(memory_mb_limit=oversub_limit_mb)
+        filter_properties = {'limits': {'memory_mb': oversub_limit_mb}}
 
+        self.assertRaises(exception.ComputeResourcesUnavailable,
+                self.compute.run_instance, self.context, instance=instance,
+                filter_properties=filter_properties)
+
+    def test_create_instance_with_oversubscribed_cpu(self):
+        """Test passing of oversubscribed cpu policy from the scheduler."""
+
+        self.flags(reserved_host_disk_mb=0, reserved_host_memory_mb=0)
+        self.compute.resource_tracker.update_available_resource(self.context)
+        limits = {'vcpu': 3}
+        filter_properties = {'limits': limits}
+
+        # get total memory as reported by virt driver:
+        resources = self.compute.driver.get_available_resource()
+        self.assertEqual(1, resources['vcpus'])
+
+        # build an instance, specifying an amount of memory that exceeds
+        # total_mem_mb, but is less than the oversubscribed limit:
+        params = {"memory_mb": 10, "root_gb": 1,
+                  "ephemeral_gb": 1, "vcpus": 2}
+        instance = self._create_fake_instance(params)
+        self.compute.run_instance(self.context, instance=instance,
+                filter_properties=filter_properties)
+
+        self.assertEqual(2,
+                self.compute.resource_tracker.compute_node['vcpus_used'])
+
+        # create one more instance:
+        params = {"memory_mb": 10, "root_gb": 1,
+                  "ephemeral_gb": 1, "vcpus": 1}
+        instance = self._create_fake_instance(params)
+        self.compute.run_instance(self.context, instance=instance,
+                filter_properties=filter_properties)
+
+        self.assertEqual(3,
+                self.compute.resource_tracker.compute_node['vcpus_used'])
+
+        # delete the instance:
+        instance['vm_state'] = vm_states.DELETED
+        self.compute.resource_tracker.update_usage(self.context,
+                instance=instance)
+
+        self.assertEqual(2,
+                self.compute.resource_tracker.compute_node['vcpus_used'])
+
+        # now oversubscribe vcpus and fail:
+        params = {"memory_mb": 10, "root_gb": 1,
+                  "ephemeral_gb": 1, "vcpus": 2}
+        instance = self._create_fake_instance(params)
+
+        limits = {'vcpu': 3}
+        filter_properties = {'limits': limits}
+        self.assertRaises(exception.ComputeResourcesUnavailable,
+                self.compute.run_instance, self.context, instance=instance,
+                filter_properties=filter_properties)
+
+    def test_create_instance_with_oversubscribed_disk(self):
+        """Test passing of oversubscribed disk policy from the scheduler."""
+
+        self.flags(reserved_host_disk_mb=0, reserved_host_memory_mb=0)
+        self.compute.resource_tracker.update_available_resource(self.context)
+
+        # get total memory as reported by virt driver:
+        resources = self.compute.driver.get_available_resource()
+        total_disk_gb = resources['local_gb']
+
+        oversub_limit_gb = total_disk_gb * 1.5
+        instance_gb = int(total_disk_gb * 1.45)
+
+        # build an instance, specifying an amount of disk that exceeds
+        # total_disk_gb, but is less than the oversubscribed limit:
+        params = {"root_gb": instance_gb, "memory_mb": 10}
+        instance = self._create_fake_instance(params)
+
+        limits = {'disk_gb': oversub_limit_gb}
+        filter_properties = {'limits': limits}
+        self.compute.run_instance(self.context, instance=instance,
+                filter_properties=filter_properties)
+
+        self.assertEqual(instance_gb,
+                self.compute.resource_tracker.compute_node['local_gb_used'])
+
+    def test_create_instance_with_oversubscribed_disk_fail(self):
+        """Test passing of oversubscribed disk policy from the scheduler, but
+        with insufficient disk.
+        """
+        self.flags(reserved_host_disk_mb=0, reserved_host_memory_mb=0)
+        self.compute.resource_tracker.update_available_resource(self.context)
+
+        # get total memory as reported by virt driver:
+        resources = self.compute.driver.get_available_resource()
+        total_disk_gb = resources['local_gb']
+
+        oversub_limit_gb = total_disk_gb * 1.5
+        instance_gb = int(total_disk_gb * 1.55)
+
+        # build an instance, specifying an amount of disk that exceeds
+        # total_disk_gb, but is less than the oversubscribed limit:
+        params = {"root_gb": instance_gb, "memory_mb": 10}
+        instance = self._create_fake_instance(params)
+
+        limits = {'disk_gb': oversub_limit_gb}
+        filter_properties = {'limits': limits}
         self.assertRaises(exception.ComputeResourcesUnavailable,
                 self.compute.run_instance, self.context, instance=instance,
                 filter_properties=filter_properties)
@@ -2139,7 +2264,7 @@ class ComputeTestCase(BaseTestCase):
 
         try:
             raise NotImplementedError('test')
-        except Exception:
+        except NotImplementedError:
             exc_info = sys.exc_info()
 
         self.stubs.Set(nova.db, 'instance_fault_create', fake_db_fault_create)
@@ -2167,7 +2292,7 @@ class ComputeTestCase(BaseTestCase):
 
         try:
             raise user_exc
-        except Exception:
+        except exception.Invalid:
             exc_info = sys.exc_info()
 
         self.stubs.Set(nova.db, 'instance_fault_create', fake_db_fault_create)
@@ -5193,10 +5318,6 @@ class ComputeReschedulingTestCase(BaseTestCase):
         self.assertEqual(self.updated_task_state, task_states.SCHEDULING)
 
 
-class ThatsNoOrdinaryRabbitException(Exception):
-    pass
-
-
 class ComputeReschedulingExceptionTestCase(BaseTestCase):
     """Tests for re-scheduling exception handling logic"""
 
@@ -5205,7 +5326,7 @@ class ComputeReschedulingExceptionTestCase(BaseTestCase):
 
         # cause _spawn to raise an exception to test the exception logic:
         def exploding_spawn(*args, **kwargs):
-            raise ThatsNoOrdinaryRabbitException()
+            raise test.TestingException()
         self.stubs.Set(self.compute, '_spawn',
                 exploding_spawn)
 
@@ -5216,7 +5337,7 @@ class ComputeReschedulingExceptionTestCase(BaseTestCase):
     def test_exception_with_rescheduling_disabled(self):
         """Spawn fails and re-scheduling is disabled."""
         # this won't be re-scheduled:
-        self.assertRaises(ThatsNoOrdinaryRabbitException,
+        self.assertRaises(test.TestingException,
                 self.compute._run_instance, self.context,
                 None, {}, None, None, None, None, self.fake_instance)
 
@@ -5228,7 +5349,7 @@ class ComputeReschedulingExceptionTestCase(BaseTestCase):
         retry = dict(num_attempts=1)
         filter_properties = dict(retry=retry)
         request_spec = dict(num_attempts=1)
-        self.assertNotRaises(ThatsNoOrdinaryRabbitException,
+        self.assertNotRaises(test.TestingException,
                 self.compute._run_instance, self.context,
                 filter_properties=filter_properties, request_spec=request_spec,
                 instance=self.fake_instance)
@@ -5246,6 +5367,6 @@ class ComputeReschedulingExceptionTestCase(BaseTestCase):
         self.stubs.Set(self.compute, '_reschedule', reschedule_explode)
 
         # the original exception should now be raised:
-        self.assertRaises(ThatsNoOrdinaryRabbitException,
+        self.assertRaises(test.TestingException,
                 self.compute._run_instance, self.context,
                 None, {}, None, None, None, None, self.fake_instance)
