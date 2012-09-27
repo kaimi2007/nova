@@ -880,8 +880,12 @@ class API(base.Base):
             if instance['vm_state'] == vm_states.RESIZED:
                 # If in the middle of a resize, use confirm_resize to
                 # ensure the original instance is cleaned up too
-                migration_ref = self.db.migration_get_by_instance_and_status(
-                        context, instance['uuid'], 'finished')
+                get_migration = self.db.migration_get_by_instance_and_status
+                try:
+                    migration_ref = get_migration(context.elevated(),
+                            instance['uuid'], 'finished')
+                except exception.MigrationNotFoundByStatus:
+                    migration_ref = None
                 if migration_ref:
                     src_host = migration_ref['source_compute']
                     # Call since this can race with the terminate_instance.
@@ -1435,9 +1439,6 @@ class API(base.Base):
         context = context.elevated()
         migration_ref = self.db.migration_get_by_instance_and_status(context,
                 instance['uuid'], 'finished')
-        if not migration_ref:
-            raise exception.MigrationNotFoundByStatus(
-                    instance_id=instance['uuid'], status='finished')
 
         # reverse quota reservation for increased resource usage
         deltas = self._reverse_upsize_quota_delta(context, migration_ref)
@@ -1462,9 +1463,6 @@ class API(base.Base):
         context = context.elevated()
         migration_ref = self.db.migration_get_by_instance_and_status(context,
                 instance['uuid'], 'finished')
-        if not migration_ref:
-            raise exception.MigrationNotFoundByStatus(
-                    instance_id=instance['uuid'], status='finished')
 
         # reserve quota only for any decrease in resource usage
         deltas = self._downsize_quota_delta(context, migration_ref)
