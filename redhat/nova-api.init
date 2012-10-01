@@ -1,0 +1,96 @@
+#!/bin/bash
+
+#
+# nova-api      OpenStack Nova API Server
+#
+# chkconfig: 2345 96 04
+# description: At the heart of the cloud framework is an API Server. \
+#              This API Server makes command and control of the      \
+#              hypervisor, storage, and networking programmatically  \
+#              available to users in realization of the definition   \
+#              of cloud computing.
+#
+# config: /etc/nova/nova.conf
+# config: /etc/nova/nova-api.conf
+# pidfile: /var/run/nova/nova-api.pid
+
+### BEGIN INIT INFO
+# Provides: nova-api
+# Required-Start: $local_fs $network $syslog
+# Required-Stop: $local_fs $syslog
+# Should-Start: $syslog
+# Should-Stop: $network $syslog
+# Default-Start: 3 4 5
+# Default-Stop: 0 2 1 6
+# Short-Description: OpenStack Nova API Server
+# Description: At the heart of the cloud framework is an API Server.
+#              This API Server makes command and control of the
+#              hypervisor, storage, and networking programmatically
+#              available to users in realization of the definition
+#              of cloud computing.
+### END INIT INFO
+
+# Source function library.
+. /etc/init.d/functions
+
+prog="OpenStack Nova API Server"
+suffix="api"
+flgfile=/etc/nova/nova.conf
+logfile=/var/log/nova/nova-$suffix.log
+pidfile=/var/run/nova/nova-$suffix.pid
+lockfile=/var/lock/subsys/nova-$suffix
+binfile=/usr/bin/nova-$suffix
+daemonuser=nova
+
+start() {
+    echo -n "Starting $prog: "
+    start-stop-daemon --start --oknodo --background --chuid $daemonuser --make-pidfile --pidfile $pidfile --startas $binfile --
+    retval=$?
+    [ $retval -eq 0 ] && success || failure
+    echo
+    [ $retval -eq 0 ] && touch $lockfile
+    return $retval
+}
+
+stop() {
+    echo -n "Stopping $prog: "
+    start-stop-daemon --stop --oknodo --pidfile $pidfile
+    retval=$?
+    [ $retval -eq 0 ] && success || failure
+    echo
+    [ $retval -eq 0 ] && rm -f $lockfile $pidfile
+    return $?
+}
+
+rh_status() {
+    status -p $pidfile $binfile
+}
+
+restart() {
+    stop
+    start
+}
+
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    status)
+        rh_status
+        ;;
+    restart)
+        restart
+        ;;
+    condrestart|try-restart)
+        [ -f $lockfile ] && restart
+        ;;
+    *)
+        echo "Usage: service $(basename $0) {start|stop|status|restart|condrestart|try-restart}"
+        exit 1
+        ;;
+esac
+
+exit $?
