@@ -24,9 +24,6 @@ LOG = logging.getLogger(__name__)
 
 
 class SolidFireVolumeTestCase(test.TestCase):
-    def setUp(self):
-        super(SolidFireVolumeTestCase, self).setUp()
-
     def fake_issue_api_request(obj, method, params):
         if method is 'GetClusterInfo':
             LOG.info('Called Fake GetClusterInfo...')
@@ -84,6 +81,13 @@ class SolidFireVolumeTestCase(test.TestCase):
         else:
             LOG.error('Crap, unimplemented API call in Fake:%s' % method)
 
+    def fake_issue_api_request_no_volume(obj, method, params):
+        if method is 'ListVolumesForAccount':
+            LOG.info('Called Fake ListVolumesForAccount...')
+            return {'result': {'volumes': []}}
+        else:
+            return obj.fake_issue_api_request(method, params)
+
     def fake_issue_api_request_fails(obj, method, params):
         return {'error': {'code': 000,
                           'name': 'DummyError',
@@ -126,11 +130,8 @@ class SolidFireVolumeTestCase(test.TestCase):
                    'size': 1,
                    'id': 'a720b3c0-d1f0-11e1-9b23-0800200c9a66'}
         sfv = SolidFire()
-        try:
-            sfv.create_volume(testvol)
-            self.fail("Should have thrown Error")
-        except Exception:
-            pass
+        self.assertRaises(exception.SolidFireAPIDataException,
+                          sfv.create_volume, testvol)
 
     def test_create_sfaccount(self):
         sfv = SolidFire()
@@ -172,17 +173,14 @@ class SolidFireVolumeTestCase(test.TestCase):
 
     def test_delete_volume_fails_no_volume(self):
         self.stubs.Set(SolidFire, '_issue_api_request',
-                       self.fake_issue_api_request)
+                       self.fake_issue_api_request_no_volume)
         testvol = {'project_id': 'testprjid',
                    'name': 'no-name',
                    'size': 1,
                    'id': 'a720b3c0-d1f0-11e1-9b23-0800200c9a66'}
         sfv = SolidFire()
-        try:
-            model_update = sfv.delete_volume(testvol)
-            self.fail("Should have thrown Error")
-        except Exception:
-            pass
+        self.assertRaises(exception.VolumeNotFound,
+                          sfv.delete_volume, testvol)
 
     def test_delete_volume_fails_account_lookup(self):
         self.stubs.Set(SolidFire, '_issue_api_request',

@@ -19,6 +19,8 @@ Manage hosts in the current zone.
 
 import UserDict
 
+from nova.compute import task_states
+from nova.compute import vm_states
 from nova import db
 from nova import exception
 from nova import flags
@@ -27,14 +29,7 @@ from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
 from nova.scheduler import filters
 
-
 host_manager_opts = [
-    cfg.IntOpt('reserved_host_disk_mb',
-               default=0,
-               help='Amount of disk in MB to reserve for host/dom0'),
-    cfg.IntOpt('reserved_host_memory_mb',
-               default=512,
-               help='Amount of memory in MB to reserve for host/dom0'),
     cfg.MultiStrOpt('scheduler_available_filters',
             default=['nova.scheduler.filters.standard_filters'],
             help='Filter classes available to the scheduler which may '
@@ -112,35 +107,81 @@ class HostState(object):
         self.service = ReadOnlyDict(service)
         # Mutable available resources.
         # These will change as resources are virtually "consumed".
+        self.total_usable_disk_gb = 0
+        self.disk_mb_used = 0
         self.free_ram_mb = 0
         self.free_disk_mb = 0
         self.vcpus_total = 0
         self.vcpus_used = 0
+        # Valid vm types on this host: 'pv', 'hvm' or 'all'
+        if 'allowed_vm_type' in self.capabilities:
+            self.allowed_vm_type = self.capabilities['allowed_vm_type']
+        else:
+            self.allowed_vm_type = 'all'
+
+        # Additional host information from the compute node stats:
+        self.vm_states = {}
+        self.task_states = {}
+        self.num_instances = 0
+        self.num_instances_by_project = {}
+        self.num_instances_by_os_type = {}
+        self.num_io_ops = 0
+
+        # Resource oversubscription values for the compute host:
+        self.limits = {}
 
     def update_from_compute_node(self, compute):
         """Update information about a host from its compute_node info."""
-        all_disk_mb = compute['local_gb'] * 1024
         all_ram_mb = compute['memory_mb']
 
         # Assume virtual size is all consumed by instances if use qcow2 disk.
         least = compute.get('disk_available_least')
         free_disk_mb = least if least is not None else compute['free_disk_gb']
         free_disk_mb *= 1024
-        free_ram_mb = compute['free_ram_mb']
 
-        if FLAGS.reserved_host_disk_mb > 0:
-            all_disk_mb -= FLAGS.reserved_host_disk_mb
-            free_disk_mb -= FLAGS.reserved_host_disk_mb
-        if FLAGS.reserved_host_memory_mb > 0:
-            all_ram_mb -= FLAGS.reserved_host_memory_mb
-            free_ram_mb -= FLAGS.reserved_host_memory_mb
+        self.disk_mb_used = compute['local_gb_used'] * 1024
 
         #NOTE(jogo) free_ram_mb can be negative
-        self.free_ram_mb = free_ram_mb
+        self.free_ram_mb = compute['free_ram_mb']
         self.total_usable_ram_mb = all_ram_mb
+        self.total_usable_disk_gb = compute['local_gb']
         self.free_disk_mb = free_disk_mb
         self.vcpus_total = compute['vcpus']
         self.vcpus_used = compute['vcpus_used']
+
+        stats = compute.get('stats', [])
+        statmap = self._statmap(stats)
+
+        # Track number of instances on host
+        self.num_instances = int(statmap.get('num_instances', 0))
+
+        # Track number of instances by project_id
+        project_id_keys = [k for k in statmap.keys() if
+                k.startswith("num_proj_")]
+        for key in project_id_keys:
+            project_id = key[9:]
+            self.num_instances_by_project[project_id] = int(statmap[key])
+
+        # Track number of instances in certain vm_states
+        vm_state_keys = [k for k in statmap.keys() if k.startswith("num_vm_")]
+        for key in vm_state_keys:
+            vm_state = key[7:]
+            self.vm_states[vm_state] = int(statmap[key])
+
+        # Track number of instances in certain task_states
+        task_state_keys = [k for k in statmap.keys() if
+                k.startswith("num_task_")]
+        for key in task_state_keys:
+            task_state = key[9:]
+            self.task_states[task_state] = int(statmap[key])
+
+        # Track number of instances by host_type
+        os_keys = [k for k in statmap.keys() if k.startswith("num_os_type_")]
+        for key in os_keys:
+            os = key[12:]
+            self.num_instances_by_os_type[os] = int(statmap[key])
+
+        self.num_io_ops = int(statmap.get('io_workload', 0))
 
     def consume_from_instance(self, instance):
         """Incrementally update host state from an instance"""
@@ -150,6 +191,44 @@ class HostState(object):
         self.free_ram_mb -= ram_mb
         self.free_disk_mb -= disk_mb
         self.vcpus_used += vcpus
+
+        # Track number of instances on host
+        self.num_instances += 1
+
+        # Track number of instances by project_id
+        project_id = instance.get('project_id')
+        if project_id not in self.num_instances_by_project:
+            self.num_instances_by_project[project_id] = 0
+        self.num_instances_by_project[project_id] += 1
+
+        # Track number of instances in certain vm_states
+        vm_state = instance.get('vm_state', vm_states.BUILDING)
+        if vm_state not in self.vm_states:
+            self.vm_states[vm_state] = 0
+        self.vm_states[vm_state] += 1
+
+        # Track number of instances in certain task_states
+        task_state = instance.get('task_state')
+        if task_state not in self.task_states:
+            self.task_states[task_state] = 0
+        self.task_states[task_state] += 1
+
+        # Track number of instances by host_type
+        os_type = instance.get('os_type')
+        if os_type not in self.num_instances_by_os_type:
+            self.num_instances_by_os_type[os_type] = 0
+        self.num_instances_by_os_type[os_type] += 1
+
+        vm_state = instance.get('vm_state', vm_states.BUILDING)
+        task_state = instance.get('task_state')
+        if vm_state == vm_states.BUILDING or task_state in [
+                task_states.RESIZE_MIGRATING, task_states.REBUILDING,
+                task_states.RESIZE_PREP, task_states.IMAGE_SNAPSHOT,
+                task_states.IMAGE_BACKUP]:
+            self.num_io_ops += 1
+
+    def _statmap(self, stats):
+        return dict((st['key'], st['value']) for st in stats)
 
     def passes_filters(self, filter_fns, filter_properties):
         """Return whether or not this host passes filters."""
@@ -178,8 +257,9 @@ class HostState(object):
         return True
 
     def __repr__(self):
-        return ("host '%s': free_ram_mb:%s free_disk_mb:%s" %
-                (self.host, self.free_ram_mb, self.free_disk_mb))
+        return ("%s ram:%s disk:%s io_ops:%s instances:%s vm_type:%s" %
+                (self.host, self.free_ram_mb, self.free_disk_mb,
+                 self.num_io_ops, self.num_instances, self.allowed_vm_type))
 
 
 class HostManager(object):

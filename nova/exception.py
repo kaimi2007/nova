@@ -213,6 +213,10 @@ class PolicyNotAuthorized(NotAuthorized):
     message = _("Policy doesn't allow %(action)s to be performed.")
 
 
+class ImageNotActive(NovaException):
+    message = _("Image %(image_id)s is not active.")
+
+
 class ImageNotAuthorized(NovaException):
     message = _("Not authorized for image %(image_id)s.")
 
@@ -876,7 +880,11 @@ class InstanceExists(Duplicate):
 
 
 class InstanceTypeExists(Duplicate):
-    message = _("Instance Type %(name)s already exists.")
+    message = _("Instance Type with name %(name)s already exists.")
+
+
+class InstanceTypeIdExists(Duplicate):
+    message = _("Instance Type with ID %(flavor_id)s already exists.")
 
 
 class FlavorAccessExists(Duplicate):

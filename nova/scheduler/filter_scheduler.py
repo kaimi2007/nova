@@ -132,6 +132,9 @@ class FilterScheduler(driver.Scheduler):
         # Add a retry entry for the selected compute host:
         self._add_retry_host(filter_properties, weighted_host.host_state.host)
 
+        self._add_oversubscription_policy(filter_properties,
+                weighted_host.host_state)
+
         payload = dict(request_spec=request_spec,
                        weighted_host=weighted_host.to_dict(),
                        instance_id=instance_uuid)
@@ -160,6 +163,9 @@ class FilterScheduler(driver.Scheduler):
         hosts = retry['hosts']
         hosts.append(host)
 
+    def _add_oversubscription_policy(self, filter_properties, host_state):
+        filter_properties['limits'] = host_state.limits
+
     def _get_configuration_options(self):
         """Fetch options dictionary. Broken out for testing."""
         return self.options.get_configuration()
@@ -168,7 +174,11 @@ class FilterScheduler(driver.Scheduler):
         """Stuff things into filter_properties.  Can be overridden in a
         subclass to add more data.
         """
-        pass
+        # Save useful information from the request spec for filter processing:
+        project_id = request_spec['instance_properties']['project_id']
+        os_type = request_spec['instance_properties']['os_type']
+        filter_properties['project_id'] = project_id
+        filter_properties['os_type'] = os_type
 
     def _max_attempts(self):
         max_attempts = FLAGS.scheduler_max_attempts

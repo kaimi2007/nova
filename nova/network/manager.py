@@ -143,7 +143,7 @@ network_opts = [
                 default=False,
                 help='Autoassigning floating ip to VM'),
     cfg.StrOpt('network_host',
-               default=socket.gethostname(),
+               default=socket.getfqdn(),
                help='Network host to use for ip allocation in flat modes'),
     cfg.BoolOpt('fake_call',
                 default=False,
@@ -334,6 +334,10 @@ class FloatingIP(object):
                                        floating_address,
                                        fixed_address,
                                        affect_auto_assigned=True)
+
+            # create a fresh set of network info that contains the floating ip
+            nw_info = self.get_instance_nw_info(context, **kwargs)
+
         return nw_info
 
     @wrap_check_policy
@@ -449,7 +453,7 @@ class FloatingIP(object):
             return
         use_quota = not floating_ip.get('auto_assigned')
 
-        # make sure project ownz this floating ip (allocated)
+        # make sure project owns this floating ip (allocated)
         self._floating_ip_owned_by_project(context, floating_ip)
 
         # make sure floating ip is not associated
@@ -498,7 +502,7 @@ class FloatingIP(object):
         if not affect_auto_assigned and floating_ip.get('auto_assigned'):
             return
 
-        # make sure project ownz this floating ip (allocated)
+        # make sure project owns this floating ip (allocated)
         self._floating_ip_owned_by_project(context, floating_ip)
 
         # disassociate any already associated
@@ -578,7 +582,7 @@ class FloatingIP(object):
         if not affect_auto_assigned and floating_ip.get('auto_assigned'):
             return
 
-        # make sure project ownz this floating ip (allocated)
+        # make sure project owns this floating ip (allocated)
         self._floating_ip_owned_by_project(context, floating_ip)
 
         # make sure floating ip is associated

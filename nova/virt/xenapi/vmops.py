@@ -645,9 +645,13 @@ class VMOps(object):
                                        step=1,
                                        total_steps=RESIZE_TOTAL_STEPS)
 
+        vdi_ref, vm_vdi_rec = vm_utils.get_vdi_for_vm_safely(
+                self._session, vm_ref)
+        vdi_uuid = vm_vdi_rec['uuid']
+
         old_gb = instance['root_gb']
         new_gb = instance_type['root_gb']
-        LOG.debug(_("Resizing down VDI %(cow_uuid)s from "
+        LOG.debug(_("Resizing down VDI %(vdi_uuid)s from "
                     "%(old_gb)dGB to %(new_gb)dGB"), locals(),
                   instance=instance)
 
@@ -660,8 +664,6 @@ class VMOps(object):
 
         # 3. Copy VDI, resize partition and filesystem, forget VDI,
         # truncate VHD
-        vdi_ref, vm_vdi_rec = vm_utils.get_vdi_for_vm_safely(
-                self._session, vm_ref)
         new_ref, new_uuid = vm_utils.resize_disk(self._session,
                                                  instance,
                                                  vdi_ref,
@@ -736,18 +738,18 @@ class VMOps(object):
                                        step=0,
                                        total_steps=RESIZE_TOTAL_STEPS)
 
+        # NOTE(sirp): in case we're resizing to the same host (for dev
+        # purposes), apply a suffix to name-label so the two VM records
+        # extant until a confirm_resize don't collide.
+        name_label = self._get_orig_vm_name_label(instance)
+        vm_utils.set_vm_name_label(self._session, vm_ref, name_label)
+
         if resize_down:
             self._migrate_disk_resizing_down(
                     context, instance, dest, instance_type, vm_ref, sr_path)
         else:
             self._migrate_disk_resizing_up(
                     context, instance, dest, vm_ref, sr_path)
-
-        # NOTE(sirp): in case we're resizing to the same host (for dev
-        # purposes), apply a suffix to name-label so the two VM records
-        # extant until a confirm_resize don't collide.
-        name_label = self._get_orig_vm_name_label(instance)
-        vm_utils.set_vm_name_label(self._session, vm_ref, name_label)
 
         # NOTE(sirp): disk_info isn't used by the xenapi driver, instead it
         # uses a staging-area (/images/instance<uuid>) and sequence-numbered
@@ -1206,34 +1208,31 @@ class VMOps(object):
         vm_rec = self._session.call_xenapi("VM.get_record", vm_ref)
         return vm_utils.compile_diagnostics(vm_rec)
 
-    def get_all_bw_usage(self, start_time, stop_time=None):
-        """Return bandwidth usage info for each interface on each
+    def _get_vif_device_map(self, vm_rec):
+        vif_map = {}
+        for vif in [self._session.call_xenapi("VIF.get_record", vrec)
+                    for vrec in vm_rec['VIFs']]:
+            vif_map[vif['device']] = vif['MAC']
+        return vif_map
+
+    def get_all_bw_counters(self):
+        """Return running bandwidth counter for each interface on each
            running VM"""
-        try:
-            metrics = vm_utils.compile_metrics(start_time, stop_time)
-        except exception.CouldNotFetchMetrics:
-            LOG.exception(_("Could not get bandwidth info."))
-            return {}
+        counters = vm_utils.fetch_bandwidth(self._session)
         bw = {}
-        for uuid, data in metrics.iteritems():
-            vm_ref = self._session.call_xenapi("VM.get_by_uuid", uuid)
-            vm_rec = self._session.call_xenapi("VM.get_record", vm_ref)
-            vif_map = {}
-            for vif in [self._session.call_xenapi("VIF.get_record", vrec)
-                        for vrec in vm_rec['VIFs']]:
-                vif_map[vif['device']] = vif['MAC']
+        for vm_ref, vm_rec in vm_utils.list_vms(self._session):
+            vif_map = self._get_vif_device_map(vm_rec)
             name = vm_rec['name_label']
             if 'nova_uuid' not in vm_rec['other_config']:
                 continue
+            dom = vm_rec.get('domid')
+            if dom is None or dom not in counters:
+                continue
             vifs_bw = bw.setdefault(name, {})
-            for key, val in data.iteritems():
-                if key.startswith('vif_'):
-                    vname = key.split('_')[1]
-                    vif_bw = vifs_bw.setdefault(vif_map[vname], {})
-                    if key.endswith('tx'):
-                        vif_bw['bw_out'] = int(val)
-                    if key.endswith('rx'):
-                        vif_bw['bw_in'] = int(val)
+            for vif_num, vif_data in counters[dom].iteritems():
+                mac = vif_map[vif_num]
+                vif_data['mac_address'] = mac
+                vifs_bw[mac] = vif_data
         return bw
 
     def get_console_output(self, instance):

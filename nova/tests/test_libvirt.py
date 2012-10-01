@@ -3403,6 +3403,9 @@ class LibvirtUtilsTestCase(test.TestCase):
 
     def test_create_cow_image(self):
         self.mox.StubOutWithMock(utils, 'execute')
+        rval = ('', '')
+        utils.execute('env', 'LC_ALL=C', 'LANG=C',
+                      'qemu-img', 'info', '/some/path').AndReturn(rval)
         utils.execute('qemu-img', 'create', '-f', 'qcow2',
                       '-o', 'backing_file=/some/path',
                       '/the/new/cow')
@@ -3909,9 +3912,6 @@ class LibvirtNonblockingTestCase(test.TestCase):
     def setUp(self):
         super(LibvirtNonblockingTestCase, self).setUp()
         self.flags(libvirt_nonblocking=True, libvirt_uri="test:///default")
-
-    def tearDown(self):
-        super(LibvirtNonblockingTestCase, self).tearDown()
 
     def test_connection_to_primitive(self):
         """Test bug 962840"""

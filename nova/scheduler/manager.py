@@ -21,7 +21,6 @@
 Scheduler Service
 """
 
-import functools
 import sys
 
 from nova.compute import utils as compute_utils
@@ -36,7 +35,6 @@ from nova.openstack.common import excutils
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 from nova.openstack.common.notifier import api as notifier
-from nova.openstack.common.rpc import common as rpc_common
 from nova import quota
 
 
@@ -78,9 +76,9 @@ class SchedulerManager(manager.Manager):
                 context, volume_id, snapshot_id, image_id)
         except Exception as ex:
             with excutils.save_and_reraise_exception():
-                self._set_vm_state_and_notify('create_volume',
-                                             {'vm_state': vm_states.ERROR},
-                                             context, ex, {})
+                LOG.warning(_("Failed to schedule create_volume: %(ex)s") %
+                            locals())
+                db.volume_update(context, volume_id, {'status': 'error'})
 
     def live_migration(self, context, instance, dest,
                        block_migration, disk_over_commit):

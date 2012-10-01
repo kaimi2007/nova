@@ -47,8 +47,6 @@ from sqlalchemy.sql.expression import literal_column
 from sqlalchemy.sql import func
 
 FLAGS = flags.FLAGS
-flags.DECLARE('reserved_host_disk_mb', 'nova.scheduler.host_manager')
-flags.DECLARE('reserved_host_memory_mb', 'nova.scheduler.host_manager')
 
 LOG = logging.getLogger(__name__)
 
@@ -3655,6 +3653,12 @@ def security_group_destroy(context, security_group_id):
                         'deleted_at': timeutils.utcnow(),
                         'updated_at': literal_column('updated_at')})
 
+        session.query(models.SecurityGroupIngressRule).\
+                filter_by(parent_group_id=security_group_id).\
+                update({'deleted': True,
+                        'deleted_at': timeutils.utcnow(),
+                        'updated_at': literal_column('updated_at')})
+
 
 @require_context
 def security_group_count_by_project(context, project_id, session=None):
@@ -3953,7 +3957,7 @@ def instance_type_create(context, values):
         try:
             instance_type_get_by_flavor_id(context, values['flavorid'],
                                            session)
-            raise exception.InstanceTypeExists(name=values['name'])
+            raise exception.InstanceTypeIdExists(flavor_id=values['flavorid'])
         except exception.FlavorNotFound:
             pass
         try:
@@ -4387,6 +4391,15 @@ def agent_build_update(context, agent_build_id, values):
 ####################
 
 @require_context
+def bw_usage_get(context, uuid, start_period, mac):
+    return model_query(context, models.BandwidthUsage, read_deleted="yes").\
+                      filter_by(start_period=start_period).\
+                      filter_by(uuid=uuid).\
+                      filter_by(mac=mac).\
+                      first()
+
+
+@require_context
 def bw_usage_get_by_uuids(context, uuids, start_period):
     return model_query(context, models.BandwidthUsage, read_deleted="yes").\
                    filter(models.BandwidthUsage.uuid.in_(uuids)).\
@@ -4396,7 +4409,8 @@ def bw_usage_get_by_uuids(context, uuids, start_period):
 
 @require_context
 def bw_usage_update(context, uuid, mac, start_period, bw_in, bw_out,
-                    last_refreshed=None, session=None):
+                    last_ctr_in, last_ctr_out, last_refreshed=None,
+                    session=None):
     if not session:
         session = get_session()
 
@@ -4408,6 +4422,8 @@ def bw_usage_update(context, uuid, mac, start_period, bw_in, bw_out,
     # records.  Fall back to creation when no rows are updated.
     with session.begin():
         values = {'last_refreshed': last_refreshed,
+                  'last_ctr_in': last_ctr_in,
+                  'last_ctr_out': last_ctr_out,
                   'bw_in': bw_in,
                   'bw_out': bw_out}
         rows = model_query(context, models.BandwidthUsage,
@@ -4426,6 +4442,8 @@ def bw_usage_update(context, uuid, mac, start_period, bw_in, bw_out,
         bwusage.last_refreshed = last_refreshed
         bwusage.bw_in = bw_in
         bwusage.bw_out = bw_out
+        bwusage.last_ctr_in = last_ctr_in
+        bwusage.last_ctr_out = last_ctr_out
         bwusage.save(session=session)
 
 

@@ -20,8 +20,10 @@ import uuid
 
 from lxml import etree
 
+from nova.cloudpipe.pipelib import CloudPipe
 from nova import context
 from nova import flags
+from nova.network.manager import NetworkManager
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
 from nova.openstack.common.log import logging
@@ -145,25 +147,24 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
             # which order in different way when using a private key itself or
             # its regular expression, and after all doesn't interfere with
             # other tests.
+            # Besides that, there are some cases like Aggregates extension
+            # where we got a list of strings. For those cases key will be None
+            # (python's default) and the elements will be compared directly.
             # Should we define a criteria when ordering json? Doesn't seems
             # necessary so far.
-            for ex_obj, res_obj in zip(sorted(expected, key=lambda k:
-                                                        k.get('__tag__', k)),
-                                       sorted(result, key=lambda k:
-                                                        k.get('__tag__', k))):
+            key = (lambda k: k.get('__tag__', k) if isinstance(k, dict)
+                                                 else None)
+            for ex_obj, res_obj in zip(sorted(expected, key=key),
+                                       sorted(result, key=key)):
                 res = self._compare_result(subs, ex_obj, res_obj)
                 matched_value = res or matched_value
 
         elif isinstance(expected, basestring) and '%' in expected:
-            try:
-                # NOTE(vish): escape stuff for regex
-                for char in ['[', ']', '<', '>', '?']:
-                    expected = expected.replace(char, '\%s' % char)
-                expected = expected % subs
-                match = re.match(expected, result)
-            except Exception as exc:
-                raise NoMatch(_('Values do not match:\n'
-                        '%(expected)s\n%(result)s') % locals())
+            # NOTE(vish): escape stuff for regex
+            for char in '[]<>?':
+                expected = expected.replace(char, '\\%s' % char)
+            expected = expected % subs
+            match = re.match(expected, result)
             if not match:
                 raise NoMatch(_('Values do not match:\n'
                         '%(expected)s\n%(result)s') % locals())
@@ -381,6 +382,26 @@ class ServersMetadataXmlTest(ServersMetadataJsonTest):
     ctype = 'xml'
 
 
+class ServersIpsJsonTest(ServersSampleBase):
+    def test_get(self):
+        """Test getting a server's IP information"""
+        uuid = self._post_server()
+        response = self._do_get('servers/%s/ips' % uuid)
+        subs = self._get_regexes()
+        return self._verify_response('server-ips-resp', subs, response)
+
+    def test_get_by_network(self):
+        """Test getting a server's IP information by network id"""
+        uuid = self._post_server()
+        response = self._do_get('servers/%s/ips/private' % uuid)
+        subs = self._get_regexes()
+        return self._verify_response('server-ips-network-resp', subs, response)
+
+
+class ServersIpsXmlTest(ServersIpsJsonTest):
+    ctype = 'xml'
+
+
 class ExtensionsSampleJsonTest(ApiSampleTestBase):
     all_extensions = True
 
@@ -507,9 +528,6 @@ class LimitsSampleXmlTest(LimitsSampleJsonTest):
 
 
 class ServersActionsJsonTest(ServersSampleBase):
-    def setUp(self):
-        super(ServersActionsJsonTest, self).setUp()
-
     def _test_server_action(self, uuid, action,
                             subs={}, resp_tpl=None, code=202):
         subs.update({'action': action})
@@ -575,6 +593,14 @@ class ServersActionsJsonTest(ServersSampleBase):
 
 class ServersActionsXmlTest(ServersActionsJsonTest):
     ctype = 'xml'
+
+
+class ServersActionsAllJsonTest(ServersActionsJsonTest):
+    all_extensions = True
+
+
+class ServersActionsAllXmlTest(ServersActionsXmlTest):
+    all_extensions = True
 
 
 class ServerStartStopJsonTest(ServersSampleBase):
@@ -917,3 +943,120 @@ class KeyPairsSampleJsonTest(ApiSampleTestBase):
 
 class KeyPairsSampleXmlTest(KeyPairsSampleJsonTest):
     ctype = 'xml'
+
+
+class RescueJsonTest(ServersSampleBase):
+    extension_name = ("nova.api.openstack.compute.contrib"
+                     ".rescue.Rescue")
+
+    def _rescue(self, uuid):
+        req_subs = {
+            'password': 'MySecretPass'
+        }
+        response = self._do_post('servers/%s/action' % uuid,
+                                 'server-rescue-req', req_subs)
+        self._verify_response('server-rescue', req_subs, response)
+
+    def _unrescue(self, uuid):
+        response = self._do_post('servers/%s/action' % uuid,
+                                 'server-unrescue-req', {})
+        self.assertEqual(response.status, 202)
+
+    def test_server_rescue(self):
+        uuid = self._post_server()
+
+        self._rescue(uuid)
+
+        # Do a server get to make sure that the 'RESCUE' state is set
+        response = self._do_get('servers/%s' % uuid)
+        subs = self._get_regexes()
+        subs['hostid'] = '[a-f0-9]+'
+        subs['id'] = uuid
+        subs['status'] = 'RESCUE'
+
+        self._verify_response('server-get-resp-rescue', subs, response)
+
+    def test_server_unrescue(self):
+        uuid = self._post_server()
+
+        self._rescue(uuid)
+        self._unrescue(uuid)
+
+        # Do a server get to make sure that the 'ACTIVE' state is back
+        response = self._do_get('servers/%s' % uuid)
+        subs = self._get_regexes()
+        subs['hostid'] = '[a-f0-9]+'
+        subs['id'] = uuid
+        subs['status'] = 'ACTIVE'
+
+        self._verify_response('server-get-resp-unrescue', subs, response)
+
+
+class RescueXmlTest(RescueJsonTest):
+    ctype = 'xml'
+
+
+class VirtualInterfacesJsonTest(ServersSampleBase):
+    extension_name = ("nova.api.openstack.compute.contrib"
+                     ".virtual_interfaces.Virtual_interfaces")
+
+    def test_vifs_list(self):
+        uuid = self._post_server()
+
+        response = self._do_get('servers/%s/os-virtual-interfaces' % uuid)
+        self.assertEqual(response.status, 200)
+
+        subs = self._get_regexes()
+        subs['mac_addr'] = '(?:[a-f0-9]{2}:){5}[a-f0-9]{2}'
+
+        self._verify_response('vifs-list-resp', subs, response)
+
+
+class VirtualInterfacesXmlTest(VirtualInterfacesJsonTest):
+    ctype = 'xml'
+
+
+class CloudPipeSampleJsonTest(ApiSampleTestBase):
+    extension_name = "nova.api.openstack.compute.contrib.cloudpipe.Cloudpipe"
+
+    def setUp(self):
+        super(CloudPipeSampleJsonTest, self).setUp()
+
+        def get_user_data(self, project_id):
+            """Stub method to generate user data for cloudpipe tests"""
+            return "VVNFUiBEQVRB\n"
+
+        def network_api_get(self, context, network_uuid):
+            """Stub to get a valid network and its information"""
+            return {'vpn_public_address': '127.0.0.1',
+                    'vpn_public_port': 22}
+
+        self.stubs.Set(CloudPipe, 'get_encoded_zip', get_user_data)
+        self.stubs.Set(NetworkManager, "get_network", network_api_get)
+
+    def test_cloud_pipe_create(self):
+        """Get api samples of cloud pipe extension creation"""
+        FLAGS.vpn_image_id = fake.get_valid_image_id()
+        project = {'project_id': 'cloudpipe-' + str(uuid.uuid4())}
+        response = self._do_post('os-cloudpipe', 'cloud-pipe-create-req',
+                                 project)
+        self.assertEqual(response.status, 200)
+        subs = self._get_regexes()
+        subs.update(project)
+        subs['image_id'] = FLAGS.vpn_image_id
+        self._verify_response('cloud-pipe-create-resp', subs, response)
+        return project
+
+    def test_cloud_pipe_list(self):
+        """Get api samples of cloud pipe extension get request"""
+        project = self.test_cloud_pipe_create()
+        response = self._do_get('os-cloudpipe')
+        self.assertEqual(response.status, 200)
+        subs = self._get_regexes()
+        subs.update(project)
+        subs['image_id'] = FLAGS.vpn_image_id
+        return self._verify_response('cloud-pipe-get-resp', subs, response)
+
+
+class CloudPipeSampleXmlTest(CloudPipeSampleJsonTest):
+    ctype = "xml"

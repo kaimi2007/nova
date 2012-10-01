@@ -91,7 +91,7 @@ compute_opts = [
                    'fake.FakeDriver, baremetal.BareMetalDriver, '
                    'vmwareapi.VMWareESXDriver'),
     cfg.StrOpt('console_host',
-               default=socket.gethostname(),
+               default=socket.getfqdn(),
                help='Console proxy host to use to connect '
                     'to instances on this host.'),
     cfg.IntOpt('live_migration_retry_count',
@@ -251,8 +251,7 @@ class ComputeManager(manager.SchedulerDependentManager):
 
         (old_ref, instance_ref) = self.db.instance_update_and_get_original(
                 context, instance_uuid, kwargs)
-        self.resource_tracker.update_load_stats_for_instance(context,
-                instance_ref)
+        self.resource_tracker.update_usage(context, instance_ref)
         notifications.send_update(context, old_ref, instance_ref)
 
         return instance_ref
@@ -279,6 +278,13 @@ class ComputeManager(manager.SchedulerDependentManager):
             for count, instance in enumerate(instances):
                 db_state = instance['power_state']
                 drv_state = self._get_power_state(context, instance)
+                closing_vm_states = (vm_states.DELETED,
+                                     vm_states.SOFT_DELETED)
+
+                # instance was supposed to shut down - don't attempt
+                # recovery in any case
+                if instance['vm_state'] in closing_vm_states:
+                    continue
 
                 expect_running = (db_state == power_state.RUNNING and
                                   drv_state != db_state)
@@ -480,10 +486,14 @@ class ComputeManager(manager.SchedulerDependentManager):
             network_info = self._allocate_network(context, instance,
                                                   requested_networks)
             try:
-                memory_mb_limit = filter_properties.get('memory_mb_limit',
-                        None)
-                with self.resource_tracker.instance_resource_claim(context,
-                        instance, memory_mb_limit=memory_mb_limit):
+                limits = filter_properties.get('limits', {})
+                with self.resource_tracker.resource_claim(context, instance,
+                        limits):
+                    # Resources are available to build this instance here,
+                    # mark it as belonging to this host:
+                    self._instance_update(context, instance['uuid'],
+                            host=self.host, launched_on=self.host)
+
                     block_device_info = self._prep_block_device(context,
                             instance)
                     instance = self._spawn(context, instance, image_meta,
@@ -684,7 +694,6 @@ class ComputeManager(manager.SchedulerDependentManager):
         LOG.audit(_('Starting instance...'), context=context,
                   instance=instance)
         self._instance_update(context, instance['uuid'],
-                              host=self.host, launched_on=self.host,
                               vm_state=vm_states.BUILDING,
                               task_state=None,
                               expected_task_state=(task_states.SCHEDULING,
@@ -875,7 +884,19 @@ class ComputeManager(manager.SchedulerDependentManager):
         self.db.instance_info_cache_delete(context, instance_uuid)
         self._notify_about_instance_usage(context, instance, "delete.start")
         self._shutdown_instance(context, instance)
-        self._cleanup_volumes(context, instance_uuid)
+        # NOTE(vish): We have already deleted the instance, so we have
+        #             to ignore problems cleaning up the volumes. It would
+        #             be nice to let the user know somehow that the volume
+        #             deletion failed, but it is not acceptable to have an
+        #             instance that can not be deleted. Perhaps this could
+        #             be reworked in the future to set an instance fault
+        #             the first time and to only ignore the failure if the
+        #             instance is already in ERROR.
+        try:
+            self._cleanup_volumes(context, instance_uuid)
+        except Exception as exc:
+            LOG.warn(_("Ignoring volume cleanup failure due to %s") % exc,
+                     instance_uuid=instance_uuid)
         # if a delete task succeed, always update vm state and task state
         # without expecting task state to be DELETING
         instance = self._instance_update(context,
@@ -886,8 +907,6 @@ class ComputeManager(manager.SchedulerDependentManager):
         self.db.instance_destroy(context, instance_uuid)
         system_meta = self.db.instance_system_metadata_get(context,
             instance_uuid)
-        # mark resources free
-        self.resource_tracker.free_resources(context)
         self._notify_about_instance_usage(context, instance, "delete.end",
                 system_metadata=system_meta)
 
@@ -1413,7 +1432,11 @@ class ComputeManager(manager.SchedulerDependentManager):
                                                     teardown=True)
 
             network_info = self._get_instance_nw_info(context, instance)
-            self.driver.destroy(instance, self._legacy_nw_info(network_info))
+            block_device_info = self._get_instance_volume_block_device_info(
+                                context, instance['uuid'])
+
+            self.driver.destroy(instance, self._legacy_nw_info(network_info),
+                                block_device_info)
             self.compute_rpcapi.finish_revert_resize(context, instance,
                     migration_ref['id'], migration_ref['source_compute'],
                     reservations)
@@ -2138,14 +2161,6 @@ class ComputeManager(manager.SchedulerDependentManager):
 
         """
         try:
-            # Checking volume node is working correctly when any volumes
-            # are attached to instances.
-            if self._get_instance_volume_bdms(context, instance['uuid']):
-                rpc.call(context,
-                          FLAGS.volume_topic,
-                          {'method': 'check_for_export',
-                           'args': {'instance_id': instance['id']}})
-
             if block_migration:
                 disk = self.driver.get_instance_disk_info(instance['name'])
             else:
@@ -2511,9 +2526,8 @@ class ComputeManager(manager.SchedulerDependentManager):
                                               time.time() - start_time))
 
     @manager.periodic_task
-    def _poll_bandwidth_usage(self, context, start_time=None, stop_time=None):
-        if not start_time:
-            start_time = utils.last_completed_audit_period()[1]
+    def _poll_bandwidth_usage(self, context):
+        prev_time, start_time = utils.last_completed_audit_period()
 
         curr_time = time.time()
         if (curr_time - self._last_bw_usage_poll >
@@ -2523,8 +2537,7 @@ class ComputeManager(manager.SchedulerDependentManager):
 
             instances = self.db.instance_get_all_by_host(context, self.host)
             try:
-                bw_usage = self.driver.get_all_bw_usage(instances, start_time,
-                        stop_time)
+                bw_counters = self.driver.get_all_bw_counters(instances)
             except NotImplementedError:
                 # NOTE(mdragon): Not all hypervisors have bandwidth polling
                 # implemented yet.  If they don't it doesn't break anything,
@@ -2532,12 +2545,52 @@ class ComputeManager(manager.SchedulerDependentManager):
                 return
 
             refreshed = timeutils.utcnow()
-            for usage in bw_usage:
+            for bw_ctr in bw_counters:
+                # Allow switching of greenthreads between queries.
+                greenthread.sleep(0)
+                bw_in = 0
+                bw_out = 0
+                last_ctr_in = None
+                last_ctr_out = None
+                usage = self.db.bw_usage_get(context,
+                                             bw_ctr['uuid'],
+                                             start_time,
+                                             bw_ctr['mac_address'])
+                if usage:
+                    bw_in = usage['bw_in']
+                    bw_out = usage['bw_out']
+                    last_ctr_in = usage['last_ctr_in']
+                    last_ctr_out = usage['last_ctr_out']
+                else:
+                    usage = self.db.bw_usage_get(context,
+                                             bw_ctr['uuid'],
+                                             prev_time,
+                                             bw_ctr['mac_address'])
+                    last_ctr_in = usage['last_ctr_in']
+                    last_ctr_out = usage['last_ctr_out']
+
+                if last_ctr_in is not None:
+                    if bw_ctr['bw_in'] < last_ctr_in:
+                        # counter rollover
+                        bw_in += bw_ctr['bw_in']
+                    else:
+                        bw_in += (bw_ctr['bw_in'] - last_ctr_in)
+
+                if last_ctr_out is not None:
+                    if bw_ctr['bw_out'] < last_ctr_out:
+                        # counter rollover
+                        bw_out += bw_ctr['bw_out']
+                    else:
+                        bw_out += (bw_ctr['bw_out'] - last_ctr_out)
+
                 self.db.bw_usage_update(context,
-                                        usage['uuid'],
-                                        usage['mac_address'],
+                                        bw_ctr['uuid'],
+                                        bw_ctr['mac_address'],
                                         start_time,
-                                        usage['bw_in'], usage['bw_out'],
+                                        bw_in,
+                                        bw_out,
+                                        bw_ctr['bw_in'],
+                                        bw_ctr['bw_out'],
                                         last_refreshed=refreshed)
 
     @manager.periodic_task
@@ -2560,8 +2613,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         virtual machines known by the hypervisor and if the number matches the
         number of virtual machines known by the database, we proceed in a lazy
         loop, one database record at a time, checking if the hypervisor has the
-        same power state as is in the database. We call eventlet.sleep(0) after
-        each loop to allow the periodic task eventlet to do other work.
+        same power state as is in the database.
 
         If the instance is not found on the hypervisor, but is in the database,
         then a stop() API will be called on the instance.

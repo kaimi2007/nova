@@ -1148,7 +1148,7 @@ def _fetch_disk_image(context, session, instance, name_label, image_id,
         e.args = e.args + ([dict(type=ImageType.to_string(image_type),
                                  uuid=vdi_uuid,
                                  file=filename)],)
-        raise e
+        raise
 
 
 def determine_disk_image_type(image_meta):
@@ -1351,9 +1351,16 @@ def compile_diagnostics(record):
         return {"Unable to retrieve diagnostics": e}
 
 
+def fetch_bandwidth(session):
+    bw = session.call_plugin_serialized('bandwidth', 'fetch_all_bandwidth')
+    return bw
+
+
 def compile_metrics(start_time, stop_time=None):
     """Compile bandwidth usage, cpu, and disk metrics for all VMs on
-       this host"""
+       this host.
+       Note that some stats, like bandwith, do not seem to be very
+       accurate in some of the data from XenServer (mdragon). """
     start_time = int(start_time)
 
     xml = _get_rrd_updates(_get_rrd_server(), start_time)
