@@ -3653,6 +3653,12 @@ def security_group_destroy(context, security_group_id):
                         'deleted_at': timeutils.utcnow(),
                         'updated_at': literal_column('updated_at')})
 
+        session.query(models.SecurityGroupIngressRule).\
+                filter_by(parent_group_id=security_group_id).\
+                update({'deleted': True,
+                        'deleted_at': timeutils.utcnow(),
+                        'updated_at': literal_column('updated_at')})
+
 
 @require_context
 def security_group_count_by_project(context, project_id, session=None):
@@ -3951,7 +3957,7 @@ def instance_type_create(context, values):
         try:
             instance_type_get_by_flavor_id(context, values['flavorid'],
                                            session)
-            raise exception.InstanceTypeExists(name=values['name'])
+            raise exception.InstanceTypeIdExists(flavor_id=values['flavorid'])
         except exception.FlavorNotFound:
             pass
         try:

@@ -636,9 +636,16 @@ class LibvirtDriver(driver.ComputeDriver):
 
         if FLAGS.libvirt_type == 'lxc':
             self._attach_lxc_volume(conf.to_xml(), virt_dom, instance_name)
+            # TODO(danms) once libvirt has support for LXC hotplug,
+            # replace this re-define with use of the
+            # VIR_DOMAIN_AFFECT_LIVE & VIR_DOMAIN_AFFECT_CONFIG flags with
+            # attachDevice()
+            domxml = virt_dom.XMLDesc(libvirt.VIR_DOMAIN_XML_SECURE)
+            self._conn.defineXML(domxml)
         else:
             try:
-                virt_dom.attachDevice(conf.to_xml())
+                flags = (libvirt.VIR_DOMAIN_AFFECT_CURRENT)
+                virt_dom.attachDeviceFlags(conf.to_xml(), flags)
             except Exception, ex:
                 if isinstance(ex, libvirt.libvirtError):
                     errcode = ex.get_error_code()
@@ -652,13 +659,6 @@ class LibvirtDriver(driver.ComputeDriver):
                     self.volume_driver_method('disconnect_volume',
                                                connection_info,
                                                mount_device)
-
-        # TODO(danms) once libvirt has support for LXC hotplug,
-        # replace this re-define with use of the
-        # VIR_DOMAIN_AFFECT_LIVE & VIR_DOMAIN_AFFECT_CONFIG flags with
-        # attachDevice()
-        domxml = virt_dom.XMLDesc(libvirt.VIR_DOMAIN_XML_SECURE)
-        self._conn.defineXML(domxml)
 
     @staticmethod
     def _get_disk_xml(xml, device):
@@ -689,28 +689,35 @@ class LibvirtDriver(driver.ComputeDriver):
     def detach_volume(self, connection_info, instance_name, mountpoint):
         mount_device = mountpoint.rpartition("/")[2]
         try:
-            # NOTE(vish): This is called to cleanup volumes after live
-            #             migration, so we should still logout even if
-            #             the instance doesn't exist here anymore.
             virt_dom = self._lookup_by_name(instance_name)
             xml = self._get_disk_xml(virt_dom.XMLDesc(0), mount_device)
             if not xml:
                 raise exception.DiskNotFound(location=mount_device)
             if FLAGS.libvirt_type == 'lxc':
                 self._detach_lxc_volume(xml, virt_dom, instance_name)
+                # TODO(danms) once libvirt has support for LXC hotplug,
+                # replace this re-define with use of the
+                # VIR_DOMAIN_AFFECT_LIVE & VIR_DOMAIN_AFFECT_CONFIG flags with
+                # detachDevice()
+                domxml = virt_dom.XMLDesc(libvirt.VIR_DOMAIN_XML_SECURE)
+                self._conn.defineXML(domxml)
             else:
-                virt_dom.detachDevice(xml)
-        finally:
-            self.volume_driver_method('disconnect_volume',
-                                      connection_info,
-                                      mount_device)
+                flags = (libvirt.VIR_DOMAIN_AFFECT_CURRENT)
+                virt_dom.detachDeviceFlags(xml, flags)
+        except libvirt.libvirtError as ex:
+            # NOTE(vish): This is called to cleanup volumes after live
+            #             migration, so we should still disconnect even if
+            #             the instance doesn't exist here anymore.
+            error_code = ex.get_error_code()
+            if error_code == libvirt.VIR_ERR_NO_DOMAIN:
+                # NOTE(vish):
+                LOG.warn(_("During detach_volume, instance disappeared."))
+            else:
+                raise
 
-        # TODO(danms) once libvirt has support for LXC hotplug,
-        # replace this re-define with use of the
-        # VIR_DOMAIN_AFFECT_LIVE & VIR_DOMAIN_AFFECT_CONFIG flags with
-        # detachDevice()
-        domxml = virt_dom.XMLDesc(libvirt.VIR_DOMAIN_XML_SECURE)
-        self._conn.defineXML(domxml)
+        self.volume_driver_method('disconnect_volume',
+                                  connection_info,
+                                  mount_device)
 
     @exception.wrap_exception()
     def _attach_lxc_volume(self, xml, virt_dom, instance_name):
