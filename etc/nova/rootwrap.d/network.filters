@@ -76,3 +76,6 @@ brctl_usr: CommandFilter, /usr/sbin/brctl, root
 
 # nova/network/linux_net.py: 'sysctl', ....
 sysctl: CommandFilter, /sbin/sysctl, root
+
+# nova/network/linux_net.py: 'ls', ....
+ls: CommandFilter, /bin/ls, root

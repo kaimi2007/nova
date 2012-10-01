@@ -28,9 +28,6 @@ lvdisplay: CommandFilter, /sbin/lvdisplay, root
 iscsiadm: CommandFilter, /sbin/iscsiadm, root
 iscsiadm_usr: CommandFilter, /usr/bin/iscsiadm, root
 
-# nova/volume/driver.py
-dmsetup: CommandFilter, /sbin/dmsetup, root
-dmsetup_usr: CommandFilter, /usr/sbin/dmsetup, root
+mkfs.ext3: CommandFilter, /sbin/mkfs.ext3, root
 
-#nova/volume/.py: utils.temporary_chown(path, 0), ...
-chown: CommandFilter, /bin/chown, root
+dmsetup: CommandFilter, /sbin/dmsetup, root
