@@ -676,9 +676,9 @@ class BareMetalDriver(driver.ComputeDriver):
                'hypervisor_type': self.get_hypervisor_type(),
                'hypervisor_version': self.get_hypervisor_version(),
                'cpu_info': self.get_cpu_info(),
-               'cpu_arch': FLAGS.cpu_arch}
+               'cpu_arch': "tilepro64"}
 
-        LOG.info(_('#### RLK: cpu_arch = %s ') % FLAGS.cpu_arch)
+        #LOG.info(_('#### RLK: cpu_arch = %s ') % FLAGS.cpu_arch)
         return dic
 
     def ensure_filtering_rules_for_instance(self, instance_ref, network_info):
@@ -732,7 +732,7 @@ class HostState(object):
         data["vcpus"] = self.connection.get_vcpu_total()
         data["vcpus_used"] = self.connection.get_vcpu_used()
         data["cpu_info"] = self.connection.get_cpu_info()
-        data["cpu_arch"] = FLAGS.cpu_arch
+        data["cpu_arch"] = "tilepro64" 
         data["disk_total"] = self.connection.get_local_gb_total()
         data["disk_used"] = self.connection.get_local_gb_used()
         data["disk_available"] = data["disk_total"] - data["disk_used"]

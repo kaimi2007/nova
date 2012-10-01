@@ -252,7 +252,7 @@ class BareMetalNodes(object):
         iptables -A INPUT -p tcp ! -s $IP --dport $PORT -j DROP
         /tftpboot/iptables_rule script sets iptables rule on the given node.
         """
-        if user_data != '':
+        if user_data is not None:
             open_ip = base64.b64decode(user_data)
             utils.execute('/tftpboot/iptables_rule', node_ip, open_ip)
 
