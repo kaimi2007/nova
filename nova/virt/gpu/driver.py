@@ -25,6 +25,8 @@ from nova.compute import vm_states
 from nova import db
 from nova import exception
 from nova import flags
+from nova import utils
+from nova.openstack.common import cfg
 from nova.openstack.common import log as logging
 from nova.virt.disk import api as disk
 from nova.virt.gpu import utils as gpu_utils
@@ -32,16 +34,30 @@ from nova.virt.libvirt import driver
 
 import subprocess
 
+libvirt = None
+
 LOG = logging.getLogger(__name__)
 
-FLAGS = flags.FLAGS
+gpu_opts = [
+    cfg.StrOpt('user',
+               default='/root',
+               help='home directory of login user')
+]
 
+FLAGS = flags.FLAGS
+FLAGS.register_opts(gpu_opts)
+
+lxc_mounts = {}
 
 class GPULibvirtDriver(driver.LibvirtDriver):
     def __init__(self, read_only=False):
-        FLAGS.libvirt_type = 'lxc'
-        FLAGS.use_cow_images = False
+        assert FLAGS.libvirt_type == 'lxc', "Only LXC is supported for GPU"
         super(GPULibvirtDriver, self).__init__()
+
+        global libvirt
+        if libvirt is None:
+            libvirt = __import__('libvirt')
+
         gpu_utils.init_host_gpu()
 
     @property
@@ -84,41 +100,64 @@ class GPULibvirtDriver(driver.LibvirtDriver):
         return t
 
     @exception.wrap_exception()
+    def detach_volume(self, connection_info, instance_name, mountpoint):
+        mount_device = mountpoint.rpartition("/")[2]
+        try:
+            # NOTE(vish): This is called to cleanup volumes after live
+            #             migration, so we should still logout even if
+            #             the instance doesn't exist here anymore.
+            virt_dom = self._lookup_by_name(instance_name)
+            if FLAGS.libvirt_type == 'lxc':
+                self._detach_lxc_volume(mount_device, virt_dom, instance_name)
+            else:
+                xml = self._get_disk_xml(virt_dom.XMLDesc(0), mount_device)
+                if not xml:
+                    raise exception.DiskNotFound(location=mount_device)
+                virt_dom.detachDevice(xml)
+        finally:
+            self.volume_driver_method('disconnect_volume',
+                                      connection_info,
+                                      mount_device)
+
+        # TODO(danms) once libvirt has support for LXC hotplug,
+        # replace this re-define with use of the
+        # VIR_DOMAIN_AFFECT_LIVE & VIR_DOMAIN_AFFECT_CONFIG flags with
+        # detachDevice()
+        domxml = virt_dom.XMLDesc(libvirt.VIR_DOMAIN_XML_SECURE)
+        self._conn.defineXML(domxml)
+
+
+    @exception.wrap_exception()
     def _umount_lxc_volume(self, init_pid, lxc_container_device):
-        LOG.info(_('ISI: umounting LXC block device'))
-        dev_key = init_pid + lxc_container_device
+        global lxc_mounts
+        LOG.info(_('umounting LXC block device'))
         if dev_key not in lxc_mounts:
             raise Exception(_('no such process(%(init_pid)s) or ' \
                   'mount point(%(lxc_container_device)s)') % locals())
         dir_name = lxc_mounts[dev_key]
 
-        # unmount the directory
-        LOG.info(_('detach_volume: init_pid(%s)') % init_pid)
-        cmd_lxc = 'sudo lxc-attach -n %s -- ' % str(init_pid)
-        cmd = cmd_lxc + ' /bin/umount ' + dir_name
-        LOG.info(_('detach_volume: cmd(%s)') % cmd)
-        p = subprocess.Popen(cmd, shell=True, \
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        x = p.communicate()
+        utils.execute('lxc-attach', '-n', '%s' % init_pid, '--',
+                      '/bin/umount', '%s' % dir_name, 
+                      run_as_root=True)
 
         # remove the directory
-        cmd = cmd_lxc + ' /bin/rmdir  ' + dir_name
-        LOG.info(_('detach_volume: cmd(%s)') % cmd)
-        subprocess.call(cmd, shell=True)
+        utils.execute('lxc-attach', '-n', '%s'  % init_pid, '--',
+                      '/bin/rmdir', '%s' % dir_name, 
+                      run_as_root=True)
 
         del lxc_mounts[dev_key]  # delete dictionary entry
 
     @exception.wrap_exception()
-    def _detach_lxc_volume(self, xml, virt_dom, instance_name):
+    def _detach_lxc_volume(self, lxc_device, virt_dom, instance_name):
         LOG.info(_('ISI: detaching LXC block device'))
 
         lxc_container_root = self.get_lxc_container_root(virt_dom)
-        lxc_container_device = self.get_lxc_container_target(xml)
+        lxc_container_device = 'dev/' + lxc_device
         lxc_container_target = "%s/%s" % (lxc_container_root,
                                           lxc_container_device)
 
-        if lxc_container_target:
-            disk.unbind(lxc_container_target)
+#        if lxc_container_target:
+#            disk.unbind(lxc_container_target)
 
         # get id of the virt_dom
         spid = str(virt_dom.ID())
@@ -134,92 +173,65 @@ class GPULibvirtDriver(driver.LibvirtDriver):
 
         self._umount_lxc_volume(init_pid, lxc_container_device)
 
-        cmd_lxc = 'sudo lxc-attach -n %s -- ' % init_pid
-        cmd = cmd_lxc + ' /bin/rm ' + '/' + lxc_container_device
-        LOG.info(_('detach_volume: cmd(%s)') % cmd)
-        subprocess.call(cmd, shell=True)
+        LOG.info(_('detach_volume:'))
+        utils.execute('lxc-attach', '-n', '%s' % init_pid, '--',
+                      '/bin/rm', '/%s' % lxc_container_device, 
+                      run_as_root=True)
 
     @exception.wrap_exception()
-    def _mount_lxc_volume(self, init_pid, lxc_container_device):
+    def _mount_lxc_volume(self, init_pid, lxc_root, lxc_device):
+        global lxc_mounts
         LOG.info(_('ISI: mount LXC block device'))
 
         # check if 'mountpoint' already exists
-        LOG.info(_('attach_volume: mountpoint(%s)') % lxc_container_device)
-        dev_key = init_pid + lxc_container_device
-        LOG.info(_('attach_volume: dev_key(%s)') % dev_key)
+        dev_key = init_pid + lxc_device
         if dev_key in lxc_mounts:
-            LOG.info(_('attach_volume: dev_key(%s) is already used') \
-                        % dev_key)
             raise Exception(_('the same mount point(%s) is already used.')\
-                        % lxc_container_device)
+                        % lxc_device)
 
-        # create device(s) for mount
-        # sudo lxc-attach -n pid -- mknod -m 777
-        #                 <mountpoint> b <major #> <minor #>
-
-        # create a directory for mount
-        cmd_lxc = 'sudo lxc-attach -n %s -- ' % init_pid
-        cmd = '/bin/mkdir -p /vmnt '
-        cmd = cmd_lxc + cmd
-        LOG.info(_('attach_volume: cmd (%s)') % cmd)
-        subprocess.call(cmd, shell=True)
+        utils.execute('lxc-attach', '-n', '%s' % init_pid,'--',
+                      '/bin/mkdir', '-p', '/vmnt', 
+                      run_as_root=True)
 
         # create a sub-directory for mount
         found = 0
         for n in range(0, 100):
             dir_name = '/vmnt/vol' + str(n)
-            cmd = cmd_lxc + '/bin/ls ' + dir_name
-            LOG.info(_('attach_volume: cmd (%s)') % cmd)
-            p = subprocess.Popen(cmd, shell=True,  \
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            x = p.communicate()
-            LOG.info(_('attach_volume: return x[0](%s)') % x[0])
-            LOG.info(_('attach_volume: return x[1](%s)') % x[1])
-            #if len(x[1]) > 5: # new  "No such file exists..."
-            s = x[1].lower()
-            if (len(s) > 0 and s.find('no such') >= 0):
-            # new  "No such file exists..."
-                cmd = cmd_lxc + ' /bin/mkdir ' + dir_name
-                LOG.info(_('attach_volume: cmd (%s)') % cmd)
-                subprocess.call(cmd, shell=True)
+            if not os.path.exists(lxc_root + dir_name):
+                utils.execute('lxc-attach', '-n', '%s' % init_pid, '--',
+                              '/bin/mkdir', '%s' % dir_name, run_as_root=True)
                 found = 1
                 break
         if found == 0:
-            cmd = '/bin/rm %s ' % (lxc_container_device)
-            cmd = cmd_lxc + cmd
-            LOG.info(_('attach_volume: cmd (%s)') % cmd)
-            subprocess.call(cmd, shell=True)
+            utils.execute('lxc-attach', '-n', '%s' % init_pid % init_pid, '--',
+                          '/bin/rm', '%s' % lxc_device, run_as_root=True)
             raise Exception(_('cannot find mounting directories'))
 
         lxc_mounts[dev_key] = dir_name
-        cmd = cmd_lxc + '/bin/chmod 777 ' + lxc_container_device
-        LOG.info(_('attach_volume: cmd (%s)') % cmd)
-        subprocess.call(cmd, shell=True)
+        utils.execute('lxc-attach', '-n', '%s'  % init_pid, '--',
+                      '/bin/chmod', '777', '%s' % lxc_device,
+                      run_as_root=True)
 
-        # mount
-        cmd = cmd_lxc + ' /bin/mount ' + lxc_container_device + ' ' + dir_name
-        LOG.info(_('attach_volume: cmd (%s)') % cmd)
-        p = subprocess.Popen(cmd, shell=True, \
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        x = p.communicate()
+        utils.execute('lxc-attach', '-n', '%s'  % init_pid, '--',
+                      '/bin/mount', '/%s' % lxc_device,
+                      '%s' % dir_name,
+                      run_as_root=True)
 
         # change owner
         user = FLAGS.user
         user = user.rsplit("/")
         user = user[len(user) - 1]
-        cmd = '/bin/chown %s /vmnt' % user
-        cmd = cmd_lxc + cmd
-        LOG.info(_('attach_volume: cmd (%s)') % cmd)
-        subprocess.call(cmd, shell=True)
+        utils.execute('lxc-attach', '-n', '%s'  % init_pid, '--',
+                      '/bin/chown', '%s'  % user, '/vmnt',
+                      run_as_root=True)
 
-        cmd = '/bin/chown %s %s ' % (user, dir_name)
-        cmd = cmd_lxc + cmd
-        LOG.info(_('attach_volume: cmd (%s)') % cmd)
-        subprocess.call(cmd, shell=True)
+        utils.execute('lxc-attach', '-n', '%s' % init_pid, '--',
+                      '/bin/chown', '%s' % user, '%s' % dir_name,
+                      run_as_root=True)
 
-        cmd = cmd_lxc + " /bin/chmod 'og+w' " + ' ' + dir_name
-        LOG.info(_('attach_volume: cmd (%s)') % cmd)
-        subprocess.call(cmd, shell=True)
+        utils.execute('lxc-attach', '-n', '%s' % init_pid, '--',
+                      '/bin/chmod', 'og+w', '%s' % dir_name,
+                      run_as_root=True)
 
     @exception.wrap_exception()
     def _attach_lxc_volume(self, xml, virt_dom, instance_name):
@@ -233,20 +245,16 @@ class GPULibvirtDriver(driver.LibvirtDriver):
         LOG.debug(_('attach_volume: root(%s)') % lxc_container_root)
         LOG.debug(_('attach_volume: host_volume(%s)') % lxc_host_volume)
         LOG.debug(_('attach_volume: device(%s)') % lxc_container_device)
-        if lxc_container_target:
-            disk.bind(lxc_host_volume, lxc_container_target, instance_name)
 
         # get id of the virt_dom
         spid = str(virt_dom.ID())
         LOG.info(_('attach_volume: pid(%s)') % spid)
 
-        # get PID of the init process
-        ps_command = subprocess.Popen("ps -o pid --ppid %s --noheaders" % \
-                           spid, shell=True, stdout=subprocess.PIPE)
-        init_pid = ps_command.stdout.read()
-        init_pid = str(int(init_pid))
-        retcode = ps_command.wait()
-        assert retcode == 0, "ps command returned %d" % retcode
+        (ps_out, err) = utils.execute('ps', '--format', 'pid', 
+                                      '--ppid', '%s' % spid, 
+                                      '--noheaders',
+                                    run_as_root=True)
+        init_pid = str(int(ps_out))
 
         LOG.info(_('attach_volume: init_pid(%s)') % init_pid)
         # get major, minor number of the device
@@ -263,18 +271,15 @@ class GPULibvirtDriver(driver.LibvirtDriver):
                                      'devices.allow')
         # Allow the disk
         perm = "b %d:%d rwm" % (major_num, minor_num)
-        cmd = "echo %s | sudo tee -a %s" % (perm, dev_whitelist)
-        LOG.info(_('attach_volume: cmd(%s)') % cmd)
-        subprocess.Popen(cmd, shell=True)
+        utils.execute('tee', dev_whitelist, process_input=perm,
+                      run_as_root=True)
 
-        cmd_lxc = 'sudo lxc-attach -n %s -- ' % init_pid
-        cmd = '/bin/mknod -m 777 /%s b %d %d '\
-             % (lxc_container_device, major_num, minor_num)
-        cmd = cmd_lxc + cmd
-        LOG.info(_('attach_volume: cmd (%s)') % cmd)
-        subprocess.call(cmd, shell=True)
-
-        self._mount_lxc_volume(init_pid, lxc_container_device)
+        utils.execute('lxc-attach', '-n', '%s' % init_pid, '--',
+                      '/bin/mknod', '-m', '777', '/%s' % lxc_container_device,
+                      'b', '%d' % major_num, '%d' % minor_num,
+                      run_as_root=True)
+ 
+        self._mount_lxc_volume(init_pid, lxc_container_root, lxc_container_device)
 
 
 class GPUHostState(driver.HostState):
@@ -637,12 +642,17 @@ _create_image
         spid = str(virt_dom.ID())
 
         # get PID of the init process
-        ps_command = subprocess.Popen("ps -o pid --ppid %s --noheaders" % \
-                           spid, shell=True, stdout=subprocess.PIPE)
-        init_pid = ps_command.stdout.read()
+        #ps_command = subprocess.Popen("ps -o pid --ppid %s --noheaders" % \
+        #                   spid, shell=True, stdout=subprocess.PIPE)
+        #init_pid = ps_command.stdout.read()
+        #init_pid = str(int(init_pid))
+        #retcode = ps_command.wait()
+        #assert retcode == 0, "ps command returned %d" % retcode
+
+        #dkang: is this needed? it looks like that 'spid' is init_pid.
+        init_pid, err = utils.execute('ps', '-o pid --ppid %s --noheaders' % spid,\
+                                 run_as_root=True)
         init_pid = str(int(init_pid))
-        retcode = ps_command.wait()
-        assert retcode == 0, "ps command returned %d" % retcode
 
         # get major, minor number of the device
         s = os.stat(lxc_host_volume)
@@ -654,17 +664,25 @@ _create_image
                                      instance_name,
                                      'devices.allow')
         # Allow the disk
-        perm = "b %d:%d rwm" % (major_num, minor_num)
-        cmd = "echo %s | sudo tee -a %s" % (perm, dev_whitelist)
-        subprocess.Popen(cmd, shell=True)
+        #perm = "b %d:%d rwm" % (major_num, minor_num)
+        #cmd = "echo %s | sudo tee -a %s" % (perm, dev_whitelist)
+        #subprocess.Popen(cmd, shell=True)
+        utils.execute('tee', '-a %s' & dev_whitelist,
+                      process_input=perm, run_as_root=True)
 
-        cmd_lxc = 'sudo lxc-attach -n %s -- ' % init_pid
+        #cmd_lxc = 'sudo lxc-attach -n %s -- ' % init_pid
+      
         # check if 'mountpoint' already exists
 
-        cmd = '/bin/mknod -m 777 /%s b %d %d '\
-             % (lxc_container_device, major_num, minor_num)
-        cmd = cmd_lxc + cmd
-        subprocess.call(cmd, shell=True)
+        #cmd = '/bin/mknod -m 777 /%s b %d %d '\
+        #     % (lxc_container_device, major_num, minor_num)
+        #cmd = cmd_lxc + cmd
+        #subprocess.call(cmd, shell=True)
+        utils.execute('lxc-attach', '-n', '%s' % init_pid, '--',
+                      '/bin/mknod', '-m', '777', '/%s' % lxc_container_device,
+                      'b', '%d' % major_num, '%d' % minor_num,
+                      run_as_root=True)
+                      
 
     @exception.wrap_exception()
     def _detach_lxc_volume(self, xml, virt_dom, instance_name):

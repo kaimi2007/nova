@@ -43,7 +43,6 @@ from nova import utils
 gpus_available = []
 gpus_assigned = {}
 num_gpus = None
-gpu_arch = None
 extra_specs = {}
 
 LOG = logging.getLogger(__name__)
@@ -74,22 +73,19 @@ def init_host_gpu():
     get_instance_type_extra_specs_capabilities()
     global gpus_available
     global num_gpus
-    global gpu_arch
     global extra_specs
     if 'gpus' in extra_specs:
         num_gpus = extra_specs['gpus']
         gpus_available = range(int(extra_specs['gpus']))
-    if 'gpu_arch' in extra_specs:
-        gpu_arch = extra_specs['gpu_arch']
 
 
 def update_status(data):
     global extra_specs
-    extra_specs["hypervisor_type"] = \
-        data["hypervisor_type"]
-    if 'gpus' in extra_specs:
-        extra_specs["gpus"] = int(len(gpus_available))
-    data.update({"instance_type_extra_specs": extra_specs})
+    for key in extra_specs.iterkeys():
+        if 'gpus' == key:
+            data['gpus'] = int(len(gpus_available))
+        else:
+            data[key] = extra_specs[key]
     return data
 
 
@@ -128,8 +124,6 @@ def assign_gpus(context, inst, lxc_container_root):
     """Assigns gpus to a specific instance"""
     global gpus_available
     global gpus_assigned
-    LOG.debug(_("dkang: assign_gpus"))
-    print "dkang: assign_gpus"
 #    ctxt = nova_context.get_admin_context()
     gpus_in_meta = 0
     gpus_in_extra = 0
