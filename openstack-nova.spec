@@ -4,6 +4,7 @@
 #%global os_release essex
 #KDS
 #%global isi_prj openstack-nova
+#MK: needs to be checked
 %global isi_prj nova
 %if ! (0%{?fedora} > 12 || 0%{?rhel} > 5)
 %{!?python_sitelib: %global python_sitelib %(%{__python} -c "from distutils.sysconfig import get_python_lib; print(get_python_lib())")}
@@ -65,6 +66,7 @@ Source29:         %{prj}-cert.init
 %define usrlocaldir /usr/local
 
 
+#MK: needs to be checked
 #Patch0001:        0001-fix-useexisting-deprecation-warnings.patch
 
 
@@ -88,6 +90,9 @@ BuildRequires:    python-tornado
 BuildRequires:    python-webob
 BuildRequires:    intltool
 #BuildRequires:    python-distutils-extra >= 1:2.29
+
+#MK: needs to be checked
+Requires:         python-babel >= 0.9.6 
 
 Requires:         python-nova  = %{epoch}:%{version}-%{release}
 Requires:         sudo
@@ -181,8 +186,11 @@ Requires:         python-webob
 Requires:         python-netaddr
 Requires:         python-glance
 Requires:         python-novaclient = %{epoch}:2012.1-%{release}
-Requires:         python-lxml
-Requires:         python-sqlalchemy-migrate
+#MK: needs to be checked
+#Requires:         python-lxml
+Requires:         python-lxml >= 2.3
+#Requires:         python-sqlalchemy-migrate
+Requires:         python-sqlalchemy-migrate >= 0.7.2
 Requires:         radvd
 Requires:         iptables iptables-ipv6
 Requires:         iscsi-initiator-utils
@@ -346,6 +354,7 @@ This package contains documentation files for %{name}.
 #the nova repository contains source for multiple spec files, and should
 #be removed for this package
 rm -rf nova-install
+#MK: needs to be checked
 #%patch0001 -p1
 
 install %{SOURCE1} README.rhel6
@@ -377,6 +386,7 @@ install -d -m 755 %{buildroot}%{_sysconfdir}/nova
 #AP: since we moved nova.conf to inside of ./etc/nova/ inside the repository,
 #no need to move SOURCE23 explicitly anymore
 #install -p -D -m 600 etc/nova/* %{SOURCE23} %{buildroot}%{_sysconfdir}/nova/
+#MK: needs to be checked
 install -d -m 755 %{buildroot}%{_sysconfdir}/nova/rootwrap.d
 install -D -m 644 etc/nova/rootwrap.d/* %{buildroot}%{_sysconfdir}/nova/rootwrap.d/
 rm -rf  etc/nova/rootwrap.d	# dkang: check this
@@ -392,10 +402,12 @@ install -d -m 755 %{buildroot}%{_localstatedir}/log/nova
 cp -rp nova/CA %{buildroot}%{_sharedstatedir}/nova
 #AP: move the /etc/rc.d/init.d scirpts 
 install -d -m 755 %{buildroot}%{_initrddir}
+#MK: needs to be checked
 #install -p -D -m 755 etc/rc.d/init.d/* %{buildroot}%{_initrddir}/
 #rm -rf %{buildroot}%{_initrddir}/openstack-nova-ajax-console-proxy
 
 #KDS use /usr/local/nova for installation
+#MK: needs to be checked
 #install -d -m 755 %{buildroot}%{usrlocaldir}/nova
 #install -d -m 755 %{buildroot}%{usrlocaldir}/nova/images
 #install -d -m 755 %{buildroot}%{usrlocaldir}/nova/instances
@@ -403,10 +415,12 @@ install -d -m 755 %{buildroot}%{_initrddir}
 #install -d -m 755 %{buildroot}%{usrlocaldir}/nova/networks
 #install -d -m 755 %{buildroot}%{usrlocaldir}/nova/tmp
 #KDS copy ISI's Openstack code to /usrl/local/nova
+#MK: needs to be checked
 #cp -rp * %{buildroot}%{usrlocaldir}/nova/
 #cp -rp nova/CA %{buildroot}%{usrlocaldir}/nova
 #KDS: remove /usr/local/nova//CA/ it should only be under /usr/local/nova/nova/CA/ 
 #KDS remove /usr/local/nova/nova/nova, /usr/bin/nova-manage
+#MK: needs to be checked
 #rm -rf %{buildroot}%{usrlocaldir}/nova/CA/
 #rm -rf %{buildroot}%{usrlocaldir}/nova/nova/nova/
 #rm -rf %{_bindir}/nova-manage
@@ -449,13 +463,16 @@ install -p -D -m 644 %{SOURCE6} %{buildroot}%{_sysconfdir}/logrotate.d/%{name}
 
 
 # Install template files
+#MK: needs to be checked
 #install -p -D -m 644 nova/auth/novarc.template %{buildroot}%{_datarootdir}/nova/novarc.template
 install -p -D -m 644 nova/cloudpipe/client.ovpn.template %{buildroot}%{_datarootdir}/nova/client.ovpn.template
+#MK: needs to be checked
 #install -p -D -m 644 nova/virt/libvirt.xml.template %{buildroot}%{_datarootdir}/nova/libvirt.xml.template
 
 #KDS install nova.conf
 #KDS change permissions from 600
 #AP: using chmod
+#MK: needs to be checked
 #install -p -D -m 644 %{SOURCE23} %{buildroot}%{_sysconfdir}/nova/nova.conf
 #chmod 644  %{buildroot}%{_sysconfdir}/nova/nova.conf
 
@@ -621,6 +638,7 @@ fi
 
 %defattr(-,nova,nobody,-)
 %dir %{_sysconfdir}/nova
+#MK: needs to be checked
 #%config(noreplace) %{_sysconfdir}/nova/nova.conf
 %config(noreplace) %{_sysconfdir}/nova/nova.conf.sample
 %config(noreplace) %{_sysconfdir}/nova/logging_sample.conf
@@ -656,6 +674,7 @@ fi
 #%dir %{usrlocaldir}/nova
 #%{usrlocaldir}/nova/*
 #KDS new files installed. these need to be packaged:
+#MK: needs to be checked
 #%{_initrddir}/openstack-nova-db-setup
 #/usr/bin/dhcp_release
 
@@ -682,6 +701,7 @@ fi
 #%{_bindir}/%{prj}-api-ec2
 #%{_bindir}/%{prj}-direct-api
 %{_initrddir}/%{isi_prj}-direct-api
+#MK: needs to be checked
 #%{_bindir}/%{prj}-cert
 #%{_bindir}/%{prj}-metadata
 #%{_bindir}/%{prj}-api-os-compute
@@ -702,6 +722,7 @@ fi
 %files compute
 %defattr(-,root,root,-)
 %config %{_sysconfdir}/polkit-1/localauthority/50-local.d/50-openstack-nova.pkla
+#MK: needs to be checked
 %config %{_sysconfdir}/nova/rootwrap.conf
 %config %{_sysconfdir}/nova/rootwrap.d/compute.filters
 %config %{_sysconfdir}/nova/rootwrap.d/network.filters

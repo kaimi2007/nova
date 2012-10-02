@@ -6,8 +6,10 @@ Summary:	Copies nova install script and examples config files for essex release 
 Group:		Distribution
 License:	GPL
 Source0:	%{name}-%{version}.tar.gz
+#MK: needs to be checked
 #Source1:	%{name}-hpc-%{release}.sh
 Source1:	%{name}-hpc-folsom.sh
+#MK: needs to be checked
 #Source2:	dhcp_release
 BuildRoot:	%{_tmppath}/%{name}-buildroot
 #BuildArch:      noarch
@@ -36,6 +38,7 @@ cp -rp examples/* $RPM_BUILD_ROOT%{usrlocaldir}/nova/examples/
 cp -rp examples/glance/* $RPM_BUILD_ROOT%{usrlocaldir}/nova/examples/glance/
 cp -rp examples/keystone/* $RPM_BUILD_ROOT%{usrlocaldir}/nova/examples/keystone/
 cp -rp examples/nova/* $RPM_BUILD_ROOT%{usrlocaldir}/nova/examples/nova/
+#MK: needs to be checked
 #cp -p %{SOURCE2} $RPM_BUILD_ROOT%{_bindir}/dhcp_release
 #install -p -D -m 755 %{SOURCE2} %{buildroot}%{_bindir}/dhcp_release
 %clean
@@ -45,6 +48,7 @@ rm -rf $RPM_BUILD_ROOT
 
 %files
 %defattr(-,root,root,-)
+#MK: needs to be checked
 %{usrlocaldir}/nova/nova-install-hpc-folsom.sh
 %dir %{usrlocaldir}/nova/examples
 %dir %{usrlocaldir}/nova/examples/glance
@@ -54,6 +58,7 @@ rm -rf $RPM_BUILD_ROOT
 %{usrlocaldir}/nova/examples/glance/*
 %{usrlocaldir}/nova/examples/keystone/*
 %{usrlocaldir}/nova/examples/nova/*
+#MK: needs to be checked
 #%{_bindir}/dhcp_release
 
 %changelog
