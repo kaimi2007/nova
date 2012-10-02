@@ -1,0 +1,2 @@
+spec: dodcs.spec
+tar.gz: dodcs-openstack-readme name=dodcs-openstack-@version@
