@@ -101,7 +101,7 @@ BuildRequires:    intltool
 #BuildRequires:    python-distutils-extra >= 1:2.29
 
 #MK: needs to be checked
-Requires:         python-babel >= 0.9.6 
+#Requires:         python-babel >= 0.9.6 
 Requires:         python-devel
 Requires:         libxml2-devel
 Requires:         libxslt-devel
@@ -182,7 +182,7 @@ Requires:         m2crypto
 Requires:         libvirt-python
 Requires:         python-anyjson >= 0.2.4
 Requires:         python-IPy >= 0.70
-#Requires:         python-boto >= 1.9b
+Requires:         python-boto >= 1.9b
 Requires:         python-carrot >= 0.10.5
 Requires:         python-daemon = 1.5.5
 
@@ -194,15 +194,18 @@ Requires:         python-amqplib >= 0.6.1
 Requires:         python-paste >= 1.7.4
 Requires:         python-greenlet >= 0.3.1 
 Requires:         python-webob >= 1.0.8
-Requires:         python-boto >= 2.1.1 
+#Requires:         python-boto >= 2.1.1 
 Requires:         python-sqlalchemy >= 0.7.4
-Requires:         python-warlock >= 0.4.0
+#Requires:         python-warlock >= 0.4.0
+Requires:         python-warlock
 Requires:         python-keystoneclient >= 0.1.2
 Requires:         python-prettytable >= 0.6
 Requires:         python-argparse >= 1.2.1 
-Requires:         python-pyparsing >= 1.5.6 
+#Requires:         python-pyparsing >= 1.5.6 
+Requires:         python-pyparsing 
 Requires:         python-simplejson >= 2.0.9 
-Requires:         python-cliff >= 1.2.1 
+#Requires:         python-cliff >= 1.2.1 
+Requires:         python-cliff 
 Requires:         python-distribute >= 0.6.10 
 Requires:         python-tempita >= 0.4 
 Requires:         python-decorator >= 3.0.1 
@@ -223,10 +226,10 @@ Requires:         python-glance
 Requires:         python-novaclient = %{epoch}:2012.1-%{release}
 
 #MK: needs to be checked
-#Requires:         python-lxml
-Requires:         python-lxml >= 2.3
-#Requires:         python-sqlalchemy-migrate
-Requires:         python-sqlalchemy-migrate >= 0.7.2
+Requires:         python-lxml
+#Requires:         python-lxml >= 2.3
+Requires:         python-sqlalchemy-migrate
+#Requires:         python-sqlalchemy-migrate >= 0.7.2
 #Requires:         python-netaddr
 Requires:         python-netaddr >= 0.7.5
 
@@ -244,11 +247,11 @@ Requires:         python-libguestfs >= 1.7.17
 Requires:         python-kombu >= 1.0.4
 Requires:         python-iso8601 >= 0.1.4
 Requires:         python-paramiko >= 1.7.5
-Requires:         python-pycrypto >= 2.6
+#Requires:         python-pycrypto >= 2.6
 
 #Arrived with essex
 #Requires:         python-iso8601
-#Requires:         python-pycrypto
+Requires:         python-pycrypto
 Requires:         MySQL-python
 #Requires:         python-paramiko
 Requires:         python-ldap
@@ -291,10 +294,12 @@ Requires:         libxml2-python
 Requires:         rabbitmq-server
 
 #MK: needs to be checked
-#Requires:         python-cheetah
-Requires:         python-cheetah >= 2.4.4
-Requires:         python-cmd2 >= 0.6.4 
-Requires:         python-glanceclient >= 0.5.0 
+Requires:         python-cheetah
+#Requires:         python-cheetah >= 2.4.4
+#Requires:         python-cmd2 >= 0.6.4 
+Requires:         python-cmd2 
+#Requires:         python-glanceclient >= 0.5.0 
+Requires:         python-glanceclient 
 Requires:         python-quantumclient >= 2.1 
 
 Requires:         dmidecode
