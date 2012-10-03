@@ -199,7 +199,8 @@ Requires:         python-sqlalchemy >= 0.7.4
 #Requires:         python-warlock >= 0.4.0
 #Requires:         python-warlock
 Requires:         python-keystoneclient >= 0.1.2
-Requires:         python-prettytable >= 0.6
+#Requires:         python-prettytable >= 0.6
+Requires:         python-prettytable
 Requires:         python-argparse >= 1.2.1 
 #Requires:         python-pyparsing >= 1.5.6 
 #Requires:         python-pyparsing 
