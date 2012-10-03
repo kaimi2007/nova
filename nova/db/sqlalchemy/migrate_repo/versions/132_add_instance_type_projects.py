@@ -86,9 +86,7 @@ def _populate_instance_type_extra_specs(instance_types):
                                       hypervisor_type='s== QEMU')
             elif (name == 'tp64.8x8'):
                     extra_specs = dict(
-                                      cpu_arch='s== tilepro64',
-                                      hypervisor_type='s== tilera_hv',
-                                      vcores='=64')
+                                      cpu_arch='s== tilepro64')
 
             db.instance_type_extra_specs_update_or_create(
                                           context.get_admin_context(),
