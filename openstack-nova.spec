@@ -197,15 +197,15 @@ Requires:         python-webob >= 1.0.8
 #Requires:         python-boto >= 2.1.1 
 Requires:         python-sqlalchemy >= 0.7.4
 #Requires:         python-warlock >= 0.4.0
-Requires:         python-warlock
+#Requires:         python-warlock
 Requires:         python-keystoneclient >= 0.1.2
 Requires:         python-prettytable >= 0.6
 Requires:         python-argparse >= 1.2.1 
 #Requires:         python-pyparsing >= 1.5.6 
-Requires:         python-pyparsing 
+#Requires:         python-pyparsing 
 Requires:         python-simplejson >= 2.0.9 
 #Requires:         python-cliff >= 1.2.1 
-Requires:         python-cliff 
+#Requires:         python-cliff 
 Requires:         python-distribute >= 0.6.10 
 Requires:         python-tempita >= 0.4 
 Requires:         python-decorator >= 3.0.1 
@@ -297,9 +297,9 @@ Requires:         rabbitmq-server
 Requires:         python-cheetah
 #Requires:         python-cheetah >= 2.4.4
 #Requires:         python-cmd2 >= 0.6.4 
-Requires:         python-cmd2 
+#Requires:         python-cmd2 
 #Requires:         python-glanceclient >= 0.5.0 
-Requires:         python-glanceclient 
+#Requires:         python-glanceclient 
 Requires:         python-quantumclient >= 2.1 
 
 Requires:         dmidecode
