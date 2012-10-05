@@ -1,7 +1,9 @@
 Name:		dodcs-openstack
 Epoch:          1
 Version:	2012.1.1
-Release:	essex
+#MK
+#Release:	essex
+Release: 	folsom	
 Summary:	Installs all the DODCS OpenStack software using packages. Also writes README.1st and release notes to /usr/local/nova 
 
 Group:		Distribution
@@ -25,21 +27,21 @@ Requires:	libvirt-devel = 0.9.4-23.el6.6_isi
 Requires:	libvirt-python = 0.9.4-23.el6.6_isi
 Requires:	lxc-isi
 Requires:	python-paste-deploy = 1.5.0-4.el6
-Requires:	openstack-nova-node-full = 1:2012.6-essex
+Requires:	openstack-nova-node-full = 1:2012.6-folsom
 Requires:	euca2ools = 1:1.3.1-gd5
-Requires:       openstack-keystone = 1:2012.1.1-essex
+Requires:       openstack-keystone = 1:2012.1.1-folsom
 Requires:       python-keystoneclient = 1:2.7-b3045
-Requires:       python-nova = 1:2012.6-essex
-Requires:	openstack-nova-network = 1:2012.6-essex
-Requires:	openstack-nova-scheduler = 1:2012.6-essex
-Requires:	openstack-nova-objectstore = 1:2012.6-essex
-Requires:	openstack-nova-api = 1:2012.6-essex
-Requires:	openstack-nova-volume = 1:2012.6-essex
-Requires:       python-glance = 1:2012.1.1-essex
-Requires:	openstack-glance = 1:2012.1.1-essex
-Requires:	openstack-nova-compute = 1:2012.6-essex
-Requires:	openstack-dashboard = 1:2012.1.1-essex	
-Requires:	horizon = 1:2012.1.1-essex
+Requires:       python-nova = 1:2012.6-folsom
+Requires:	openstack-nova-network = 1:2012.6-folsom
+Requires:	openstack-nova-scheduler = 1:2012.6-folsom
+Requires:	openstack-nova-objectstore = 1:2012.6-folsom
+Requires:	openstack-nova-api = 1:2012.6-folsom
+Requires:	openstack-nova-volume = 1:2012.6-folsom
+Requires:       python-glance = 1:2012.1.1-folsom
+Requires:	openstack-glance = 1:2012.1.1-folsom
+Requires:	openstack-nova-compute = 1:2012.6-folsom
+Requires:	openstack-dashboard = 1:2012.1.1-folsom	
+Requires:	horizon = 1:2012.1.1-folsom
 
 
 %description

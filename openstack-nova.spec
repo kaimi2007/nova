@@ -14,7 +14,9 @@ Name:             %{short_name}
 Version:          2012.6
 #Version:          2012.1
 #Release:	b3119
-Release:	  essex
+#MK
+#Release:	  essex
+Release:	  folsom 
 Epoch:            1
 Summary:          OpenStack Compute (nova)
 

@@ -1,7 +1,10 @@
 Name:		nova-install
 Version:	2012.6
-Release:	essex
-Summary:	Copies nova install script and examples config files for essex release to /usr/local/nova/
+#MK
+#Release:	essex
+Release: 	folsom	
+#Summary:	Copies nova install script and examples config files for essex release to /usr/local/nova/
+Summary:	Copies nova install script and examples config files for folsom release to /usr/local/nova/
 
 Group:		Distribution
 License:	GPL
@@ -17,7 +20,9 @@ BuildRoot:	%{_tmppath}/%{name}-buildroot
 %define usrlocaldir /usr/local
 
 %description
-Copies nova install script for essex release in /usr/local/nova/ and example config files under /usr/local/nova/examples/
+#MK
+#Copies nova install script for essex release in /usr/local/nova/ and example config files under /usr/local/nova/examples/
+Copies nova install script for folsom release in /usr/local/nova/ and example config files under /usr/local/nova/examples/
 Also copies dhcp_release to /usr/bin
 
 %prep
