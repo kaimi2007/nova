@@ -110,7 +110,8 @@ Requires:         libxslt-devel
 Requires:         python-setuptools >= 0.4.2 
 Requires:         python-httplib2 >= 0.4.0 
 
-Requires:         python-nova  = %{epoch}:%{version}-%{release}
+#Requires:         python-nova  = %{epoch}:%{version}-%{release}
+Requires:         python-nova  = %{epoch}:%{version}-folsom
 Requires:         sudo
 
 Requires(post):   chkconfig grep sudo libselinux-utils
@@ -226,7 +227,8 @@ Requires:         python-suds >= 0.4.0
 Requires:         python-tornado
 #Requires:         python-webob
 Requires:         python-glance
-Requires:         python-novaclient = %{epoch}:2012.1-%{release}
+#Requires:         python-novaclient = %{epoch}:2012.1-%{release}
+Requires:         python-novaclient = %{epoch}:2012.1-folsom
 
 #MK: needs to be checked
 Requires:         python-lxml
@@ -556,22 +558,23 @@ rm -f %{buildroot}/usr/share/doc/nova/README*
 mv %{buildroot}/usr/bin/nova{-api,}-metadata
 
 #KDS remove that stuff from /usr/bin that we put in /usr/local/nova/bin
-rm -f %{buildroot}%{_bindir}/api-paste.ini
-rm -f %{buildroot}%{_bindir}/clear_rabbit_queues
-rm -f %{buildroot}%{_bindir}/instance-usage-audit
-rm -f %{buildroot}%{_bindir}/nova-a*
-rm -f %{buildroot}%{_bindir}/nova-c*
-rm -f %{buildroot}%{_bindir}/nova-dhcpbridge
-rm -f %{buildroot}%{_bindir}/nova-direct-api
-rm -f %{buildroot}%{_bindir}/nova-l*
-rm -f %{buildroot}%{_bindir}/nova-m*
-rm -f %{buildroot}%{_bindir}/nova-n*
-rm -f %{buildroot}%{_bindir}/nova-o*
-rm -f %{buildroot}%{_bindir}/nova-r*
-rm -f %{buildroot}%{_bindir}/nova-s*
-rm -f %{buildroot}%{_bindir}/nova-v*
-rm -f %{buildroot}%{_bindir}/nova-x*
-rm -f %{buildroot}%{_bindir}/stack
+#MK: should not remove nova-* from /usr/bin in Folsom
+#rm -f %{buildroot}%{_bindir}/api-paste.ini
+#rm -f %{buildroot}%{_bindir}/clear_rabbit_queues
+#rm -f %{buildroot}%{_bindir}/instance-usage-audit
+#rm -f %{buildroot}%{_bindir}/nova-a*
+#rm -f %{buildroot}%{_bindir}/nova-c*
+#rm -f %{buildroot}%{_bindir}/nova-dhcpbridge
+#rm -f %{buildroot}%{_bindir}/nova-direct-api
+#rm -f %{buildroot}%{_bindir}/nova-l*
+#rm -f %{buildroot}%{_bindir}/nova-m*
+#rm -f %{buildroot}%{_bindir}/nova-n*
+#rm -f %{buildroot}%{_bindir}/nova-o*
+#rm -f %{buildroot}%{_bindir}/nova-r*
+#rm -f %{buildroot}%{_bindir}/nova-s*
+#rm -f %{buildroot}%{_bindir}/nova-v*
+#rm -f %{buildroot}%{_bindir}/nova-x*
+#rm -f %{buildroot}%{_bindir}/stack
 
 %clean
 rm -rf %{buildroot}
