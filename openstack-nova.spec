@@ -110,8 +110,7 @@ Requires:         libxslt-devel
 Requires:         python-setuptools >= 0.4.2 
 Requires:         python-httplib2 >= 0.4.0 
 
-#Requires:         python-nova  = %{epoch}:%{version}-%{release}
-Requires:         python-nova  = %{epoch}:%{version}-folsom
+Requires:         python-nova  = %{epoch}:%{version}-%{release}
 Requires:         sudo
 
 Requires(post):   chkconfig grep sudo libselinux-utils
@@ -227,8 +226,7 @@ Requires:         python-suds >= 0.4.0
 Requires:         python-tornado
 #Requires:         python-webob
 Requires:         python-glance
-#Requires:         python-novaclient = %{epoch}:2012.1-%{release}
-Requires:         python-novaclient = %{epoch}:2012.1-folsom
+Requires:         python-novaclient = %{epoch}:2012.1-%{release}
 
 #MK: needs to be checked
 Requires:         python-lxml
@@ -606,92 +604,92 @@ fi
 # api
 #KDS: there are no nova-* service now. they have been replaced by openstack-nova-*
 # so replacing %{prj} below with %{isi_prj}
-#%preun api
-#if [ $1 -eq 0 ] ; then
-#    /sbin/service %{prj}-api stop >/dev/null 2>&1
-#    /sbin/service %{prj}-direct-api stop >/dev/null 2>&1
-#fi
+%preun api
+if [ $1 -eq 0 ] ; then
+    /sbin/service %{prj}-api stop >/dev/null 2>&1
+    /sbin/service %{prj}-direct-api stop >/dev/null 2>&1
+fi
 
-#%postun api
-#if [ $1 -eq 1 ] ; then
-#    /sbin/service %{prj}-api condrestart
-#    /sbin/service %{prj}-direct-api condrestart
-#fi
+%postun api
+if [ $1 -eq 1 ] ; then
+    /sbin/service %{prj}-api condrestart
+    /sbin/service %{prj}-direct-api condrestart
+fi
 ##mv /usr/bin/nova{-api,}-metadata
 
 # compute
 
-#%preun compute
-#if [ $1 -eq 0 ] ; then
-#    /sbin/service %{prj}-ajax-console-proxy stop >/dev/null 2>&1
-#    /sbin/service %{prj}-compute stop >/dev/null 2>&1
-#fi
+%preun compute
+if [ $1 -eq 0 ] ; then
+    /sbin/service %{prj}-ajax-console-proxy stop >/dev/null 2>&1
+    /sbin/service %{prj}-compute stop >/dev/null 2>&1
+fi
 
-#%postun compute
-#if [ $1 -eq 1 ] ; then
-#    /sbin/service %{prj}-ajax-console-proxy condrestart
-#    /sbin/service %{prj}-compute condrestart
-#fi
+%postun compute
+if [ $1 -eq 1 ] ; then
+    /sbin/service %{prj}-ajax-console-proxy condrestart
+    /sbin/service %{prj}-compute condrestart
+fi
 
 # network
 
 %preun network
 if [ $1 -eq 0 ] ; then
-    /sbin/service %{isi_prj}-network stop >/dev/null 2>&1
+    /sbin/service %{prj}-network stop >/dev/null 2>&1
 fi
 
 %postun network
 if [ $1 -eq 1 ] ; then
-    /sbin/service %{isi_prj}-network condrestart
+    /sbin/service %{prj}-network condrestart
 fi
 
 # xvpvncproxy
 
-#%preun xvpvncproxy
-#if [ $1 -eq 0 ] ; then
-#    /sbin/service %{prj}-xvpvncproxy stop >/dev/null 2>&1
-#fi
+%preun xvpvncproxy
+if [ $1 -eq 0 ] ; then
+    /sbin/service %{prj}-xvpvncproxy stop >/dev/null 2>&1
+fi
 
-#%postun xvpvncproxy
-#if [ $1 -eq 1 ] ; then
-#    /sbin/service %{prj}-xvpvncproxy condrestart
-#fi
+%postun xvpvncproxy
+if [ $1 -eq 1 ] ; then
+    /sbin/service %{prj}-xvpvncproxy condrestart
+fi
 
 # objectstore
 
 %preun objectstore
 if [ $1 -eq 0 ] ; then
-    /sbin/service %{isi_prj}-objectstore stop >/dev/null 2>&1
+    /sbin/service %{prj}-objectstore stop >/dev/null 2>&1
 fi
 
 %postun objectstore
 if [ $1 -eq 1 ] ; then
-    /sbin/service %{isi_prj}-objectstore condrestart
+    /sbin/service %{prj}-objectstore condrestart
 fi
 
 # scheduler
 
 %preun scheduler
 if [ $1 -eq 0 ] ; then
-    /sbin/service %{isi_prj}-scheduler stop >/dev/null 2>&1
+    /sbin/service %{prj}-scheduler stop >/dev/null 2>&1
 fi
 
 %postun scheduler
 if [ $1 -eq 1 ] ; then
-    /sbin/service %{isi_prj}-scheduler condrestart
+    /sbin/service %{prj}-scheduler condrestart
 fi
 
 # volume
 #KDS
-#%preun volume
-#if [ $1 -eq 0 ] ; then
-#    /sbin/service %{prj}-volume stop >/dev/null 2>&1
-#fi
+%preun volume
+if [ $1 -eq 0 ] ; then
+    /sbin/service %{prj}-volume stop >/dev/null 2>&1
+fi
 
-#%postun volume
-#if [ $1 -eq 1 ] ; then
-#    /sbin/service %{prj}-volume condrestart
-#fi
+%postun volume
+if [ $1 -eq 1 ] ; then
+    /sbin/service %{prj}-volume condrestart
+fi
 
 %files
 %defattr(-,root,root,-)
@@ -711,15 +709,16 @@ fi
 %dir %{_localstatedir}/lock/nova
 
 %defattr(-,root,root,-)
-#%{_bindir}/instance-usage-audit
-#%{_bindir}/nova-console
-#%{_bindir}/nova-consoleauth
-#%{_bindir}/nova-manage
-#%{_bindir}/clear_rabbit_queues
-#%{_bindir}/stack
-#%{_bindir}/nova-rootwrap
-#%{_bindir}/nova-all
-#%{_bindir}/nova-debug
+#MK
+%{_bindir}/instance-usage-audit
+%{_bindir}/nova-console
+%{_bindir}/nova-consoleauth
+%{_bindir}/nova-manage
+%{_bindir}/clear_rabbit_queues
+%{_bindir}/stack
+%{_bindir}/nova-rootwrap
+%{_bindir}/nova-all
+%{_bindir}/nova-debug
 
 %{_datarootdir}/nova
 #KDS
@@ -753,28 +752,29 @@ fi
 %doc LICENSE
 %{python_sitelib}/nova
 #KDS becuase of glob can't find this file
-#%{python_sitelib}/nova-%{version}-*.egg-info
-%{python_sitelib}/nova-*.egg-info
+%{python_sitelib}/nova-%{version}-*.egg-info
+#%{python_sitelib}/nova-*.egg-info
 
 %files api
 %defattr(-,root,root,-)
 #KDS no longer copied
-#%{_bindir}/%{prj}-api
-%{_initrddir}/%{isi_prj}-api
-#%{_bindir}/%{prj}-api-ec2
-#%{_bindir}/%{prj}-direct-api
-%{_initrddir}/%{isi_prj}-direct-api
+#MK
+%{_bindir}/%{prj}-api
+#%{_initrddir}/%{isi_prj}-api
+%{_bindir}/%{prj}-api-ec2
+%{_bindir}/%{prj}-direct-api
+#%{_initrddir}/%{isi_prj}-direct-api
 #MK: needs to be checked
-#%{_bindir}/%{prj}-cert
-#%{_bindir}/%{prj}-metadata
-#%{_bindir}/%{prj}-api-os-compute
-#%{_bindir}/%{prj}-api-os-volume
-#%{_bindir}/%{prj}-api-metadata
+%{_bindir}/%{prj}-cert
+%{_bindir}/%{prj}-metadata
+%{_bindir}/%{prj}-api-os-compute
+%{_bindir}/%{prj}-api-os-volume
+%{_bindir}/%{prj}-api-metadata
 #%{_bindir}/%{isi_prj}-ajax-console-proxy
-#%{_bindir}/%{prj}-ajax-console-proxy
+%{_bindir}/%{prj}-ajax-console-proxy
 #KDS no longer copied
-#%{_initrddir}/%{prj}-api
-#%{_initrddir}/%{prj}-direct-api
+%{_initrddir}/%{prj}-api
+%{_initrddir}/%{prj}-direct-api
 
 #KDS
 #%defattr(-,nova,nobody,-)
@@ -791,40 +791,40 @@ fi
 %config %{_sysconfdir}/nova/rootwrap.d/network.filters
 %config %{_sysconfdir}/nova/rootwrap.d/volume.filters
 %config %{_sysconfdir}/nova/rootwrap.d/api-metadata.filters
-#%{_bindir}/nova-compute
+%{_bindir}/nova-compute
 #KDS
-#%{_initrddir}/%{prj}-compute
-%{_initrddir}/%{isi_prj}-compute
-%{_initrddir}/%{isi_prj}-cert
+%{_initrddir}/%{prj}-compute
+#%{_initrddir}/%{isi_prj}-compute
+#%{_initrddir}/%{isi_prj}-cert
 
 %files network
 %defattr(-,root,root,-)
-#%{_bindir}/nova-network
-#%{_bindir}/nova-dhcpbridge
+%{_bindir}/nova-network
+%{_bindir}/nova-dhcpbridge
 #KDS
-#%{_initrddir}/%{prj}-network
-%{_initrddir}/%{isi_prj}-network
+%{_initrddir}/%{prj}-network
+#%{_initrddir}/%{isi_prj}-network
 
 %files objectstore
 %defattr(-,root,root,-)
-#%{_bindir}/nova-objectstore
+%{_bindir}/nova-objectstore
 #KDS
-#%{_initrddir}/%{prj}-objectstore
-%{_initrddir}/%{isi_prj}-objectstore
+%{_initrddir}/%{prj}-objectstore
+#%{_initrddir}/%{isi_prj}-objectstore
 
 %files scheduler
 %defattr(-,root,root,-)
-#%{_bindir}/nova-scheduler
+%{_bindir}/nova-scheduler
 #KDS
-#%{_initrddir}/%{prj}-scheduler
-%{_initrddir}/%{isi_prj}-scheduler
+%{_initrddir}/%{prj}-scheduler
+#%{_initrddir}/%{isi_prj}-scheduler
 
 %files volume
 %defattr(-,root,root,-)
-#%{_bindir}/nova-volume
+%{_bindir}/nova-volume
 #KDS
-#%{_initrddir}/%{prj}-volume
-%{_initrddir}/%{isi_prj}-volume
+%{_initrddir}/%{prj}-volume
+#%{_initrddir}/%{isi_prj}-volume
 
 %if 0%{?with_doc}
 %files doc
