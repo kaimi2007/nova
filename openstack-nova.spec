@@ -35,7 +35,7 @@ Source13:         %{prj}-network.init
 Source14:         %{prj}-objectstore.init
 Source15:         %{prj}-scheduler.init
 Source16:         %{prj}-volume.init
-Source17:         %{prj}-direct-api.init
+#Source17:         %{prj}-direct-api.init
 Source18:         %{prj}-ajax-console-proxy.init
 Source19:         %{prj}-xvpvncproxy.init
 #KDS changed from nova-sudoers to ISI's file
@@ -494,7 +494,7 @@ install -p -D -m 755 %{SOURCE13} %{buildroot}%{_initrddir}/%{prj}-network
 install -p -D -m 755 %{SOURCE14} %{buildroot}%{_initrddir}/%{prj}-objectstore
 install -p -D -m 755 %{SOURCE15} %{buildroot}%{_initrddir}/%{prj}-scheduler
 install -p -D -m 755 %{SOURCE16} %{buildroot}%{_initrddir}/%{prj}-volume
-install -p -D -m 755 %{SOURCE17} %{buildroot}%{_initrddir}/%{prj}-direct-api
+#install -p -D -m 755 %{SOURCE17} %{buildroot}%{_initrddir}/%{prj}-direct-api
 install -p -D -m 755 %{SOURCE19} %{buildroot}%{_initrddir}/%{prj}-xvpvncproxy
 install -p -D -m 755 %{SOURCE29} %{buildroot}%{_initrddir}/%{prj}-cert
 
@@ -607,13 +607,13 @@ fi
 %preun api
 if [ $1 -eq 0 ] ; then
     /sbin/service %{prj}-api stop >/dev/null 2>&1
-    /sbin/service %{prj}-direct-api stop >/dev/null 2>&1
+    #/sbin/service %{prj}-direct-api stop >/dev/null 2>&1
 fi
 
 %postun api
 if [ $1 -eq 1 ] ; then
     /sbin/service %{prj}-api condrestart
-    /sbin/service %{prj}-direct-api condrestart
+    #/sbin/service %{prj}-direct-api condrestart
 fi
 ##mv /usr/bin/nova{-api,}-metadata
 
@@ -762,19 +762,19 @@ fi
 %{_bindir}/%{prj}-api
 #%{_initrddir}/%{isi_prj}-api
 %{_bindir}/%{prj}-api-ec2
-%{_bindir}/%{prj}-direct-api
+#%{_bindir}/%{prj}-direct-api
 #%{_initrddir}/%{isi_prj}-direct-api
 #MK: needs to be checked
 %{_bindir}/%{prj}-cert
 %{_bindir}/%{prj}-metadata
 %{_bindir}/%{prj}-api-os-compute
 %{_bindir}/%{prj}-api-os-volume
-%{_bindir}/%{prj}-api-metadata
+#%{_bindir}/%{prj}-api-metadata
 #%{_bindir}/%{isi_prj}-ajax-console-proxy
 %{_bindir}/%{prj}-ajax-console-proxy
 #KDS no longer copied
 %{_initrddir}/%{prj}-api
-%{_initrddir}/%{prj}-direct-api
+#%{_initrddir}/%{prj}-direct-api
 
 #KDS
 #%defattr(-,nova,nobody,-)
