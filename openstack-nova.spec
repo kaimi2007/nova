@@ -771,7 +771,7 @@ fi
 %{_bindir}/%{prj}-api-os-volume
 #%{_bindir}/%{prj}-api-metadata
 #%{_bindir}/%{isi_prj}-ajax-console-proxy
-%{_bindir}/%{prj}-ajax-console-proxy
+#%{_bindir}/%{prj}-ajax-console-proxy
 #KDS no longer copied
 %{_initrddir}/%{prj}-api
 #%{_initrddir}/%{prj}-direct-api
