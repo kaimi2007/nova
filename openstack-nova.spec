@@ -710,15 +710,15 @@ fi
 
 %defattr(-,root,root,-)
 #MK
-%{_bindir}/instance-usage-audit
+#%{_bindir}/instance-usage-audit
 %{_bindir}/nova-console
 %{_bindir}/nova-consoleauth
 %{_bindir}/nova-manage
-%{_bindir}/clear_rabbit_queues
-%{_bindir}/stack
+#%{_bindir}/clear_rabbit_queues
+#%{_bindir}/stack
 %{_bindir}/nova-rootwrap
 %{_bindir}/nova-all
-%{_bindir}/nova-debug
+#%{_bindir}/nova-debug
 
 %{_datarootdir}/nova
 #KDS
