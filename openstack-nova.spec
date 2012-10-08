@@ -801,7 +801,7 @@ fi
 #KDS
 %{_initrddir}/%{prj}-compute
 #%{_initrddir}/%{isi_prj}-compute
-#%{_initrddir}/%{isi_prj}-cert
+%{_initrddir}/%{prj}-cert
 
 %files network
 %defattr(-,root,root,-)
