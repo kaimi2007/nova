@@ -36,7 +36,7 @@ Source14:         %{prj}-objectstore.init
 Source15:         %{prj}-scheduler.init
 Source16:         %{prj}-volume.init
 #Source17:         %{prj}-direct-api.init
-Source18:         %{prj}-ajax-console-proxy.init
+#Source18:         %{prj}-ajax-console-proxy.init
 Source19:         %{prj}-xvpvncproxy.init
 #KDS changed from nova-sudoers to ISI's file
 Source20:         openstack-nova-sudoers
@@ -621,13 +621,13 @@ fi
 
 %preun compute
 if [ $1 -eq 0 ] ; then
-    /sbin/service %{prj}-ajax-console-proxy stop >/dev/null 2>&1
+    #/sbin/service %{prj}-ajax-console-proxy stop >/dev/null 2>&1
     /sbin/service %{prj}-compute stop >/dev/null 2>&1
 fi
 
 %postun compute
 if [ $1 -eq 1 ] ; then
-    /sbin/service %{prj}-ajax-console-proxy condrestart
+    #/sbin/service %{prj}-ajax-console-proxy condrestart
     /sbin/service %{prj}-compute condrestart
 fi
 
