@@ -752,8 +752,8 @@ fi
 %doc LICENSE
 %{python_sitelib}/nova
 #KDS becuase of glob can't find this file
-%{python_sitelib}/nova-%{version}-*.egg-info
-#%{python_sitelib}/nova-*.egg-info
+#%{python_sitelib}/nova-%{version}-*.egg-info
+%{python_sitelib}/nova-*.egg-info
 
 %files api
 %defattr(-,root,root,-)
