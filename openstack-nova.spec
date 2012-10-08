@@ -769,6 +769,12 @@ fi
 %{_bindir}/%{prj}-metadata
 %{_bindir}/%{prj}-api-os-compute
 %{_bindir}/%{prj}-api-os-volume
+#Added in Folsom
+%{_bindir}/%{prj}-clear-rabbit-queues
+%{_bindir}/%{prj}-novncproxy
+%{_bindir}/%{prj}-rpc-zmq-receiver
+%{_bindir}/%{prj}-volume-usage-audit
+%{_bindir}/%{prj}-xvpvncproxy
 #%{_bindir}/%{prj}-api-metadata
 #%{_bindir}/%{isi_prj}-ajax-console-proxy
 #%{_bindir}/%{prj}-ajax-console-proxy
