@@ -231,7 +231,8 @@ Requires:         python-novaclient = %{epoch}:2012.1-%{release}
 #MK: needs to be checked
 Requires:         python-lxml
 #Requires:         python-lxml >= 2.3
-Requires:         python-sqlalchemy-migrate
+#Requires:         python-sqlalchemy-migrate
+Requires:         python-sqlalchemy-migrate >= 0.7.1
 #Requires:         python-sqlalchemy-migrate >= 0.7.2
 #Requires:         python-netaddr
 Requires:         python-netaddr >= 0.7.5
