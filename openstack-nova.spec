@@ -793,11 +793,11 @@ fi
 %defattr(-,root,root,-)
 %config %{_sysconfdir}/polkit-1/localauthority/50-local.d/50-openstack-nova.pkla
 #MK: needs to be checked
-%config %{_sysconfdir}/nova/rootwrap.conf
-%config %{_sysconfdir}/nova/rootwrap.d/compute.filters
-%config %{_sysconfdir}/nova/rootwrap.d/network.filters
-%config %{_sysconfdir}/nova/rootwrap.d/volume.filters
-%config %{_sysconfdir}/nova/rootwrap.d/api-metadata.filters
+%config(noreplace) %{_sysconfdir}/nova/rootwrap.conf
+%config(noreplace) %{_sysconfdir}/nova/rootwrap.d/compute.filters
+%config(noreplace) %{_sysconfdir}/nova/rootwrap.d/network.filters
+%config(noreplace) %{_sysconfdir}/nova/rootwrap.d/volume.filters
+%config(noreplace) %{_sysconfdir}/nova/rootwrap.d/api-metadata.filters
 %{_bindir}/nova-compute
 #KDS
 %{_initrddir}/%{prj}-compute
