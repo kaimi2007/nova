@@ -303,7 +303,8 @@ Requires:         python-cheetah
 #Requires:         python-cmd2 >= 0.6.4 
 #Requires:         python-cmd2 
 #Requires:         python-glanceclient >= 0.5.0 
-Requires:         python-glanceclient 
+#Requires:         python-glanceclient
+Requires:         python-glanceclient = %{epoch}:2012.1-%{release}
 Requires:         python-quantumclient >= 2.1 
 
 Requires:         dmidecode
