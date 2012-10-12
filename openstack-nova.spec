@@ -39,7 +39,7 @@ Source16:         %{prj}-volume.init
 #Source18:         %{prj}-ajax-console-proxy.init
 Source19:         %{prj}-xvpvncproxy.init
 #KDS changed from nova-sudoers to ISI's file
-Source20:         openstack-nova-sudoers
+#Source20:         openstack-nova-sudoers
 Source21:         %{short_name}-polkit.pkla
 Source22:         %{short_name}-rhel-ifc-template
 #AP: moved nova.conf to ./etc/nova/ in the repo
@@ -452,6 +452,9 @@ install -d -m 755 %{buildroot}%{_sysconfdir}/nova
 install -d -m 755 %{buildroot}%{_sysconfdir}/nova/rootwrap.d
 install -D -m 644 etc/nova/rootwrap.d/* %{buildroot}%{_sysconfdir}/nova/rootwrap.d/
 rm -rf  etc/nova/rootwrap.d	# dkang: check this
+install -d -m 755 %{buildroot}%{_sysconfdir}/sudoers.d
+install -D -m 440 etc/sudoers.d/* %{buildroot}%{_sysconfdir}/sudoers.d/
+rm -rf  etc/sudoers.d	# mkkang: check this
 install -D -m 600 etc/nova/* %{buildroot}%{_sysconfdir}/nova/
 #install -p -D -m 600 etc/nova/* %{buildroot}%{_sysconfdir}/nova/
 install -d -m 755 %{buildroot}%{_sharedstatedir}/nova
@@ -518,7 +521,7 @@ install -p -D -m 755 %{SOURCE29} %{buildroot}%{_initrddir}/%{prj}-cert
 #cp -p %{SOURCE41} %{buildroot}%{_bindir}/
 
 # Install sudoers
-install -p -D -m 440 %{SOURCE20} %{buildroot}%{_sysconfdir}/sudoers.d/%{name}
+#install -p -D -m 440 %{SOURCE20} %{buildroot}%{_sysconfdir}/sudoers.d/%{name}
 
 # Install logrotate
 install -p -D -m 644 %{SOURCE6} %{buildroot}%{_sysconfdir}/logrotate.d/%{name}
@@ -697,7 +700,7 @@ fi
 %defattr(-,root,root,-)
 %doc README.rst README.rhel6
 %config(noreplace) %{_sysconfdir}/logrotate.d/%{name}
-%config(noreplace) %{_sysconfdir}/sudoers.d/%{name}
+#%config(noreplace) %{_sysconfdir}/sudoers.d/%{name}
 
 %defattr(-,nova,nobody,-)
 %dir %{_sysconfdir}/nova
@@ -799,6 +802,8 @@ fi
 %config(noreplace) %{_sysconfdir}/nova/rootwrap.d/network.filters
 %config(noreplace) %{_sysconfdir}/nova/rootwrap.d/volume.filters
 %config(noreplace) %{_sysconfdir}/nova/rootwrap.d/api-metadata.filters
+%config(noreplace) %{_sysconfdir}/sudoers.d/nova-rootwrap
+%config(noreplace) %{_sysconfdir}/sudoers.d/openstack-nova
 %{_bindir}/nova-compute
 #KDS
 %{_initrddir}/%{prj}-compute

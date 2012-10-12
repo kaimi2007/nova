@@ -44,7 +44,8 @@ daemonuser=nova
 
 start() {
     echo -n "Starting $prog: "
-    start-stop-daemon --start --oknodo --background --chuid $daemonuser --make-pidfile --pidfile $pidfile --startas $binfile --
+    #start-stop-daemon --start --oknodo --background --chuid $daemonuser --make-pidfile --pidfile $pidfile --startas $binfile --
+    HOME=/var/lib/nova /sbin/start-stop-daemon --start -v -b -c nova --make-pidfile --pidfile $pidfile  --exec $binfile -- --logfile=$logfile
     retval=$?
     [ $retval -eq 0 ] && success || failure
     echo
