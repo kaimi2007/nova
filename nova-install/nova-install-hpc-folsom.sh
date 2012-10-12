@@ -50,6 +50,7 @@
 #DIR=`pwd`
 CMD=$1
 ARCH=$2
+MYSQL_USR=root
 MYSQL_PASS=nova
 NET_MAN=FlatDHCPManager
 BRIDGE=br100
@@ -138,12 +139,12 @@ MYSQL_PASS=${MYSQL_PASS:-nova}
 #             below but make sure that the interface doesn't already have an
 #             ip or you risk breaking things.
 SQL_CONN=mysql://root:$MYSQL_PASS@${MySQL_server_IP_address}/nova
-if [ "$CMD" == "sys-init" ]; then
-    mysqladmin -u root password nova
-    mysql -uroot -pnova -e 'CREATE DATABASE nova;'
-    mysql -uroot -pnova -e "GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;"
-    mysql -uroot -pnova -e "SET PASSWORD FOR 'root'@'%' = PASSWORD('nova');"
-fi
+#if [ "$CMD" == "sys-init" ]; then
+#    mysqladmin -u root password nova
+#    mysql -uroot -pnova -e 'CREATE DATABASE nova;'
+#    mysql -uroot -pnova -e "GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;"
+#    mysql -uroot -pnova -e "SET PASSWORD FOR 'root'@'%' = PASSWORD('nova');"
+#fi
 if [ "$CMD" == "compute-init" ] ||
      [ "$CMD" == "cloud-init" ] ||
      [ "$CMD" == "single-init" ]; then
@@ -238,8 +239,10 @@ if [ "$CMD" == "cloud-init" ] ||
 ##    screen -d -m -S nova -t nova
     sleep 1
     echo "drop and create and sync db"
-    mysql -p$MYSQL_PASS -e 'DROP DATABASE nova;'
-    mysql -p$MYSQL_PASS -e 'CREATE DATABASE nova;'
+    mysql -u$MYSQL_USR -p$MYSQL_PASS -e 'DROP DATABASE nova;' -h ${MySQL_server_IP_address}
+    mysql -u$MYSQL_USR -p$MYSQL_PASS -e 'CREATE DATABASE nova;' -h ${MySQL_server_IP_address}
+    mysql -u$MYSQL_USR -p$MYSQL_PASS -e "GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;" -h ${MySQL_server_IP_address}
+    mysql -u$MYSQL_USR -p$MYSQL_PASS -e "SET PASSWORD FOR 'root'@'%' = PASSWORD('nova');" -h ${MySQL_server_IP_address}
     nova-manage db sync
 
     echo "nova-manage network create"
