@@ -818,16 +818,23 @@ class LibvirtDriver(driver.ComputeDriver):
         # Find the disk
         xml_desc = virt_dom.XMLDesc(0)
         domain = etree.fromstring(xml_desc)
-        source = domain.find('devices/disk/source')
-        disk_path = source.get('file')
+        if FLAGS.libvirt_type != 'lxc':
+            source = domain.find('devices/disk/source')
+            disk_path = source.get('file')
+        else:
+            source = domain.find('devices/filesystem/source')
+            disk_path = source.get('dir')
+            disk_path = disk_path[0:disk_path.rfind('rootfs')]
+            disk_path = os.path.join(disk_path, 'disk')
 
         snapshot_name = uuid.uuid4().hex
 
         (state, _max_mem, _mem, _cpus, _t) = virt_dom.info()
         state = LIBVIRT_POWER_STATE[state]
 
-        if state == power_state.RUNNING:
-            virt_dom.managedSave(0)
+        if FLAGS.libvirt_type != 'lxc':
+            if state == power_state.RUNNING:
+                virt_dom.managedSave(0)
         # Make the snapshot
         libvirt_utils.create_snapshot(disk_path, snapshot_name)
 
@@ -841,9 +848,11 @@ class LibvirtDriver(driver.ComputeDriver):
                                                snapshot_name, out_path,
                                                image_format)
             finally:
+                snapshot.delete()
                 libvirt_utils.delete_snapshot(disk_path, snapshot_name)
-                if state == power_state.RUNNING:
-                    self._create_domain(domain=virt_dom)
+                if FLAGS.libvirt_type != 'lxc':
+                    if state == power_state.RUNNING:
+                        self._create_domain(domain=virt_dom)
 
             # Upload that image to the image service
             with libvirt_utils.file_open(out_path) as image_file:
