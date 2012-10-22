@@ -114,13 +114,13 @@ elif [ "$ARCH" == "uv" ]; then
     LIBVIRT_TYPE=kvm
     CPU_ARCH=x86_64
     CONNECTION_TYPE=libvirt
-    COMPUTE_DRIVER=libvirt.LibvirtDriver
+    COMPUTE_DRIVER=libvirt.GPULibvirtDriver
     EXTRA_SPECS="cpu_arch:$CPU_ARCH, system_type:UV"
 else
     LIBVIRT_TYPE=kvm
     CPU_ARCH=x86_64
     CONNECTION_TYPE=libvirt
-    COMPUTE_DRIVER=libvirt.LibvirtDriver
+    COMPUTE_DRIVER=libvirt.GPULibvirtDriver
     EXTRA_SPECS="cpu_arch:$CPU_ARCH"
 fi
 

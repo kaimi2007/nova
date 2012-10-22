@@ -51,7 +51,8 @@ lxc_mounts = {}
 
 class GPULibvirtDriver(driver.LibvirtDriver):
     def __init__(self, read_only=False):
-        assert FLAGS.libvirt_type == 'lxc', "Only LXC is supported for GPU"
+        if FLAGS.connection_type == 'gpu':
+            assert FLAGS.libvirt_type == 'lxc', "Only LXC is supported for GPU"
         super(GPULibvirtDriver, self).__init__()
 
         global libvirt
