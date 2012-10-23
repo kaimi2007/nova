@@ -305,7 +305,8 @@ Requires:         python-cheetah
 #Requires:         python-glanceclient >= 0.5.0 
 #Requires:         python-glanceclient
 Requires:         python-glanceclient = %{epoch}:2012.1-%{release}
-Requires:         python-quantumclient >= 2.1 
+#Requires:         python-quantumclient >= 2.1 
+Requires:         python-quantumclient 
 
 Requires:         dmidecode
 Requires:         libguestfs-mount
