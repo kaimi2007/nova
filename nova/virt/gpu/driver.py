@@ -58,7 +58,7 @@ class GPULibvirtDriver(driver.LibvirtDriver):
         global libvirt
         if libvirt is None:
             libvirt = __import__('libvirt')
-
+ 
         gpu_utils.init_host_gpu()
 
     @property
@@ -71,13 +71,15 @@ class GPULibvirtDriver(driver.LibvirtDriver):
     def destroy(self, instance, network_info, block_device_info=None):
         super(GPULibvirtDriver, self).destroy(instance, network_info, \
               block_device_info)
-        gpu_utils.deassign_gpus(instance)
+        if FLAGS.connection_type == 'gpu':
+            gpu_utils.deassign_gpus(instance)
 
     @exception.wrap_exception()
     def reboot(self, instance, network_info, reboot_type='SOFT'):
         t = super(GPULibvirtDriver, self).reboot(instance, network_info,
                   reboot_type)
-        gpu_utils.assign_gpus(instance)
+        if FLAGS.connection_type == 'gpu':
+            gpu_utils.assign_gpus(instance)
         return t
 
     @exception.wrap_exception()
@@ -87,9 +89,10 @@ class GPULibvirtDriver(driver.LibvirtDriver):
                   image_meta, injected_files, admin_password,
                   network_info, block_device_info)
         try:
-            gpu_utils.assign_gpus(context, instance,
+            if FLAGS.connection_type == 'gpu':
+                gpu_utils.assign_gpus(context, instance,
                                   self.get_lxc_container_root(
-                                   self._lookup_by_name(instance['name'])))
+                                  self._lookup_by_name(instance['name'])))
         except Exception as Exn:
             LOG.error(_("Error in GPU assignment, overcommitted."))
             self.destroy(instance, network_info, block_device_info)

@@ -74,6 +74,8 @@ def init_host_gpu():
     global gpus_available
     global num_gpus
     global extra_specs
+    num_gpus = 0
+    gpus_available = 0
     if 'gpus' in extra_specs:
         num_gpus = extra_specs['gpus']
         gpus_available = range(int(extra_specs['gpus']))
