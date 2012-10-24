@@ -464,7 +464,10 @@ install -d -m 755 %{buildroot}%{_sharedstatedir}/nova/instances
 install -d -m 755 %{buildroot}%{_sharedstatedir}/nova/keys
 install -d -m 755 %{buildroot}%{_sharedstatedir}/nova/networks
 install -d -m 755 %{buildroot}%{_sharedstatedir}/nova/tmp
+install -d -m 755 %{buildroot}%{_sharedstatedir}/nova/volumes
 install -d -m 755 %{buildroot}%{_localstatedir}/log/nova
+#install -d -m 755 %{buildroot}%{_sysconfdir}/tgt
+#install -D -m 600 etc/tgt/targets.conf %{buildroot}%{_sysconfdir}/tgt/
 cp -rp nova/CA %{buildroot}%{_sharedstatedir}/nova
 #AP: move the /etc/rc.d/init.d scirpts 
 install -d -m 755 %{buildroot}%{_initrddir}
@@ -737,6 +740,7 @@ fi
 %{_sharedstatedir}/nova/keys
 %{_sharedstatedir}/nova/networks
 %{_sharedstatedir}/nova/tmp
+%{_sharedstatedir}/nova/volumes
 
 #KDS
 #%dir %{usrlocaldir}/nova
@@ -805,6 +809,7 @@ fi
 %config(noreplace) %{_sysconfdir}/nova/rootwrap.d/api-metadata.filters
 %config(noreplace) %{_sysconfdir}/sudoers.d/nova-rootwrap
 %config(noreplace) %{_sysconfdir}/sudoers.d/openstack-nova
+#%config(noreplace) %{_sysconfdir}/tgt/targets.conf
 %{_bindir}/nova-compute
 #KDS
 %{_initrddir}/%{prj}-compute
