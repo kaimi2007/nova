@@ -465,6 +465,7 @@ install -d -m 755 %{buildroot}%{_sharedstatedir}/nova/keys
 install -d -m 755 %{buildroot}%{_sharedstatedir}/nova/networks
 install -d -m 755 %{buildroot}%{_sharedstatedir}/nova/tmp
 install -d -m 755 %{buildroot}%{_sharedstatedir}/nova/volumes
+install -d -m 755 %{buildroot}%{_sharedstatedir}/nova/keys
 install -d -m 755 %{buildroot}%{_localstatedir}/log/nova
 #install -d -m 755 %{buildroot}%{_sysconfdir}/tgt
 #install -D -m 600 etc/tgt/targets.conf %{buildroot}%{_sysconfdir}/tgt/
@@ -741,6 +742,7 @@ fi
 %{_sharedstatedir}/nova/networks
 %{_sharedstatedir}/nova/tmp
 %{_sharedstatedir}/nova/volumes
+%{_sharedstatedir}/nova/keys
 
 #KDS
 #%dir %{usrlocaldir}/nova

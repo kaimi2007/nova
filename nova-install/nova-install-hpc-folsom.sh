@@ -204,6 +204,8 @@ states_path=/var/lib/nova
 lock_path=/var/lib/nova
 buckets_path=/var/lib/nova/buckets
 logdir=/var/log/nova
+volumes_dir=/var/lib/nova/volumes
+keys_path=/var/lib/nova/keys
 NOVA_CONF_EOF
 fi
 chown nova:nova $NOVA_CONF
