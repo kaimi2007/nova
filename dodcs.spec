@@ -25,11 +25,11 @@ Requires:	qemu-kvm-tools = 2:0.14.0-0.1.el6.isi
 #Requires:	libvirt-debuginfo = 0.9.4-23.el6.6_isi
 #Requires:	libvirt-devel = 0.9.4-23.el6.6_isi
 #Requires:	libvirt-python = 0.9.4-23.el6.6_isi
-Requires:	libvirt >= 0.9.10
-Requires:	libvirt-client >= 0.9.10
-Requires:	libvirt-devel >= 0.9.10
-Requires:	libvirt-python >= 0.9.10
-Requires:	libvirt-lock-sanlock >= 0.9.10
+Requires:	libvirt >= 0.9.6
+Requires:	libvirt-client >= 0.9.6
+Requires:	libvirt-devel >= 0.9.6
+Requires:	libvirt-python >= 0.9.6
+Requires:	libvirt-lock-sanlock >= 0.9.6
 Requires:	lxc-isi
 Requires:	python-paste-deploy = 1.5.0-4.el6
 Requires:	openstack-nova-node-full = 1:2012.6-folsom
