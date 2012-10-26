@@ -493,7 +493,7 @@ cp -rp nova/CA %{buildroot}%{python_sitelib}/nova
 #KDS remove /usr/local/nova/nova/nova, /usr/bin/nova-manage
 #MK: needs to be checked
 #rm -rf %{buildroot}%{usrlocaldir}/nova/CA/
-rm -rf %{buildroot}%{python_sitelib}/nova/CA/
+#rm -rf %{buildroot}%{python_sitelib}/nova/CA/
 #rm -rf %{buildroot}%{usrlocaldir}/nova/nova/nova/
 #rm -rf %{_bindir}/nova-manage
 
