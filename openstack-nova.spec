@@ -488,10 +488,12 @@ install -d -m 755 %{buildroot}%{_initrddir}
 #MK: needs to be checked
 #cp -rp * %{buildroot}%{usrlocaldir}/nova/
 #cp -rp nova/CA %{buildroot}%{usrlocaldir}/nova
+cp -rp nova/CA %{python_sitelib}/nova
 #KDS: remove /usr/local/nova//CA/ it should only be under /usr/local/nova/nova/CA/ 
 #KDS remove /usr/local/nova/nova/nova, /usr/bin/nova-manage
 #MK: needs to be checked
 #rm -rf %{buildroot}%{usrlocaldir}/nova/CA/
+rm -rf %{buildroot}%{python_sitelib}/nova/CA/
 #rm -rf %{buildroot}%{usrlocaldir}/nova/nova/nova/
 #rm -rf %{_bindir}/nova-manage
 
