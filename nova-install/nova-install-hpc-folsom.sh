@@ -50,8 +50,10 @@
 #DIR=`pwd`
 CMD=$1
 ARCH=$2
-MYSQL_USR=root
-MYSQL_PASS=nova
+MYSQL_ROOT_USR=root
+MYSQL_ROOT_PASS=nova
+MYSQL_NOVA_USR=nova
+MYSQL_NOVA_PASS=sqlnova
 NET_MAN=FlatDHCPManager
 BRIDGE=br100
 NETWORK_LABEL=public
@@ -68,7 +70,8 @@ NOVA_API_server_IP_address=10.99.0.1
 Glance_server_IP_address=10.99.0.1
 Volume_server_IP_address=10.99.0.1
 Keystone_server_IP_address=10.99.0.1
-MySQL_server_IP_address=10.99.0.1
+
+MySQL_Nova_IP_address=10.99.0.1
 
 DHCP_FIXED_RANGE=10.99.0.0/16
 DHCP_START_IP=10.99.0.2
@@ -134,17 +137,22 @@ if [ ! -n "$HOST_IP" ]; then
 fi
 echo "Host IP = " $HOST_IP
 echo "Cloud Host IP = " ${NOVA_API_server_IP_address}
-MYSQL_PASS=${MYSQL_PASS:-nova}
+MYSQL_ROOT_PASS=${MYSQL_ROOT_PASS:-nova}
 # NOTE(vish): If you are using FlatDHCP on multiple hosts, set the interface
 #             below but make sure that the interface doesn't already have an
 #             ip or you risk breaking things.
-SQL_CONN=mysql://root:$MYSQL_PASS@${MySQL_server_IP_address}/nova
+SQL_CONN=mysql://$MYSQL_NOVA_USR:$MYSQL_NOVA_PASS@$MySQL_Nova_IP_address/nova
 #if [ "$CMD" == "sys-init" ]; then
 #    mysqladmin -u root password nova
 #    mysql -uroot -pnova -e 'CREATE DATABASE nova;'
 #    mysql -uroot -pnova -e "GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;"
 #    mysql -uroot -pnova -e "SET PASSWORD FOR 'root'@'%' = PASSWORD('nova');"
 #fi
+if [ -n "$FLAT_INTERFACE" ]; then
+        echo "flat_interface=$FLAT_INTERFACE" >>  $NOVA_CONF
+        echo "flat_network_bridge=br100" >> $NOVA_CONF
+        echo "flat_network_dns=$FLAT_NETWORK_DNS" >> $NOVA_CONF
+fi
 if [ "$CMD" == "compute-init" ] ||
      [ "$CMD" == "cloud-init" ] ||
      [ "$CMD" == "single-init" ]; then
@@ -222,11 +230,6 @@ if [ "$CMD" == "compute-init" ] ||
                 echo "dev_cgroups_path=$CGROUPS_PATH"  >>  $NOVA_CONF
         fi
 fi
-if [ -n "$FLAT_INTERFACE" ]; then
-        echo "flat_interface=$FLAT_INTERFACE" >>  $NOVA_CONF
-        echo "flat_network_bridge=br100" >> $NOVA_CONF
-        echo "flat_network_dns=$FLAT_NETWORK_DNS" >> $NOVA_CONF
-    fi
 if [ "$CMD" == "compute-init" ] ||
    [ "$CMD" == "single-init" ]; then
     sudo killall libvirtd
@@ -241,22 +244,30 @@ if [ "$CMD" == "cloud-init" ] ||
 ##    sudo /etc/init.d/iscsitarget restart
 ##    screen -d -m -S nova -t nova
     sleep 1
-    echo "drop and create and sync db"
-    # mysql -u$MYSQL_USR -p$MYSQL_PASS -e 'DROP DATABASE nova;' -h ${MySQL_server_IP_address}
-    # mysql -u$MYSQL_USR -p$MYSQL_PASS -e 'CREATE DATABASE nova;' -h ${MySQL_server_IP_address}
-    # mysql -u$MYSQL_USR -p$MYSQL_PASS -e "GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;" -h ${MySQL_server_IP_address}
-    # mysql -u$MYSQL_USR -p$MYSQL_PASS -e "SET PASSWORD FOR 'root'@'%' = PASSWORD('nova');" -h ${MySQL_server_IP_address}
-    mysql -u$MYSQL_USR -p$MYSQL_PASS -e 'DROP DATABASE nova;' 
-    mysql -u$MYSQL_USR -p$MYSQL_PASS -e 'CREATE DATABASE nova;' 
-    mysql -u$MYSQL_USR -p$MYSQL_PASS -e "GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;"
-    mysql -u$MYSQL_USR -p$MYSQL_PASS -e "SET PASSWORD FOR 'root'@'%' = PASSWORD('nova');" 
+    # mysql -u$MYSQL_USR -p$MYSQL_PASS -e 'DROP DATABASE nova;' -h ${MySQL_Nova_IP_address}
+    # mysql -u$MYSQL_USR -p$MYSQL_PASS -e 'CREATE DATABASE nova;' -h ${MySQL_Nova_IP_address}
+    # mysql -u$MYSQL_USR -p$MYSQL_PASS -e "GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;" -h ${MySQL_Nova_IP_address}
+    # mysql -u$MYSQL_USR -p$MYSQL_PASS -e "SET PASSWORD FOR 'root'@'%' = PASSWORD('nova');" -h ${MySQL_Nova_IP_address}
+    #mysqladmin -u root password $MYSQL_ROOT_PASS
+    #mysql -u$MYSQL_ROOT_USR -p$MYSQL_ROOT_PASS -e "GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;"
+
+    #echo "MySQL nova user creation"
+    #mysql -uroot -p$MYSQL_ROOT_PASS -e "CREATE USER '$MYSQL_NOVA_USR'@'%' IDENTIFIED BY '$MYSQL_NOVA_PASS';"
+    #mysql -uroot -p$MYSQL_ROOT_PASS -e "CREATE USER '$MYSQL_NOVA_USR'@'localhost' IDENTIFIED BY '$MYSQL_NOVA_PASS';"
+    #mysql -uroot -p$MYSQL_ROOT_PASS -e "GRANT ALL PRIVILEGES ON nova.* TO '$MYSQL_NOVA_USR'@'%' WITH GRANT OPTION;"
+    #mysql -uroot -p$MYSQL_ROOT_PASS -e "GRANT ALL PRIVILEGES ON nova.* TO '$MYSQL_NOVA_USR'@'localhost' WITH GRANT OPTION;"
+
+    #echo "drop and create and sync db, if this is first trial, please ignore error message of 'database doesn't exist'"
+    #mysql -u$MYSQL_ROOT_USR -p$MYSQL_ROOT_PASS -e 'DROP DATABASE nova;' 
+    #mysql -u$MYSQL_ROOT_USR -p$MYSQL_ROOT_PASS -e 'CREATE DATABASE nova;' 
+
+
     nova-manage db sync
 
     echo "nova-manage network create"
     nova-manage network create --bridge_interface=$BRIDGE_IFACE --bridge=$BRIDGE \
        --num_networks=$NUM_NETWORKS --fixed_range_v4=$DHCP_FIXED_RANGE \
        --network_size=$DHCP_IP_NUM --label=$NETWORK_LABEL
-    echo "launch nova cloud services is not done for testing"
     service nova-api restart
     service nova-network restart
     service nova-objectstore restart
