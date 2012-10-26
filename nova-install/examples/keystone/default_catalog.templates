@@ -25,7 +25,7 @@ catalog.RegionOne.s3.adminURL = http://127.0.0.1:3333
 catalog.RegionOne.s3.internalURL = http://127.0.0.1:3333
 catalog.RegionOne.s3.name = S3 Service
 
-catalog.RegionOne.image.publicURL = http://127.0.0.1:9292/v1
-catalog.RegionOne.image.adminURL = http://127.0.0.1:9292/v1
-catalog.RegionOne.image.internalURL = http://127.0.0.1:9292/v1
+catalog.RegionOne.image.publicURL = http://127.0.0.1:9292
+catalog.RegionOne.image.adminURL = http://127.0.0.1:9292
+catalog.RegionOne.image.internalURL = http://127.0.0.1:9292
 catalog.RegionOne.image.name = Image Service

@@ -242,10 +242,14 @@ if [ "$CMD" == "cloud-init" ] ||
 ##    screen -d -m -S nova -t nova
     sleep 1
     echo "drop and create and sync db"
-    mysql -u$MYSQL_USR -p$MYSQL_PASS -e 'DROP DATABASE nova;' -h ${MySQL_server_IP_address}
-    mysql -u$MYSQL_USR -p$MYSQL_PASS -e 'CREATE DATABASE nova;' -h ${MySQL_server_IP_address}
-    mysql -u$MYSQL_USR -p$MYSQL_PASS -e "GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;" -h ${MySQL_server_IP_address}
-    mysql -u$MYSQL_USR -p$MYSQL_PASS -e "SET PASSWORD FOR 'root'@'%' = PASSWORD('nova');" -h ${MySQL_server_IP_address}
+    # mysql -u$MYSQL_USR -p$MYSQL_PASS -e 'DROP DATABASE nova;' -h ${MySQL_server_IP_address}
+    # mysql -u$MYSQL_USR -p$MYSQL_PASS -e 'CREATE DATABASE nova;' -h ${MySQL_server_IP_address}
+    # mysql -u$MYSQL_USR -p$MYSQL_PASS -e "GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;" -h ${MySQL_server_IP_address}
+    # mysql -u$MYSQL_USR -p$MYSQL_PASS -e "SET PASSWORD FOR 'root'@'%' = PASSWORD('nova');" -h ${MySQL_server_IP_address}
+    mysql -u$MYSQL_USR -p$MYSQL_PASS -e 'DROP DATABASE nova;' 
+    mysql -u$MYSQL_USR -p$MYSQL_PASS -e 'CREATE DATABASE nova;' 
+    mysql -u$MYSQL_USR -p$MYSQL_PASS -e "GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;"
+    mysql -u$MYSQL_USR -p$MYSQL_PASS -e "SET PASSWORD FOR 'root'@'%' = PASSWORD('nova');" 
     nova-manage db sync
 
     echo "nova-manage network create"
