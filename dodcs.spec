@@ -14,6 +14,7 @@ BuildArch:      noarch
 
 Requires:	nova-install
 Requires:	mysql mysql-server MySQL-python
+Requires:   	bridge-utils
 #Requires:       Django >= 1.3 django-nose
 #Requires:       horizon = %{epoch}:%{version}-%{release} httpd mod_wsgi memcached python-memcached
 Requires:       qemu-img = 2:0.14.0-0.1.el6.isi
