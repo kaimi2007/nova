@@ -146,6 +146,7 @@ SQL_CONN=mysql://$MYSQL_NOVA_USR:$MYSQL_NOVA_PASS@$MySQL_Nova_IP_address/nova
 #    mysqladmin -u root password nova
 #    mysql -uroot -pnova -e 'CREATE DATABASE nova;'
 #    mysql -uroot -pnova -e "GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;"
+#    mysql -uroot -pnova -e "GRANT ALL PRIVILEGES ON *.* TO 'root'@'localhost' WITH GRANT OPTION;"
 #    mysql -uroot -pnova -e "SET PASSWORD FOR 'root'@'%' = PASSWORD('nova');"
 #fi
 if [ -n "$FLAT_INTERFACE" ]; then
@@ -244,12 +245,12 @@ if [ "$CMD" == "cloud-init" ] ||
 ##    sudo /etc/init.d/iscsitarget restart
 ##    screen -d -m -S nova -t nova
     sleep 1
-    # mysql -u$MYSQL_USR -p$MYSQL_PASS -e 'DROP DATABASE nova;' -h ${MySQL_Nova_IP_address}
-    # mysql -u$MYSQL_USR -p$MYSQL_PASS -e 'CREATE DATABASE nova;' -h ${MySQL_Nova_IP_address}
-    # mysql -u$MYSQL_USR -p$MYSQL_PASS -e "GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;" -h ${MySQL_Nova_IP_address}
-    # mysql -u$MYSQL_USR -p$MYSQL_PASS -e "SET PASSWORD FOR 'root'@'%' = PASSWORD('nova');" -h ${MySQL_Nova_IP_address}
     #mysqladmin -u root password $MYSQL_ROOT_PASS
-    #mysql -u$MYSQL_ROOT_USR -p$MYSQL_ROOT_PASS -e "GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;"
+    # mysql -u$MYSQL_ROOT_USR -p$MYSQL_ROOT_PASS -e "GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;"
+    # mysql -u$MYSQL_ROOT_USR -p$MYSQL_ROOT_PASS -e "GRANT ALL PRIVILEGES ON *.* TO 'root'@'localhost' WITH GRANT OPTION;"
+
+    # mysql -u$MYSQL_ROOT_USR -p$MYSQL_ROOT_PASS -e 'DROP DATABASE nova;' -h ${MySQL_Nova_IP_address}
+    # mysql -u$MYSQL_ROOT_USR -p$MYSQL_ROOT_PASS -e 'CREATE DATABASE nova;' -h ${MySQL_Nova_IP_address}
 
     #echo "MySQL nova user creation"
     #mysql -uroot -p$MYSQL_ROOT_PASS -e "CREATE USER '$MYSQL_NOVA_USR'@'%' IDENTIFIED BY '$MYSQL_NOVA_PASS';"
