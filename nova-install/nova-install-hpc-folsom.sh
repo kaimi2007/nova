@@ -70,13 +70,12 @@ NOVA_API_server_IP_address=10.99.0.1
 Glance_server_IP_address=10.99.0.1
 Volume_server_IP_address=10.99.0.1
 Keystone_server_IP_address=10.99.0.1
-
 MySQL_Nova_IP_address=10.99.0.1
-
 DHCP_FIXED_RANGE=10.99.0.0/16
 DHCP_START_IP=10.99.0.2
 DHCP_IP_NUM=$NETWORK_SIZE
 FLAT_NETWORK_DNS=10.99.0.1
+
 PUBLIC_INTERFACE=eth0
 FLAT_INTERFACE=eth1
 VLAN_INTERFACE=$FLAT_INTERFACE
@@ -172,10 +171,6 @@ my_ip=$HOST_IP
 sql_connection=$SQL_CONN
 libvirt_type=$LIBVIRT_TYPE
 instance_name_template=instance-%08x
-novncproxy_base_url=http://10.99.0.1:6080/vnc_auto.html
-xvpvncproxy_base_url=http://10.99.0.1:6081/console
-vncserver_listen=127.0.0.1
-vncserver_proxyclient_address=127.0.0.1
 api_paste_config=/etc/nova/api-paste.ini 
 image_service=nova.image.glance.GlanceImageService
 ec2_dmz_host=$NOVA_API_server_IP_address
