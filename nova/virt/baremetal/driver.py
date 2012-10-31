@@ -76,7 +76,7 @@ def _late_load_cheetah():
 
 class BareMetalDriver(driver.ComputeDriver):
 
-    def __init__(self, read_only):
+    def __init__(self, read_only=False):
         _late_load_cheetah()
         # Note that baremetal doesn't have a read-only connection
         # mode, so the read_only parameter is ignored
