@@ -280,6 +280,13 @@ class ComputeManager(manager.SchedulerDependentManager):
             for count, instance in enumerate(instances):
                 db_state = instance['power_state']
                 drv_state = self._get_power_state(context, instance)
+                closing_vm_states = (vm_states.DELETED,
+                                     vm_states.SOFT_DELETED)
+
+                # instance was supposed to shut down - don't attempt
+                # recovery in any case
+                if instance['vm_state'] in closing_vm_states:
+                    continue
 
                 expect_running = (db_state == power_state.RUNNING and
                                   drv_state != db_state)
@@ -905,6 +912,11 @@ class ComputeManager(manager.SchedulerDependentManager):
         self.db.instance_destroy(context, instance_uuid)
         system_meta = self.db.instance_system_metadata_get(context,
             instance_uuid)
+
+        # ensure block device mappings are not leaked
+        for bdm in self._get_instance_volume_bdms(context, instance_uuid):
+            self.db.block_device_mapping_destroy(context, bdm['id'])
+
         self._notify_about_instance_usage(context, instance, "delete.end",
                 system_metadata=system_meta)
 
@@ -1429,7 +1441,11 @@ class ComputeManager(manager.SchedulerDependentManager):
                                                     teardown=True)
 
             network_info = self._get_instance_nw_info(context, instance)
-            self.driver.destroy(instance, self._legacy_nw_info(network_info))
+            block_device_info = self._get_instance_volume_block_device_info(
+                                context, instance['uuid'])
+
+            self.driver.destroy(instance, self._legacy_nw_info(network_info),
+                                block_device_info)
             self.compute_rpcapi.finish_revert_resize(context, instance,
                     migration_ref['id'], migration_ref['source_compute'],
                     reservations)

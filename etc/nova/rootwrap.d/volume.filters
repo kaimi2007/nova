@@ -31,3 +31,7 @@ iscsiadm_usr: CommandFilter, /usr/bin/iscsiadm, root
 mkfs.ext3: CommandFilter, /sbin/mkfs.ext3, root
 
 dmsetup: CommandFilter, /sbin/dmsetup, root
+
+#nova/volume/.py: utils.temporary_chown(path, 0), ...
+chown: CommandFilter, /bin/chown, root
+ln: CommandFilter, /bin/ln, root
