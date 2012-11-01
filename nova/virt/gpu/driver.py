@@ -132,9 +132,10 @@ class GPULibvirtDriver(driver.LibvirtDriver):
 
 
     @exception.wrap_exception()
-    def _umount_lxc_volume(self, init_pid, lxc_container_device):
+    def _umount_lxc_volume(self, init_pid, lxc_device):
         global lxc_mounts
         LOG.info(_('umounting LXC block device'))
+        dev_key = init_pid + lxc_device
         if dev_key not in lxc_mounts:
             raise Exception(_('no such process(%(init_pid)s) or ' \
                   'mount point(%(lxc_container_device)s)') % locals())

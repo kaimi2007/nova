@@ -848,7 +848,6 @@ class LibvirtDriver(driver.ComputeDriver):
                                                snapshot_name, out_path,
                                                image_format)
             finally:
-                snapshot.delete()
                 libvirt_utils.delete_snapshot(disk_path, snapshot_name)
                 if FLAGS.libvirt_type != 'lxc':
                     if state == power_state.RUNNING:
