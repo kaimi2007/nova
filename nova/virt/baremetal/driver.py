@@ -51,6 +51,7 @@ from nova.virt import driver
 from nova.virt.libvirt import utils as libvirt_utils
 
 
+extra_specs = {}
 Template = None
 
 LOG = logging.getLogger(__name__)
@@ -61,6 +62,12 @@ baremetal_opts = [
     cfg.StrOpt('baremetal_type',
                 default='baremetal',
                 help='baremetal domain type'),
+    cfg.ListOpt('instance_type_extra_specs',
+                default=[],
+                help='a list of additional capabilities corresponding to '
+                'instance_type_extra_specs for this compute '
+                'host to advertise. Valid entries are name=value, pairs '
+                'For example, "key1:val1, key2:val2"'),
     ]
 
 FLAGS.register_opts(baremetal_opts)
@@ -74,6 +81,19 @@ def _late_load_cheetah():
         Template = t.Template
 
 
+def get_instance_type_extra_specs_capabilities():
+    """Return additional capabilities to advertise for this compute host."""
+    global extra_specs
+    for pair in FLAGS.instance_type_extra_specs:
+        keyval = pair.split(':', 1)
+        keyval[0] = keyval[0].strip()
+        keyval[1] = keyval[1].strip()
+        extra_specs[keyval[0]] = keyval[1]
+    if "cpu_arch" not in extra_specs:
+        raise exception.Invalid("cpu_arch should be set in extra_specs")
+    return extra_specs
+
+
 class BareMetalDriver(driver.ComputeDriver):
 
     def __init__(self, read_only=False):
@@ -84,6 +104,7 @@ class BareMetalDriver(driver.ComputeDriver):
         self.baremetal_nodes = nodes.get_baremetal_nodes()
         self._wrapped_conn = None
         self._host_state = None
+        get_instance_type_extra_specs_capabilities()
 
     @property
     def HostState(self):
@@ -622,6 +643,23 @@ class BareMetalDriver(driver.ComputeDriver):
         """
         return self.baremetal_nodes.get_hw_info('hypervisor_version')
 
+    def get_instance_capabilities(self):
+        """Get hypervisor instance capabilities
+
+        Returns a list of tuples that describe instances the
+        hypervisor is capable of hosting.  Each tuple consists
+        of the triplet (arch, hypervisor_type, vm_mode).
+
+        :returns: List of tuples describing instance capabilities
+        """
+        instance_caps = list()
+        instance_cap = (extra_specs["cpu_arch"], 
+                        self.get_hypervisor_type())
+                        
+        instance_caps.append(instance_cap)
+
+        return instance_caps
+
     def get_cpu_info(self):
         """Get cpuinfo information.
 
@@ -676,7 +714,7 @@ class BareMetalDriver(driver.ComputeDriver):
                'hypervisor_type': self.get_hypervisor_type(),
                'hypervisor_version': self.get_hypervisor_version(),
                'cpu_info': self.get_cpu_info(),
-               'cpu_arch': "tilepro64"}
+               'cpu_arch': extra_specs["cpu_arch"]}
 
         #LOG.info(_('#### RLK: cpu_arch = %s ') % FLAGS.cpu_arch)
         return dic
@@ -732,7 +770,7 @@ class HostState(object):
         data["vcpus"] = self.connection.get_vcpu_total()
         data["vcpus_used"] = self.connection.get_vcpu_used()
         data["cpu_info"] = self.connection.get_cpu_info()
-        data["cpu_arch"] = "tilepro64" 
+        data["cpu_arch"] = extra_specs["cpu_arch"] 
         data["disk_total"] = self.connection.get_local_gb_total()
         data["disk_used"] = self.connection.get_local_gb_used()
         data["disk_available"] = data["disk_total"] - data["disk_used"]
@@ -741,4 +779,6 @@ class HostState(object):
                                     self.connection.get_memory_mb_used())
         data["hypervisor_type"] = self.connection.get_hypervisor_type()
         data["hypervisor_version"] = self.connection.get_hypervisor_version()
+        data["supported_instances"] = \
+            self.connection.get_instance_capabilities()
         self._stats = data
