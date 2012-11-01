@@ -49,6 +49,7 @@ from nova.virt.baremetal import nodes
 from nova.virt.disk import api as disk
 from nova.virt import driver
 from nova.virt.libvirt import utils as libvirt_utils
+from nova.virt import netutils
 
 
 extra_specs = {}
@@ -425,46 +426,9 @@ class BareMetalDriver(driver.ComputeDriver):
             key = str(inst['key_data'])
         else:
             key = None
-        net = None
-
-        nets = []
-        ifc_template = open(FLAGS.injected_network_template).read()
-        ifc_num = -1
-        have_injected_networks = False
-        admin_context = nova_context.get_admin_context()
-        for (network_ref, mapping) in network_info:
-            ifc_num += 1
-
-            if not network_ref['injected']:
-                continue
-
-            have_injected_networks = True
-            address = mapping['ips'][0]['ip']
-            netmask = mapping['ips'][0]['netmask']
-            address_v6 = None
-            gateway_v6 = None
-            netmask_v6 = None
-            if FLAGS.use_ipv6:
-                address_v6 = mapping['ip6s'][0]['ip']
-                netmask_v6 = mapping['ip6s'][0]['netmask']
-                gateway_v6 = mapping['gateway_v6']
-            net_info = {'name': 'eth%d' % ifc_num,
-                   'address': address,
-                   'netmask': netmask,
-                   'gateway': mapping['gateway'],
-                   'broadcast': mapping['broadcast'],
-                   'dns': ' '.join(mapping['dns']),
-                   'address_v6': address_v6,
-                   'gateway_v6': gateway_v6,
-                   'netmask_v6': netmask_v6}
-            nets.append(net_info)
-
-        if have_injected_networks:
-            net = str(Template(ifc_template,
-                               searchList=[{'interfaces': nets,
-                                            'use_ipv6': FLAGS.use_ipv6}]))
 
         metadata = inst.get('metadata')
+        net = netutils.get_injected_network_template(network_info)
         if any((key, net, metadata)):
             inst_name = inst['name']
 
