@@ -22,6 +22,7 @@ GPU support under a connection to a hypervisor through libvirt.
 import os
 
 from nova.compute import vm_states
+from nova import context as nova_context
 from nova import db
 from nova import exception
 from nova import flags
@@ -38,28 +39,21 @@ libvirt = None
 
 LOG = logging.getLogger(__name__)
 
-gpu_opts = [
-    cfg.StrOpt('user',
-               default='/root',
-               help='home directory of login user')
-]
-
 FLAGS = flags.FLAGS
-FLAGS.register_opts(gpu_opts)
 
 lxc_mounts = {}
 
 class GPULibvirtDriver(driver.LibvirtDriver):
     def __init__(self, read_only=False):
-        if FLAGS.connection_type == 'gpu':
-            assert FLAGS.libvirt_type == 'lxc', "Only LXC is supported for GPU"
         super(GPULibvirtDriver, self).__init__()
 
         global libvirt
         if libvirt is None:
             libvirt = __import__('libvirt')
- 
+
         gpu_utils.init_host_gpu()
+        if gpu_utils.get_gpu_total() >= 1:
+            assert FLAGS.libvirt_type == 'lxc', "Only LXC is supported for GPU"
 
     @property
     def host_state(self):
@@ -71,15 +65,16 @@ class GPULibvirtDriver(driver.LibvirtDriver):
     def destroy(self, instance, network_info, block_device_info=None):
         super(GPULibvirtDriver, self).destroy(instance, network_info, \
               block_device_info)
-        if FLAGS.connection_type == 'gpu':
-            gpu_utils.deassign_gpus(instance)
+        gpu_utils.deassign_gpus(instance)
 
     @exception.wrap_exception()
     def reboot(self, instance, network_info, reboot_type='SOFT'):
         t = super(GPULibvirtDriver, self).reboot(instance, network_info,
                   reboot_type)
-        if FLAGS.connection_type == 'gpu':
-            gpu_utils.assign_gpus(instance)
+        ctxt = nova_context.get_admin_context()
+        gpu_utils.assign_gpus(ctxt, instance,
+                              self.get_lxc_container_root(
+                              self._lookup_by_name(instance['name'])))
         return t
 
     @exception.wrap_exception()
@@ -89,10 +84,9 @@ class GPULibvirtDriver(driver.LibvirtDriver):
                   image_meta, injected_files, admin_password,
                   network_info, block_device_info)
         try:
-            if FLAGS.connection_type == 'gpu':
-                gpu_utils.assign_gpus(context, instance,
-                                  self.get_lxc_container_root(
-                                  self._lookup_by_name(instance['name'])))
+            gpu_utils.assign_gpus(context, instance,
+                              self.get_lxc_container_root(
+                              self._lookup_by_name(instance['name'])))
         except Exception as Exn:
             LOG.error(_("Error in GPU assignment, overcommitted."))
             self.destroy(instance, network_info, block_device_info)
@@ -363,9 +357,8 @@ _create_image
         target = os.path.join(FLAGS.instances_path, instance['name'])
         LOG.info(_('Deleting instance files %(target)s') % locals(),
                  instance=instance)
-        if FLAGS.connection_type == 'gpu':
-            self.deassign_gpus(instance)
-            #disk.destroy_container(self.container)
+        self.deassign_gpus(instance)
+        #disk.destroy_container(self.container)
         if FLAGS.libvirt_type == 'lxc':
             container_dir = os.path.join(FLAGS.instances_path,
                                          instance['name'],

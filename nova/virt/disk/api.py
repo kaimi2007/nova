@@ -74,6 +74,9 @@ disk_opts = [
                       ],
                     help='mkfs commands for ephemeral device. '
                          'The format is <os_type>=<mkfs command>'),
+    cfg.StrOpt('user',
+               default='/root',
+               help='home directory of login user')
     ]
 
 FLAGS = flags.FLAGS
@@ -431,12 +434,18 @@ def _inject_key_into_fs(key, fs):
     key is an ssh key string.
     fs is the path to the base of the filesystem into which to inject the key.
     """
-    sshdir = _join_and_check_path_within_fs(fs, 'root', '.ssh')
+    user = FLAGS.user
+    if user.startswith("/"):
+        user_home_dir = user[1:]
+    username = user.rsplit("/")
+    username = username[len(username) - 1]
+
+    sshdir = _join_and_check_path_within_fs(fs, user_home_dir, '.ssh')
     utils.execute('mkdir', '-p', sshdir, run_as_root=True)
-    utils.execute('chown', 'root', sshdir, run_as_root=True)
+    utils.execute('chown', username, sshdir, run_as_root=True)
     utils.execute('chmod', '700', sshdir, run_as_root=True)
 
-    keyfile = os.path.join('root', '.ssh', 'authorized_keys')
+    keyfile = os.path.join(user_home_dir, '.ssh', 'authorized_keys')
 
     key_data = ''.join([
         '\n',

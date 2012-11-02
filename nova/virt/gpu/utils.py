@@ -31,6 +31,7 @@ import os
 import subprocess
 
 from nova.compute import vm_states
+from nova.compute import instance_types
 from nova import context as nova_context
 from nova import db
 from nova import exception
@@ -107,6 +108,8 @@ def get_gpu_total():
 
 def allow_gpus(inst):
     global num_gpus
+    if num_gpus < 1:
+        return
     dev_whitelist = os.path.join(FLAGS.dev_cgroups_path,
                                   inst['name'],
                                   'devices.allow')
@@ -126,16 +129,18 @@ def assign_gpus(context, inst, lxc_container_root):
     """Assigns gpus to a specific instance"""
     global gpus_available
     global gpus_assigned
+    global num_gpus
+    if num_gpus < 1:
+        return
 #    ctxt = nova_context.get_admin_context()
     gpus_in_meta = 0
     gpus_in_extra = 0
 
     env_file = lxc_container_root + '/etc/environment'
+    inst_type = instance_types.get_instance_type(inst['instance_type_id'])
     instance_extra = db.instance_type_extra_specs_get(context,
-                                                      inst['instance_type_id'])
+                                                      inst_type['flavorid'])
     msg = _("instance_extra is %s .") % instance_extra
-    LOG.debug(msg)
-    msg = _("vcpus for this instance are %d .") % inst['vcpus']
     LOG.debug(msg)
     if 'gpus' in inst['metadata']:
         gpus_in_meta = int(inst['metadata']['gpus'])
@@ -152,6 +157,8 @@ def assign_gpus(context, inst, lxc_container_root):
         gpus_needed = gpus_in_extra
     allow_gpus(inst)
     gpus_assigned_list = []
+    msg = _("gpus available, %d .") % len(gpus_available)
+    LOG.info(msg)
     if gpus_needed > len(gpus_available):
         raise Exception(_("Overcommit Error"))
     for i in range(gpus_needed):
@@ -165,6 +172,9 @@ def assign_gpus(context, inst, lxc_container_root):
 
 
 def deassign_gpus(inst):
+    global num_gpus
+    if num_gpus < 1:
+        return
     """Assigns gpus to a specific instance"""
     global gpus_available
     global gpus_assigned
