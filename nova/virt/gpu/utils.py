@@ -76,7 +76,6 @@ def init_host_gpu():
     global num_gpus
     global extra_specs
     num_gpus = 0
-    gpus_available = 0
     if 'gpus' in extra_specs:
         num_gpus = extra_specs['gpus']
         gpus_available = range(int(extra_specs['gpus']))
@@ -84,6 +83,7 @@ def init_host_gpu():
 
 def update_status(data):
     global extra_specs
+    global gpus_available
     for key in extra_specs.iterkeys():
         if 'gpus' == key:
             data['gpus'] = int(len(gpus_available))
@@ -104,6 +104,7 @@ def get_instance_type_extra_specs_capabilities():
 
 
 def get_gpu_total():
+    global gpus_available
     return len(gpus_available)
 
 def allow_gpus(inst):
