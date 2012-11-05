@@ -155,6 +155,7 @@ if [ -n "$FLAT_INTERFACE" ]; then
 fi
 if [ "$CMD" == "compute-init" ] ||
      [ "$CMD" == "cloud-init" ] ||
+     [ "$CMD" == "volume-init" ] ||
      [ "$CMD" == "single-init" ]; then
     echo "writing nova.conf"
     cat > $NOVA_CONF << NOVA_CONF_EOF
@@ -268,9 +269,15 @@ if [ "$CMD" == "cloud-init" ] ||
     service nova-network restart
     service nova-objectstore restart
     service nova-scheduler restart
+    service nova-cert restart
 fi
 if [ "$CMD" == "compute-init" ] ||
    [ "$CMD" == "single-init" ]; then
        echo "start nova-compute"
       service nova-compute restart
+fi
+
+if [ "$CMD" == "volume-init" ] ||
+      service tgtd restart
+      service nova-volume restart
 fi
