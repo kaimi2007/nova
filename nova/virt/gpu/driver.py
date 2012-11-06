@@ -68,9 +68,11 @@ class GPULibvirtDriver(driver.LibvirtDriver):
         gpu_utils.deassign_gpus(instance)
 
     @exception.wrap_exception()
-    def reboot(self, instance, network_info, reboot_type='SOFT'):
+    def reboot(self, instance, network_info, reboot_type='SOFT',
+               block_device_info=None):
+        gpu_utils.deassign_gpus(instance)
         t = super(GPULibvirtDriver, self).reboot(instance, network_info,
-                  reboot_type)
+                  reboot_type, block_device_info)
         ctxt = nova_context.get_admin_context()
         gpu_utils.assign_gpus(ctxt, instance,
                               self.get_lxc_container_root(
