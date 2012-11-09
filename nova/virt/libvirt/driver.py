@@ -835,6 +835,21 @@ class LibvirtDriver(driver.ComputeDriver):
         if FLAGS.libvirt_type != 'lxc':
             if state == power_state.RUNNING:
                 virt_dom.managedSave(0)
+
+        # hacking because snapshot is not supported for raw image
+        if FLAGS.use_cow_images == False:
+            qemu_img_cmd = ('qemu-img',
+                            'convert',
+                            '-f',
+                            'raw',
+                            '-O',
+                            'qcow2',
+                            disk_path,
+                            disk_path + '.qcow2')
+            libvirt_utils.execute(*qemu_img_cmd, run_as_root=True)
+            disk_path = disk_path + '.qcow2'
+            source_format = 'qcow2'
+
         # Make the snapshot
         libvirt_utils.create_snapshot(disk_path, snapshot_name)
 

@@ -219,6 +219,7 @@ if [ "$CMD" == "compute-init" ] ||
    [ "$CMD" == "single-init" ]; then
         if [ "$ARCH" == "gpu" ]; then
                 echo "user=$USER" >>  $NOVA_CONF
+                echo "use_cow_images=False" >>  $NOVA_CONF
         fi
         if [ "$ARCH" == "tilera" ]; then
                 echo "tile_monitor=/usr/local/TileraMDE/bin/tile-monitor" >> $NOVA_CONF
