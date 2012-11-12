@@ -278,7 +278,7 @@ if [ "$CMD" == "compute-init" ] ||
       service nova-compute restart
 fi
 
-if [ "$CMD" == "volume-init" ] ||
+if [ "$CMD" == "volume-init" ]; then
       service tgtd restart
       service nova-volume restart
 fi
