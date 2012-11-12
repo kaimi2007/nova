@@ -1,6 +1,6 @@
 DODCS OpenStack Folsom Release
 ----------------------------------------
-October, 2012
+November, 2012
 
 This DVD contains the Folsom release of the DODCS OpenStack distribution, which supports
 heterogeneous, high-performance computing.  The Folsom release is based on a development
@@ -17,8 +17,11 @@ The following features have known issues:
  * VNC - can not get VNC consoles for instances from command line or from Horizon.
  * Resource overcommitting - For GPU provisioning, if all available GPUs are committed to 
    existing instances, then any attempt to provision another GPU
-   should fail with an "Overcommitted" message. That is broken right now. 
- * Tilera support has not been well-tested and images are not included.  
+   should fail with an "Overcommitted" message. That is broken right now.
+   GPU provisioning in the host is volatile in that the reservation of GPU resources is
+   kept in the main memory. So, when nova-compute restarts on the host, the reservation
+   information is lost. 
+ * Tilera support has been tested but the images are not included. Please contact us to get the image.
  * Availability zones are not currently supported.
  * There are known compatibility issues with some EC2 commands, specifically:
 
@@ -26,6 +29,7 @@ The following features have known issues:
    * Availability zone and region commands
    * euca-get-console-output
    * euca-create-snapshot
+   * euca-bundle-instance
    * euca-authorize
    * euca-revoke
    * euca-confirm-product-instance
