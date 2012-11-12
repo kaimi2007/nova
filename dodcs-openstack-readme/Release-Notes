@@ -3,9 +3,8 @@ DODCS OpenStack Folsom Release
 November, 2012
 
 This DVD contains the Folsom release of the DODCS OpenStack distribution, which supports
-heterogeneous, high-performance computing.  The Folsom release is based on a development
-version of the Folsom version of OpenStack and is being provided to early adopters.  Subsequent
-releases are expected to correlate with release versions of OpenStack, starting with Folsom.
+heterogeneous, high-performance computing.  This release is based on the stable 
+Folsom version of OpenStack. 
 
 The Folsom release supports single-node or multi-node installations with LXC and
 KVM instances on x86, GPU, and SGI Altix UV100 platforms.
@@ -15,24 +14,28 @@ Known Issues
 The following features have known issues:
 
  * VNC - can not get VNC consoles for instances from command line or from Horizon.
- * Resource overcommitting - For GPU provisioning, if all available GPUs are committed to 
+ * Resource overcommitting - For GPU provisioning, if all the available GPUs are committed to 
    existing instances, then any attempt to provision another GPU
-   should fail with an "Overcommitted" message. That is broken right now.
+   should fail with an "Overcommitted" message. 
+   There is a race condtion in the scheduler and this overcommitment is not always detected.
+   It happens when multiple instances requesting GPUs are submitted simultaneously.
    GPU provisioning in the host is volatile in that the reservation of GPU resources is
    kept in the main memory. So, when nova-compute restarts on the host, the reservation
-   information is lost. 
+   information is lost and all the GPUs are ready for allocation. It doesn't prevent a running
+   instance from accessing its allocated GPUs. But, it is possible to assign already allocated GPUs 
+   to a new instance.
  * Tilera support has been tested but the images are not included. Please contact us to get the image.
  * Availability zones are not currently supported.
- * There are known compatibility issues with some EC2 commands, specifically:
 
+ * Some euca commands are not working:
    * Image management commands except euca-describe-images
-   * Availability zone and region commands
-   * euca-get-console-output
-   * euca-create-snapshot
    * euca-bundle-instance
+   * euca-get-console-output
+   * euca-modify-image-attribute
+   * euca-confirm-product-instance
    * euca-authorize
    * euca-revoke
-   * euca-confirm-product-instance
+   * euca-create-snapshot
 
 For any questions about the release or to obtain release materials, contact: 
 Dr. Stephen Crago - crago@isi.edu.
