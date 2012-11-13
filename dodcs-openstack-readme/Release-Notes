@@ -17,7 +17,7 @@ The following features have known issues:
  * Resource overcommitting - For GPU provisioning, if all the available GPUs are committed to 
    existing instances, then any attempt to provision another GPU
    should fail with an "Overcommitted" message. 
-   There is a race condtion in the scheduler and this overcommitment is not always detected.
+   There is a race condition in the scheduler and this overcommitment is not always detected.
    It happens when multiple instances requesting GPUs are submitted simultaneously.
    GPU provisioning in the host is volatile in that the reservation of GPU resources is
    kept in the main memory. So, when nova-compute restarts on the host, the reservation
