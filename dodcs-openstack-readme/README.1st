@@ -3,9 +3,9 @@ DODCS OpenStack Folsom Release
 November, 2012
 
 This DVD contains the Folsom release of the DODCS OpenStack distribution, which supports
-heterogeneous, high-performance computing.  The Folsom release is based on a development
-version of the Folsom version of OpenStack and is being provided to early adopters.  Subsequent
-releases are expected to correlate with release versions of OpenStack, starting with Folsom.
+heterogeneous, high-performance computing.  The Folsom release is based on the stable
+version of the Folsom version of OpenStack. Subsequent releases are expected 
+to correlate with release versions of OpenStack, starting with Grizzly.
 
 Actual software is in the DODCS.iso file, and md5sum.txt contains the md5 checksum of the DODCS.iso
 file so that the integrety of the disk image can be checked. Associated documentation is in the
