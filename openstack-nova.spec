@@ -537,9 +537,11 @@ install -p -D -m 644 %{SOURCE6} %{buildroot}%{_sysconfdir}/logrotate.d/%{name}
 # Install template files
 #MK: needs to be checked
 #install -p -D -m 644 nova/auth/novarc.template %{buildroot}%{_datarootdir}/nova/novarc.template
-install -p -D -m 644 nova/cloudpipe/client.ovpn.template %{buildroot}%{_datarootdir}/nova/client.ovpn.template
+#install -p -D -m 644 nova/cloudpipe/client.ovpn.template %{buildroot}%{_datarootdir}/nova/client.ovpn.template
+cp -p nova/cloudpipe/client.ovpn.template %{buildroot}%{python_sitelib}/nova/cloudpipe/client.ovpn.template
 #MK: needs to be checked
 #install -p -D -m 644 nova/virt/libvirt.xml.template %{buildroot}%{_datarootdir}/nova/libvirt.xml.template
+cp -p nova/virt/interfaces.template %{buildroot}%{python_sitelib}/nova/virt/interfaces.template
 
 #KDS install nova.conf
 #KDS change permissions from 600
