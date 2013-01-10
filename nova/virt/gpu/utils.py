@@ -30,8 +30,8 @@ Utility functions
 import os
 import subprocess
 
-from nova.compute import vm_states
 from nova.compute import instance_types
+from nova.compute import vm_states
 from nova import context as nova_context
 from nova import db
 from nova import exception
@@ -106,6 +106,7 @@ def get_instance_type_extra_specs_capabilities():
 def get_gpu_total():
     global gpus_available
     return len(gpus_available)
+
 
 def allow_gpus(inst):
     global num_gpus
@@ -191,7 +192,7 @@ does not work for LXC Raw image volume management.
 '''
 
 
-def attach_volume_lxc(self, connection_info, instance_name, \
+def attach_volume_lxc(self, connection_info, instance_name,
                       mountpoint, virt_dom):
     # get device path
     data = connection_info['data']
@@ -203,7 +204,7 @@ def attach_volume_lxc(self, connection_info, instance_name, \
     LOG.info(_('attach_volume: pid(%s)') % spid)
 
     # get PID of the init process
-    ps_command = subprocess.Popen("ps -o pid --ppid %s --noheaders" % \
+    ps_command = subprocess.Popen("ps -o pid --ppid %s --noheaders" %
                        spid, shell=True, stdout=subprocess.PIPE)
     init_pid = ps_command.stdout.read()
     init_pid = str(int(init_pid))
@@ -216,7 +217,7 @@ def attach_volume_lxc(self, connection_info, instance_name, \
     major_num = os.major(s.st_rdev)
     minor_num = os.minor(s.st_rdev)
     LOG.info(_('attach_volume: path(%s)') % device_path)
-    LOG.info(_('attach_volume: major_num(%(major_num)d) ' \
+    LOG.info(_('attach_volume: major_num(%(major_num)d) '
                'minor_num(%(minor_num)d)') % locals())
 
     # allow the device
@@ -236,9 +237,9 @@ def attach_volume_lxc(self, connection_info, instance_name, \
     dev_key = init_pid + mountpoint
     LOG.info(_('attach_volume: dev_key(%s)') % dev_key)
     if dev_key in lxc_mounts:
-        LOG.info(_('attach_volume: dev_key(%s) is already used') \
+        LOG.info(_('attach_volume: dev_key(%s) is already used')
                     % dev_key)
-        raise Exception(_('the same mount point(%s) is already used.')\
+        raise Exception(_('the same mount point(%s) is already used.')
                     % mountpoint)
 
     # create device(s) for mount
@@ -262,7 +263,7 @@ def attach_volume_lxc(self, connection_info, instance_name, \
         dir_name = '/vmnt/vol' + str(n)
         cmd = cmd_lxc + '/bin/ls ' + dir_name
         LOG.info(_('attach_volume: cmd (%s)') % cmd)
-        p = subprocess.Popen(cmd, shell=True,  \
+        p = subprocess.Popen(cmd, shell=True,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         x = p.communicate()
         LOG.info(_('attach_volume: return x[0](%s)') % x[0])
@@ -291,7 +292,7 @@ def attach_volume_lxc(self, connection_info, instance_name, \
     # mount
     cmd = cmd_lxc + ' /bin/mount ' + mountpoint + ' ' + dir_name
     LOG.info(_('attach_volume: cmd (%s)') % cmd)
-    p = subprocess.Popen(cmd, shell=True, \
+    p = subprocess.Popen(cmd, shell=True,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     x = p.communicate()
 
@@ -314,14 +315,14 @@ def attach_volume_lxc(self, connection_info, instance_name, \
     subprocess.call(cmd, shell=True)
 
 
-def detach_volume_lxc(self, connection_info, instance_name, \
+def detach_volume_lxc(self, connection_info, instance_name,
                       mountpoint, virt_dom):
     # get id of the virt_dom
     spid = str(virt_dom.ID())
     LOG.info(_('detach_volume: pid(%s)') % spid)
 
     # get PID of the init process
-    ps_command = subprocess.Popen("ps -o pid --ppid %s --noheaders" \
+    ps_command = subprocess.Popen("ps -o pid --ppid %s --noheaders"
                           % spid, shell=True, stdout=subprocess.PIPE)
     init_pid = ps_command.stdout.read()
     init_pid = str(int(init_pid))
@@ -330,7 +331,7 @@ def detach_volume_lxc(self, connection_info, instance_name, \
 
     dev_key = init_pid + mountpoint
     if dev_key not in lxc_mounts:
-        raise Exception(_('no such process(%(init_pid)s) or ' \
+        raise Exception(_('no such process(%(init_pid)s) or '
               'mount point(%(mountpoint)s)') % locals())
     dir_name = lxc_mounts[dev_key]
 
@@ -338,7 +339,7 @@ def detach_volume_lxc(self, connection_info, instance_name, \
     cmd_lxc = 'sudo lxc-attach -n %s -- ' % str(init_pid)
     cmd = cmd_lxc + ' /bin/umount ' + dir_name
     LOG.info(_('detach_volume: cmd(%s)') % cmd)
-    p = subprocess.Popen(cmd, shell=True, \
+    p = subprocess.Popen(cmd, shell=True,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     x = p.communicate()
     cmd = cmd_lxc + ' /bin/rmdir  ' + dir_name

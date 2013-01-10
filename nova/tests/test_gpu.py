@@ -45,9 +45,9 @@ LOG = logging.getLogger(__name__)
 
 
 COMMON_FLAGS = dict(
-    
+
     instance_type_extra_specs=['cpu_arch:x86_64',
-                               'gpus:1', 'gpu_arch:fermi', 
+                               'gpus:1', 'gpu_arch:fermi',
                                'hypervisor_type:LXC'],
     libvirt_type='lxc',
     dev_cgroups_path='/test/cgroup'
@@ -64,12 +64,13 @@ class GPULibvirtDriverTestCase(test.TestCase):
         self.user_id = 'fake'
         self.project_id = 'fake'
         self.context = context.get_admin_context()
-        self.gpulibvirtconnection = gpulibvirt_driver.GPULibvirtDriver(read_only=True)
+        self.gpulibvirtconnection = \
+                gpulibvirt_driver.GPULibvirtDriver(read_only=True)
         self.root_fs = './test-gpu'
         self.cgroup_path = self.root_fs + '/cgroup/fake'
         self.etc_path = self.root_fs + '/etc'
-        flavor_id = instance_types.get_instance_type_by_name('m1.small')\
-                            ['flavorid']
+        flavor_id = \
+            instance_types.get_instance_type_by_name('m1.small')['flavorid']
         extra_specs = {}
         extra_specs['cpu_arch'] = 's== x86_64'
         extra_specs['gpus'] = '= 1'
@@ -77,17 +78,17 @@ class GPULibvirtDriverTestCase(test.TestCase):
         extra_specs['hypervisor_type'] = 's== LXC'
 
         db.instance_type_extra_specs_update_or_create(
-                  context.get_admin_context(), flavor_id,extra_specs)
+                  context.get_admin_context(), flavor_id, extra_specs)
 
     def tearDown(self):
         super(GPULibvirtDriverTestCase, self).tearDown()
-       
-    inst_meta = {'gpus': 1} 
+
+    inst_meta = {'gpus': 1}
     test_instance = {'memory_kb': '1024000',
                      'basepath': '/some/path',
                      'bridge_name': 'br100',
                      'vcpus': 2,
-                     'name' : 'fake',
+                     'name': 'fake',
                      'project_id': 'fake',
                      'bridge': 'br101',
                      'image_ref': '155d900f-4e14-4e4c-a73d-069cbf4541e6',
@@ -97,7 +98,7 @@ class GPULibvirtDriverTestCase(test.TestCase):
                      'instance_type_id': '5'}  # m1.small
 
     def testInitGPU(self):
-        extra_specs =  gpu_utils.get_instance_type_extra_specs_capabilities()
+        extra_specs = gpu_utils.get_instance_type_extra_specs_capabilities()
         init_gpus = extra_specs['gpus']
         self.assertEquals(1, int(init_gpus))
         self.assertEquals(1, gpu_utils.get_gpu_total())
@@ -107,22 +108,22 @@ class GPULibvirtDriverTestCase(test.TestCase):
             shutil.rmtree(self.root_fs)
         os.makedirs(self.cgroup_path)
         os.makedirs(self.etc_path)
-        gpu_utils.assign_gpus(self.context, self.test_instance, 
+        gpu_utils.assign_gpus(self.context, self.test_instance,
                               self.root_fs)
         self.assertEquals(0, gpu_utils.get_gpu_total())
-  
+
         gpu_utils.deassign_gpus(self.test_instance)
         self.assertEquals(1, gpu_utils.get_gpu_total())
         shutil.rmtree(self.root_fs)
-        
+
     def testOverAllocationGPU(self):
         if os.path.isdir(self.root_fs):
             shutil.rmtree(self.root_fs)
         os.makedirs(self.cgroup_path)
         os.makedirs(self.etc_path)
-        gpu_utils.assign_gpus(self.context, self.test_instance,self.root_fs)
+        gpu_utils.assign_gpus(self.context, self.test_instance, self.root_fs)
         try:
-            gpu_utils.assign_gpus(self.context, self.test_instance, 
+            gpu_utils.assign_gpus(self.context, self.test_instance,
                                   self.root_fs)
         except Exception as Exn:
             gpu_utils.deassign_gpus(self.test_instance)
@@ -130,4 +131,3 @@ class GPULibvirtDriverTestCase(test.TestCase):
             return
         shutil.rmtree(self.root_fs)
         assert false, "Cannot detect over-allocation"
-
