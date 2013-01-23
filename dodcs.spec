@@ -18,10 +18,14 @@ Requires:   	bridge-utils
 Requires:       nodejs nodejs-binary
 #Requires:       Django >= 1.3 django-nose
 #Requires:       horizon = %{epoch}:%{version}-%{release} httpd mod_wsgi memcached python-memcached
-Requires:       qemu-img = 2:0.14.0-0.1.el6.isi
-Requires:	qemu-kvm = 2:0.14.0-0.1.el6.isi
-Requires:	qemu-kvm-debuginfo = 2:0.14.0-0.1.el6.isi
-Requires:	qemu-kvm-tools = 2:0.14.0-0.1.el6.isi
+#Requires:       qemu-img = 2:0.14.0-0.1.el6.isi
+#Requires:	qemu-kvm = 2:0.14.0-0.1.el6.isi
+#Requires:	qemu-kvm-debuginfo = 2:0.14.0-0.1.el6.isi
+#Requires:	qemu-kvm-tools = 2:0.14.0-0.1.el6.isi
+Requires:       qemu-img
+Requires:	qemu-kvm
+Requires:	qemu-kvm-debuginfo
+Requires:	qemu-kvm-tools
 #Requires:	libvirt = 0.9.4-23.el6.6_isi
 #Requires:	libvirt-client = 0.9.4-23.el6.6_isi
 #Requires:	libvirt-debuginfo = 0.9.4-23.el6.6_isi
