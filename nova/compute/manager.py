@@ -440,13 +440,25 @@ class ComputeManager(manager.SchedulerDependentManager):
                            '%(instance_host)s) is not equal to our '
                            'host (%(our_host)s).'),
                          locals(), instance=instance)
-                network_info = self._get_instance_nw_info(context, instance)
-                bdi = self._get_instance_volume_block_device_info(context,
-                                                                  instance)
+                # TODO(deva): detect if instance's disk is shared or local,
+                #             and destroy if it is local.
+                destroy_disks = False
+                try:
+                    network_info = self._get_instance_nw_info(context,
+                                                              instance)
+                    bdi = self._get_instance_volume_block_device_info(context,
+                                                                      instance)
+                except exception.InstanceNotFound:
+                    network_info = network_model.NetworkInfo()
+                    bdi = {}
+                    LOG.info(_('Instance has been marked deleted already, '
+                               'removing it from the hypervisor.'),
+                             instance=instance)
+                    # always destroy disks if the instance was deleted
+                    destroy_disks = True
                 self.driver.destroy(instance,
                                     self._legacy_nw_info(network_info),
-                                    bdi,
-                                    False)
+                                    bdi, destroy_disks)
 
     def _init_instance(self, context, instance):
         '''Initialize this instance during service init.'''
@@ -466,7 +478,9 @@ class ComputeManager(manager.SchedulerDependentManager):
 
         # Keep compatibility with folsom, update networkinfo and
         # add vif type to instance_info_cache.
-        if legacy_net_info and legacy_net_info[0][1].get('vif_type') is None:
+        if (legacy_net_info and
+                isinstance(legacy_net_info[0], tuple) and
+                legacy_net_info[0][1].get('vif_type') is None):
             # Call to network API to get instance info, this will
             # force an update to the instance's info_cache
             net_info = self._get_instance_nw_info(context, instance)
@@ -2968,8 +2982,8 @@ class ComputeManager(manager.SchedulerDependentManager):
             context, instance, port_id, network_id, requested_ip,
             self.conductor_api)
         if len(network_info) != 1:
-            LOG.error(_('allocate_port_for_instance returned %(port)s ports') %
-                      dict(ports=len(network_info)))
+            LOG.error(_('allocate_port_for_instance returned %(ports)s ports')
+                      % dict(ports=len(network_info)))
             raise exception.InterfaceAttachFailed(instance=instance)
         image_meta = _get_image_meta(context, instance['image_ref'])
         legacy_net_info = self._legacy_nw_info(network_info)
@@ -3949,8 +3963,8 @@ class ComputeManager(manager.SchedulerDependentManager):
         try:
             yield
         except Exception, error:
-            self._quota_rollback(context, reservations)
             with excutils.save_and_reraise_exception():
+                self._quota_rollback(context, reservations)
                 msg = _('%s. Setting instance vm_state to ERROR')
                 LOG.error(msg % error, instance_uuid=instance_uuid)
                 self._set_instance_error_state(context, instance_uuid)
