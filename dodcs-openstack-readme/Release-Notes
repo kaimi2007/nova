@@ -1,18 +1,18 @@
-DODCS OpenStack Folsom Release
+DODCS OpenStack Grizzly Release
 ----------------------------------------
-November, 2012
+May 2013
 
-This DVD contains the Folsom release of the DODCS OpenStack distribution, which supports
+This DVD contains the Grizzly release of the DODCS OpenStack distribution, which supports
 heterogeneous, high-performance computing.  This release is based on the stable 
-Folsom version of OpenStack. 
-This release is enhanced from the stable Folsom version of Openstack with the followings:
+Grizzly version of OpenStack. 
+This release is enhanced from the stable Grizzly version of Openstack with the followings:
  * Heterogeneous architecture scheduler support
  * GPU provisioning support
  * Native performance GPU support within a virtual machine
  * UV100 support (as a large shared memory machine)
  * Stable LXC hypervisor support
 
-DODCS OpenStack Folsom release supports single-node or multi-node installations with LXC and
+DODCS OpenStack Grizzly release supports single-node or multi-node installations with LXC and
 KVM instances on x86, GPU, and SGI Altix UV100 platforms.
 
 

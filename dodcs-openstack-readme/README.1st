@@ -1,10 +1,10 @@
-DODCS OpenStack Folsom Release
+DODCS OpenStack Grizzly Release
 -------------------------------------------
-November, 2012
+May 2013
 
-This DVD contains the Folsom release of the DODCS OpenStack distribution, which supports
-heterogeneous, high-performance computing.  The Folsom release is based on the stable
-version of the Folsom version of OpenStack. Subsequent releases are expected 
+This DVD contains the Grizzly release of the DODCS OpenStack distribution, which supports
+heterogeneous, high-performance computing.  The Grizzly release is based on the stable
+version of the Grizzly version of OpenStack. Subsequent releases are expected 
 to correlate with release versions of OpenStack, starting with Grizzly.
 
 Actual software is in the DODCS.iso file, and md5sum.txt contains the md5 checksum of the DODCS.iso
@@ -24,7 +24,7 @@ The three documents available in the dodcs-docs directory on this DVD are:
    architecture on which DODCS software is deployed at USC/ISI. This document supplements both the
    Installation Guide and the User Guide.
 
-The Folsom release supports single-node or multi-node installations with LXC and
+The Grizzly release supports single-node or multi-node installations with LXC and
 KVM instances on x86, GPU, and SGI Altix UV100 platforms.
 
 For any questions about the release  or to obtain release materials, contact: Dr. Stephen Crago - crago@isi.edu.

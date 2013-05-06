@@ -6,9 +6,9 @@ Summary:	Copies nova install script and examples config files for grizzly releas
 
 Group:		Distribution
 License:	GPL
-Source0:	%{name}-%{version}.tar.gz
+Source0:	%{name}-grizzly.tar.gz
 
-Source1:	%{name}-hpc-folsom.sh
+Source1:	%{name}-hpc-%{Release}.sh
 #MK: needs to be checked
 #Source2:	dhcp_release
 BuildRoot:	%{_tmppath}/%{name}-buildroot
@@ -49,7 +49,7 @@ rm -rf $RPM_BUILD_ROOT
 %files
 %defattr(-,root,root,-)
 #MK: needs to be checked
-%{usrlocaldir}/nova/nova-install-hpc-folsom.sh
+%{usrlocaldir}/nova/nova-install-hpc-grizzly.sh
 %dir %{usrlocaldir}/nova/examples
 %dir %{usrlocaldir}/nova/examples/glance
 %dir %{usrlocaldir}/nova/examples/keystone
