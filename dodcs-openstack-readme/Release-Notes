@@ -1,0 +1,50 @@
+DODCS OpenStack Folsom Release
+----------------------------------------
+November, 2012
+
+This DVD contains the Folsom release of the DODCS OpenStack distribution, which supports
+heterogeneous, high-performance computing.  This release is based on the stable 
+Folsom version of OpenStack. 
+This release is enhanced from the stable Folsom version of Openstack with the followings:
+ * Heterogeneous architecture scheduler support
+ * GPU provisioning support
+ * Native performance GPU support within a virtual machine
+ * UV100 support (as a large shared memory machine)
+ * Stable LXC hypervisor support
+
+DODCS OpenStack Folsom release supports single-node or multi-node installations with LXC and
+KVM instances on x86, GPU, and SGI Altix UV100 platforms.
+
+
+Known Issues
+============
+The following features have known issues:
+
+ * VNC - can not get VNC consoles for instances from command line or from Horizon.
+ * Resource overcommitting - For GPU provisioning, if all the available GPUs are committed to 
+   existing instances, then any attempt to provision another GPU
+   should fail with an "Overcommitted" message. 
+   There is a race condition in the scheduler and this overcommitment is not always detected.
+   It happens when multiple instances requesting GPUs are submitted simultaneously.
+   GPU provisioning in the host is volatile in that the reservation of GPU resources is
+   kept in the main memory. So, when nova-compute restarts on the host, the reservation
+   information is lost and all the GPUs are ready for allocation. It doesn't prevent a running
+   instance from accessing its allocated GPUs. But, it is possible to assign already allocated GPUs 
+   to a new instance.
+ * Tilera support has been tested but the images are not included. Please contact us to get the image.
+ * Availability zones are not currently supported.
+
+ * Some euca commands are not working:
+   * Image management commands except euca-describe-images
+   * euca-bundle-instance
+   * euca-get-console-output
+   * euca-modify-image-attribute
+   * euca-confirm-product-instance
+   * euca-authorize
+   * euca-revoke
+   * euca-create-snapshot
+
+For any questions about the release or to obtain release materials, contact: 
+Dr. Stephen Crago - crago@isi.edu.
+
+For any technical support questions contact: dodcs-support@mailman.isi.edu.

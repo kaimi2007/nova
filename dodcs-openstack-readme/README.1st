@@ -1,0 +1,33 @@
+DODCS OpenStack Folsom Release
+-------------------------------------------
+November, 2012
+
+This DVD contains the Folsom release of the DODCS OpenStack distribution, which supports
+heterogeneous, high-performance computing.  The Folsom release is based on the stable
+version of the Folsom version of OpenStack. Subsequent releases are expected 
+to correlate with release versions of OpenStack, starting with Grizzly.
+
+Actual software is in the DODCS.iso file, and md5sum.txt contains the md5 checksum of the DODCS.iso
+file so that the integrety of the disk image can be checked. Associated documentation is in the
+dodcs-docs directory. For installation, start with the Installation Manual.
+
+The three documents available in the dodcs-docs directory on this DVD are:
+
+ * DODCS Installation Manual (InstallationManual.pdf): Provides detailed instructions on installing and
+   configuring the DODCS distribution and is most useful for cloud administators. An appendix of this
+   document lists the DVD contents.
+
+ * User's Guide (UserGuide.pdf): Provides information for using the DODCS distribution and is most useful
+   for cloud users.  This document also contains an appendix with known issues.
+
+ * DODCS Architecture Document (Architecture.pdf): Provides an overview of the reference hardware
+   architecture on which DODCS software is deployed at USC/ISI. This document supplements both the
+   Installation Guide and the User Guide.
+
+The Folsom release supports single-node or multi-node installations with LXC and
+KVM instances on x86, GPU, and SGI Altix UV100 platforms.
+
+For any questions about the release  or to obtain release materials, contact: Dr. Stephen Crago - crago@isi.edu.
+
+For any technical support questions contact: dodcs-support@mailman.isi.edu.
+
