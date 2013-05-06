@@ -1,0 +1,3 @@
+spec: start-stop-daemon.spec
+copy: redhat/apps-sys-utils-start-stop-daemon-IR1_9_18-2.tar.gz
+tar.gz: . name=start-stop-daemon-@version@

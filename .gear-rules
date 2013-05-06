@@ -1,0 +1,6 @@
+spec: openstack-nova.spec
+copy: redhat/*
+#copy: etc/nova/nova.conf
+#copy: etc/init.d/*
+copy: patches/* 
+tar.gz: . name=nova-@version@
