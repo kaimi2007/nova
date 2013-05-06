@@ -6,9 +6,9 @@ Summary:	Copies nova install script and examples config files for grizzly releas
 
 Group:		Distribution
 License:	GPL
-Source0:	%{name}-grizzly.tar.gz
+Source0:	%{name}-%{version}.tar.gz
 
-Source1:	%{name}-hpc-%{Release}.sh
+Source1:	%{name}-hpc-grizzly.sh
 #MK: needs to be checked
 #Source2:	dhcp_release
 BuildRoot:	%{_tmppath}/%{name}-buildroot
