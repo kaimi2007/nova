@@ -1,4 +1,4 @@
 spec: install-script.spec
-copy: nova-install/nova-install-hpc-folsom.sh
+copy: nova-install/nova-install-hpc-grizzly.sh
 #copy: nova-install/dhcp_release
 tar.gz: nova-install name=nova-install-@version@
