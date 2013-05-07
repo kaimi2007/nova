@@ -354,6 +354,7 @@ Requires:         python-cheetah
 Requires:         python-ldap
 Requires:         python-stevedore
 
+Requires:         memcached
 Requires:         python-memcached
 
 Requires:         python-sqlalchemy0.7
