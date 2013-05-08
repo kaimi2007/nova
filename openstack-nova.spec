@@ -354,6 +354,10 @@ Requires:         python-cheetah
 Requires:         python-ldap
 Requires:         python-stevedore
 
+Requires:         seabios 
+Requires:         usbredir
+Requires:         celt051
+Requires:         spice-server
 Requires:         memcached
 Requires:         python-memcached
 
