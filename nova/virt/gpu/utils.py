@@ -27,7 +27,7 @@ Utility functions
 
 """
 import os
-import subprocess
+import pickle
 
 from nova.compute import instance_types
 from nova.compute import vm_states
@@ -43,6 +43,7 @@ gpus_available = []
 gpus_allocated = {}
 num_gpus = None
 extra_specs = {}
+gpu_usage_file = ''
 
 LOG = logging.getLogger(__name__)
 
@@ -62,6 +63,9 @@ gpu_opts = [
     cfg.StrOpt('guest_tee_command',
                default='/usr/bin/tee',
                help='Full path of tee command in the LXC FS'),
+    cfg.StrOpt('gpu_usage_file',
+               default='gpus_allocated',
+               help='Full path of the file keeping the information of gpus allocated'),
 #    cfg.StrOpt('volume_auto_mount',
 #               default=False,
 #               help='if True, a volume is automatically mounted'
@@ -79,15 +83,40 @@ CONF = cfg.CONF
 CONF.register_opts(gpu_opts)
 
 
-def init_host_gpu():
-    get_instance_type_extra_specs_capabilities()
+def num_available_gpus():
+    global gpus_available
+    return len(gpus_available)
+
+
+def init_host_gpu(live_instance_uuids):
     global gpus_available
     global num_gpus
     global extra_specs
+    global gpus_allocated
+    global gpu_usage_file
+    get_instance_type_extra_specs_capabilities()
     num_gpus = 0
+    gpu_usage_file = CONF.state_path + '/' + CONF.gpu_usage_file
     if 'gpus' in extra_specs:
         num_gpus = extra_specs['gpus']
         gpus_available = range(int(extra_specs['gpus']))
+        try:
+            gpus_allocated = load_gpu_allocation()
+            LOG.info("GPUs allocated = %s" % str(gpus_allocated))
+            for instance_uuid, gpus in gpus_allocated.items():
+                LOG.info("for instance %s" % instance_uuid)
+                if instance_uuid in live_instance_uuids:
+                    for allocated in gpus:
+                        gpus_available.remove(allocated)
+                else:
+                    del gpus_allocated[instance_uuid]
+                
+                LOG.info("Available GPUs = %d" % num_available_gpus())
+        except Exception:
+            gpus_allocated = {}
+            LOG.info("Available GPUs = %d" % num_available_gpus())
+            pass
+    save_gpu_allocation(gpus_allocated)
 
 
 def update_status(data):
@@ -95,10 +124,32 @@ def update_status(data):
     global gpus_available
     for key in extra_specs.iterkeys():
         if 'gpus' == key:
-            data['gpus'] = int(len(gpus_available))
+            data['gpus'] = num_available_gpus()
         else:
             data[key] = extra_specs[key]
     return data
+
+
+def load_gpu_allocation():
+    global gpu_usage_file
+    try:
+        input = open(gpu_usage_file, 'r')
+        data = pickle.load(input)
+        input.close()
+        return data
+    except Exception:
+        LOG.error("Failed to open GPU allocation information")
+        return {}
+
+def save_gpu_allocation(gpus_allocated):
+    global gpu_usage_file
+    try:
+        output = open(gpu_usage_file, 'w')
+        pickle.dump(gpus_allocated, output, pickle.HIGHEST_PROTOCOL)
+        output.close()
+    except Exception:
+        LOG.error("Failed to save GPU allocation information")
+        pass
 
 
 def get_instance_type_extra_specs_capabilities():
@@ -111,10 +162,6 @@ def get_instance_type_extra_specs_capabilities():
         extra_specs[keyval[0]] = keyval[1]
 #    return extra_specs
 
-
-def get_gpu_total():
-    global gpus_available
-    return len(gpus_available)
 
 def allow_cgroup_device(instance, perm):
     dev_whitelist = os.path.join(CONF.dev_cgroups_path,
@@ -173,13 +220,13 @@ def allocate_gpus(context, instance, extra_specs, virt_dom):
 
     allow_gpus(instance)
     gpus_allocated_list = []
-    LOG.info(_("gpus available, %d .") % len(gpus_available))
-    if gpus_needed > len(gpus_available):
+    LOG.info(_("gpus available, %d .") % num_available_gpus())
+    if gpus_needed > num_available_gpus():
         raise Exception(_("Overcommit Error"))
+    LOG.info(_("gpus needed - %d .") % gpus_needed)
     for i in range(gpus_needed):
         gpus_allocated_list.append(gpus_available.pop())
     if (gpus_needed > 0):
-        gpus_allocated[instance['name']] = gpus_allocated_list
         gpus_visible = str(gpus_allocated_list).strip('[]')
         flag = "CUDA_VISIBLE_DEVICES=%s\n" % gpus_visible
         try:
@@ -187,17 +234,22 @@ def allocate_gpus(context, instance, extra_specs, virt_dom):
                           '--', CONF.guest_tee_command, env_file, 
                           process_input=flag,
                           run_as_root=True)
+            gpus_allocated[instance['uuid']] = gpus_allocated_list
+            save_gpu_allocation(gpus_allocated)
         except Exception:
             LOG.info("Failed to set up GPU environment file")
-            pass 
+            gpus_available.extend(gpus_allocated_list)
+            del gpus_allocated[inst['uuid']]
+            raise Exception(_("Failed to set up GPU environment file"))
 
 def deallocate_gpus(inst):
     """Assigns gpus to a specific instance"""
     global gpus_available
     global gpus_allocated
-    if inst['name'] in gpus_allocated:
-        gpus_available.extend(gpus_allocated[inst['name']])
-        del gpus_allocated[inst['name']]
+    if inst['uuid'] in gpus_allocated:
+        gpus_available.extend(gpus_allocated[inst['uuid']])
+        del gpus_allocated[inst['uuid']]
+    save_gpu_allocation(gpus_allocated)
     return
 
 

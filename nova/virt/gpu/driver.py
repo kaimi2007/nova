@@ -52,7 +52,20 @@ class GPULibvirtDriver(driver.LibvirtDriver):
             libvirt = __import__('libvirt')
 
         assert CONF.libvirt_type == 'lxc', "Only LXC is supported for GPU"
-        gpu_utils.init_host_gpu()
+        gpu_utils.init_host_gpu(self.list_live_instance_uuids())
+
+    def list_live_instance_uuids(self):
+        uuids = []
+        for name in self.list_instances():
+            try:
+                virt_dom = self._lookup_by_name(name)
+                (state, _max_mem, _mem, _cpus, _t) = virt_dom.info()
+                state = driver.LIBVIRT_POWER_STATE[state]
+                if state == power_state.RUNNING:
+                    uuids.append(virt_dom.UUIDString())
+            except Exception:
+                pass
+        return uuids
 
     @property
     def host_state(self):
@@ -209,7 +222,6 @@ lxc_mounts = {}
 
         # check if 'mountpoint' already exists
         dev_key = init_pid + lxc_device
-        LOG.info(_('dkang: before insert: lxc_mounts = (%s)' % str(lxc_mounts)))
         if dev_key in lxc_mounts:
             raise Exception(_('the same mount point(%s) is already used.')
                         % lxc_device)
@@ -224,9 +236,7 @@ lxc_mounts = {}
             out, err = utils.execute('lxc-attach', '-n', init_pid, '--',
                           '/bin/ls', dir_name, run_as_root=True, 
                           check_exit_code=False) 
-            LOG.info("dkang: out(%s), error(%s) " % (out,err))
             if err:
-                LOG.info("dkang: %s not exists" % dir_name)
                 utils.execute('lxc-attach', '-n', init_pid, '--',
                               '/bin/mkdir', dir_name, run_as_root=True)
                 found = 1
@@ -237,7 +247,6 @@ lxc_mounts = {}
             raise Exception(_('cannot find mounting directories'))
 
         lxc_mounts[dev_key] = dir_name
-        LOG.info(_('dkang: after insert: lxc_mounts = (%s)' % str(lxc_mounts)))
         utils.execute('lxc-attach', '-n', init_pid, '--',
                       '/bin/chmod', '777', lxc_device,
                       run_as_root=True)
@@ -249,13 +258,9 @@ lxc_mounts = {}
 
         except Exception as exc:
         # mount returns 32 for "No records found"
-            LOG.info("dkang: exc.exit_code(%s)" % str(exc.exit_code))
-            LOG.info("dkang: out(%s), err(%s)" % (out,err))
             if exc.exit_code in [32]:
-                LOG.info("dkang: err(%s)" % err)
                 if "mount: you must specify the filesystem type" in err:
                     LOG.info("New volume. A Ext3 file system is created in it.");
-                    LOG.info("dkang: mkfs.ext3 (%s)" % host_dev)
 #                    utils.execute('mkfs.ext3', host_dev)
 
                 out, err = utils.execute('lxc-attach', '-n', init_pid, '--',
@@ -284,7 +289,6 @@ lxc_mounts = {}
     def _umount_lxc_volume(self, init_pid, lxc_device):
         global lxc_mounts
         LOG.info(_('umounting LXC block device'))
-        LOG.info(_('dkang: lxc_mounts = (%s)' % str(lxc_mounts)))
         dev_key = init_pid + lxc_device
         if dev_key not in lxc_mounts:
             raise Exception(_('no such process(%(init_pid)s) or '
