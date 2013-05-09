@@ -43,6 +43,7 @@ Requires:	openstack-nova-conductor = 2013.1-grizzly
 
 Requires:       python-glance = 2013.1-1.el6
 Requires:	openstack-glance = 2013.1-1.el6
+Requires:	openstack-dashboard = 2013.1-1.el6
 Requires:	openstack-nova-compute = 2013.1-grizzly
 # Transaction check error
 #Requires:	openstack-nova-common = 2013.1-2.el6
