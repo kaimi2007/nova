@@ -3,9 +3,11 @@
 # nova-install.sh
 # Dong In "David" Kang
 # dkang@isi.edu
-# Oct, 8, 2012
+# Malek Musleh
+# mmusleh@isi.edu
+# May, 14, 2013
 #
-# (c) 2012 USC/ISI
+# (c) 2013 USC/ISI
 #
 # This script is provided for a reference only.
 # Its functional correctness is not guaranteed.
@@ -141,13 +143,7 @@ MYSQL_ROOT_PASS=${MYSQL_ROOT_PASS:-nova}
 #             below but make sure that the interface doesn't already have an
 #             ip or you risk breaking things.
 SQL_CONN=mysql://$MYSQL_NOVA_USR:$MYSQL_NOVA_PASS@$MySQL_Nova_IP_address/nova
-#if [ "$CMD" == "sys-init" ]; then
-#    mysqladmin -u root password nova
-#    mysql -uroot -pnova -e 'CREATE DATABASE nova;'
-#    mysql -uroot -pnova -e "GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;"
-#    mysql -uroot -pnova -e "GRANT ALL PRIVILEGES ON *.* TO 'root'@'localhost' WITH GRANT OPTION;"
-#    mysql -uroot -pnova -e "SET PASSWORD FOR 'root'@'%' = PASSWORD('nova');"
-#fi
+
 if [ -n "$FLAT_INTERFACE" ]; then
         echo "flat_interface=$FLAT_INTERFACE" >>  $NOVA_CONF
         echo "flat_network_bridge=br100" >> $NOVA_CONF
@@ -160,57 +156,47 @@ if [ "$CMD" == "compute-init" ] ||
     echo "writing nova.conf"
     cat > $NOVA_CONF << NOVA_CONF_EOF
 [DEFAULT]
-verbose=True
-allow_resize_to_same_host=True
-compute_scheduler_driver=nova.scheduler.filter_scheduler.FilterScheduler
-dhcpbridge_flagfile= $NOVA_CONF
-fixed_range=$DHCP_FIXED_RANGE
-network_size=$NETWORK_SIZE
-network_manager=nova.network.manager.$NET_MAN
-osapi_compute_extension=nova.api.openstack.compute.contrib.standard_extensions
-my_ip=$HOST_IP
-sql_connection=$SQL_CONN
-libvirt_type=$LIBVIRT_TYPE
-instance_name_template=instance-%08x
-api_paste_config=/etc/nova/api-paste.ini 
-image_service=nova.image.glance.GlanceImageService
-ec2_dmz_host=$NOVA_API_server_IP_address
-rabbit_host=$NOVA_API_server_IP_address
-glance_api_servers=$Glance_server_IP_address:9292
-auth_strategy=keystone
-keystone_ec2_url=http://$Keystone_server_IP_address:5000/v2.0/ec2tokens
+verbose = True
+debug = True
+logdir = /var/log/nova
+state_path = /var/lib/nova
+lock_path = /var/lib/nova/tmp
+volumes_dir = /etc/nova/volumes
+dhcpbridge = /usr/bin/nova-dhcpbridge
+dhcpbridge_flagfile = /etc/nova/nova.conf
+force_dhcp_release = False
+injected_network_template = /usr/share/nova/interfaces.template
+libvirt_nonblocking = True
+libvirt_inject_partition = -1
+network_manager = nova.network.manager.FlatDHCPManager
+iscsi_helper = tgtadm
+sql_connection = mysql://nova:nova@localhost/nova
+firewall_driver = nova.virt.libvirt.firewall.IptablesFirewallDriver
+rpc_backend = nova.openstack.common.rpc.impl_qpid
+rootwrap_config = /etc/nova/rootwrap.conf
+volume_api_class = nova.volume.cinder.API
+enabled_apis = ec2,osapi_compute,metadata
+auth_strategy = keystone
 multi_host=False
-send_arp_for_ha=True
-logging_context_format_string=%(asctime)s %(levelname)s %(name)s [%(request_id)s %(user_name)s %(project_name)s] %(instance)s%(message)s
-compute_driver=$COMPUTE_DRIVER
-quota_cores=$QUOTA_CORES
-quota_gigabytes=$QUOTA_GIGABYTES
-quota_ram=$QUOTA_RAM
-quota_volumes=$QUOTA_VOLUMES
-periodic_interval=$PERIODIC_INTERVAL
-max_nbd_devices=$MAX_NBD_DEVICES
-libvirt_use_virtio_for_bridges=True
-volume_name_template=volume-%s
-iscsi_ip_address=$Volume_server_IP_address
-iscsi_helper=tgtadm
-service_down_time=$DOWN_TIME
-ec2_private_dns_show_ip=True
-instance_type_extra_specs=$EXTRA_SPECS
-rootwrap_config=/etc/nova/rootwrap.conf
-fixed_ip_disassociate_timeout=600
-force_dhcp_release=False
-public_interface=$PUBLIC_INTERFACE
-vlan_interface=$VLAN_INTERFACE
-pybasedir=/usr
-instances_path=/var/lib/nova/instances
-networks_path=/var/lib/nova/networks
-ca_path=/var/lib/nova/CA
-states_path=/var/lib/nova
-lock_path=/var/lib/nova
-buckets_path=/var/lib/nova/buckets
-logdir=/var/log/nova
-volumes_dir=/var/lib/nova/volumes
-keys_path=/var/lib/nova/keys
+public_interface=eth1
+flat_network_bridge=br100
+flat_interface=eth3
+fixed_range=10.111.0.0/24
+network_size=256
+dhcpbridge = /usr/bin/nova-dhcpbridge
+ 
+libvirt_type=kvm
+compute_driver = libvirt.LibvirtDriver
+use_cow_images=True
+ 
+[keystone_authtoken]
+admin_tenant_name = service
+admin_user = nova
+admin_password = nova
+auth_host = 127.0.0.1
+auth_port = 35357
+auth_protocol = http
+signing_dir = /tmp/keystone-signing-nova
 NOVA_CONF_EOF
 fi
 chown nova:nova $NOVA_CONF
@@ -238,47 +224,29 @@ fi
 if [ "$CMD" == "cloud-init" ] ||
    [ "$CMD" == "single-init" ]; then
     killall dnsmasq
-##    echo "ISCSITARGET_ENABLE=true" | sudo tee /etc/default/iscsitarget
-##    sudo /etc/init.d/iscsitarget restart
-##    screen -d -m -S nova -t nova
+
     sleep 1
-    #mysqladmin -u root password $MYSQL_ROOT_PASS
-    # mysql -u$MYSQL_ROOT_USR -p$MYSQL_ROOT_PASS -e "GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;"
-    # mysql -u$MYSQL_ROOT_USR -p$MYSQL_ROOT_PASS -e "GRANT ALL PRIVILEGES ON *.* TO 'root'@'localhost' WITH GRANT OPTION;"
-
-    # mysql -u$MYSQL_ROOT_USR -p$MYSQL_ROOT_PASS -e 'DROP DATABASE nova;' -h ${MySQL_Nova_IP_address}
-    # mysql -u$MYSQL_ROOT_USR -p$MYSQL_ROOT_PASS -e 'CREATE DATABASE nova;' -h ${MySQL_Nova_IP_address}
-
-    #echo "MySQL nova user creation"
-    #mysql -uroot -p$MYSQL_ROOT_PASS -e "CREATE USER '$MYSQL_NOVA_USR'@'%' IDENTIFIED BY '$MYSQL_NOVA_PASS';"
-    #mysql -uroot -p$MYSQL_ROOT_PASS -e "CREATE USER '$MYSQL_NOVA_USR'@'localhost' IDENTIFIED BY '$MYSQL_NOVA_PASS';"
-    #mysql -uroot -p$MYSQL_ROOT_PASS -e "GRANT ALL PRIVILEGES ON nova.* TO '$MYSQL_NOVA_USR'@'%' WITH GRANT OPTION;"
-    #mysql -uroot -p$MYSQL_ROOT_PASS -e "GRANT ALL PRIVILEGES ON nova.* TO '$MYSQL_NOVA_USR'@'localhost' WITH GRANT OPTION;"
-
-    #echo "drop and create and sync db, if this is first trial, please ignore error message of 'database doesn't exist'"
-    #mysql -u$MYSQL_ROOT_USR -p$MYSQL_ROOT_PASS -e 'DROP DATABASE nova;' 
-    #mysql -u$MYSQL_ROOT_USR -p$MYSQL_ROOT_PASS -e 'CREATE DATABASE nova;' 
-
-
     nova-manage db sync
 
     echo "nova-manage network create"
     nova-manage network create --bridge_interface=$BRIDGE_IFACE --bridge=$BRIDGE \
        --num_networks=$NUM_NETWORKS --fixed_range_v4=$DHCP_FIXED_RANGE \
        --network_size=$DHCP_IP_NUM --label=$NETWORK_LABEL
-    service nova-api restart
-    service nova-network restart
-    service nova-objectstore restart
-    service nova-scheduler restart
-    service nova-cert restart
+    service openstack-nova-api restart
+    service openstack-nova-network restart
+    service openstack-nova-objectstore restart
+    service openstack-nova-scheduler restart
+    service openstack-nova-cert restart
 fi
 if [ "$CMD" == "compute-init" ] ||
    [ "$CMD" == "single-init" ]; then
-       echo "start nova-compute"
-      service nova-compute restart
+       echo "start openstack-nova-compute"
+      service openstack-nova-compute restart
 fi
 
 if [ "$CMD" == "volume-init" ]; then
       service tgtd restart
-      service nova-volume restart
+      service openstack-cinder-api restart
+      service openstack-cinder-scheduler restart
+      service openstack-cinder-volume restart
 fi
