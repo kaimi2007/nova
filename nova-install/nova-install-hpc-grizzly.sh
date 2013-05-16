@@ -165,9 +165,6 @@ volumes_dir = /etc/nova/volumes
 dhcpbridge = /usr/bin/nova-dhcpbridge
 dhcpbridge_flagfile = /etc/nova/nova.conf
 force_dhcp_release = False
-injected_network_template = /usr/share/nova/interfaces.template
-libvirt_nonblocking = True
-libvirt_inject_partition = -1
 network_manager = nova.network.manager.FlatDHCPManager
 iscsi_helper = tgtadm
 sql_connection = mysql://nova:nova@localhost/nova
@@ -193,7 +190,6 @@ if [ "$CMD" == "compute-init" ] ||
         if [ "$ARCH" == "gpu" ]; then
                 echo "user=$USER" >>  $NOVA_CONF
                 echo "use_cow_images=False" >>  $NOVA_CONF
-		echo "firewall_driver = nova.virt.libvirt.firewall.IptablesFirewallDriver" >> $NOVA_CONF
 		echo "compute_driver = libvirt.LibvirtDriver" >> $NOVA_CONF
 		echo "libvirt_type=lxc" >> $NOVA_CONF
                 echo "dev_cgroups_path=$CGROUPS_PATH"  >>  $NOVA_CONF
@@ -215,7 +211,6 @@ if [ "$CMD" == "compute-init" ] ||
 		echo "sql_connection = mysql://nova:nova@localhost/nova_bm" >> $NOVA_CONF
         else 
                 echo "use_cow_images=True" >>  $NOVA_CONF
-		echo "firewall_driver = nova.virt.libvirt.firewall.IptablesFirewallDriver" >> $NOVA_CONF
 		echo "compute_driver = libvirt.LibvirtDriver" >> $NOVA_CONF
 		echo "libvirt_type=kvm" >> $NOVA_CONF
         fi
