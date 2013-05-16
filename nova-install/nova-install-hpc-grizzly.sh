@@ -61,7 +61,7 @@ BRIDGE=br100
 NETWORK_LABEL=public
 NUM_NETWORKS=1
 NOVA_CONF=/etc/nova/nova.conf
-NETWORK_SIZE=65536
+NETWORK_SIZE=256
 USER=/home/nova
 CGROUPS_PATH=/cgroup/devices/libvirt/lxc
 # We assume that IP address of br100 of cloud controller is 10.99.0.1
@@ -73,7 +73,7 @@ Glance_server_IP_address=10.99.0.1
 Volume_server_IP_address=10.99.0.1
 Keystone_server_IP_address=10.99.0.1
 MySQL_Nova_IP_address=10.99.0.1
-DHCP_FIXED_RANGE=10.99.0.0/16
+DHCP_FIXED_RANGE=10.99.0.0/24
 DHCP_START_IP=10.99.0.2
 DHCP_IP_NUM=$NETWORK_SIZE
 FLAT_NETWORK_DNS=10.99.0.1
@@ -118,7 +118,7 @@ elif [ "$ARCH" == "uv" ]; then
     LIBVIRT_TYPE=kvm
     CPU_ARCH=x86_64
     CONNECTION_TYPE=libvirt
-    COMPUTE_DRIVER=gpu.GPULibvirtDriver
+    COMPUTE_DRIVER=libvirt.LibvirtDriver
     EXTRA_SPECS="cpu_arch:$CPU_ARCH, system_type:UV"
 else
     LIBVIRT_TYPE=kvm
@@ -171,34 +171,21 @@ libvirt_inject_partition = -1
 network_manager = nova.network.manager.FlatDHCPManager
 iscsi_helper = tgtadm
 sql_connection = mysql://nova:nova@localhost/nova
-firewall_driver = nova.virt.libvirt.firewall.IptablesFirewallDriver
 rpc_backend = nova.openstack.common.rpc.impl_qpid
 rootwrap_config = /etc/nova/rootwrap.conf
 volume_api_class = nova.volume.cinder.API
 enabled_apis = ec2,osapi_compute,metadata
 auth_strategy = keystone
 multi_host=False
-public_interface=eth1
-flat_network_bridge=br100
-flat_interface=eth3
-fixed_range=10.111.0.0/24
-network_size=256
+public_interface=$PUBLIC_INTERFACE
+flat_network_bridge=$BRIDGE
+flat_interface=$FLAT_INTERFACE
+fixed_range=$DHCP_FIXED_RANGE
+network_size=$NETWORK_SIZE
 dhcpbridge = /usr/bin/nova-dhcpbridge
- 
-libvirt_type=kvm
-compute_driver = libvirt.LibvirtDriver
-use_cow_images=True
- 
-[keystone_authtoken]
-admin_tenant_name = service
-admin_user = nova
-admin_password = nova
-auth_host = 127.0.0.1
-auth_port = 35357
-auth_protocol = http
-signing_dir = /tmp/keystone-signing-nova
 NOVA_CONF_EOF
 fi
+ 
 chown nova:nova $NOVA_CONF
 chmod 600  $NOVA_CONF
 if [ "$CMD" == "compute-init" ] ||
@@ -206,14 +193,44 @@ if [ "$CMD" == "compute-init" ] ||
         if [ "$ARCH" == "gpu" ]; then
                 echo "user=$USER" >>  $NOVA_CONF
                 echo "use_cow_images=False" >>  $NOVA_CONF
-        fi
-        if [ "$ARCH" == "tilera" ]; then
-                echo "tile_monitor=/usr/local/TileraMDE/bin/tile-monitor" >> $NOVA_CONF
-        fi
-        if [ "$LIBVIRT_TYPE" == "lxc" ]; then
+		echo "firewall_driver = nova.virt.libvirt.firewall.IptablesFirewallDriver" >> $NOVA_CONF
+		echo "compute_driver = libvirt.LibvirtDriver" >> $NOVA_CONF
+		echo "libvirt_type=lxc" >> $NOVA_CONF
                 echo "dev_cgroups_path=$CGROUPS_PATH"  >>  $NOVA_CONF
+        elif [ "$ARCH" == "tilera" ]; then
+		echo "libvirt_type=kvm" >> $NOVA_CONF
+                echo "tile_monitor=/usr/local/TileraMDE/bin/tile-monitor" >> $NOVA_CONF
+		echo "scheduler_host_manager = nova.scheduler.baremetal_host_manager.BaremetalHostManager" >> $NOVA_CONF
+		echo "firewall_driver = nova.virt.firewall.NoopFirewallDriver" >> $NOVA_CONF
+		echo "compute_driver = nova.virt.baremetal.driver.BareMetalDriver" >> $NOVA_CONF
+		echo "ram_allocation_ratio = 1.0" >> $NOVA_CONF
+		echo "reserved_host_memory_mb = 0" >> $NOVA_CONF
+		echo "" >> $NOVA_CONF
+		echo "[baremetal]" >> $NOVA_CONF
+		echo "net_config_template = /usr/lib/python2.6/site-packages/nova-2013.1.a4957.gf543f34-py2.6.egg/nova/virt/baremetal/net-static.ubuntu.template" >> $NOVA_CONF
+		echo "tftp_root = /tftpboot" >> $NOVA_CONF
+		echo "power_manager = nova.virt.baremetal.tilera_pdu.PDU" >> $NOVA_CONF
+		echo "driver = nova.virt.baremetal.tilera.TILERA" >> $NOVA_CONF
+		echo "instance_type_extra_specs = cpu_arch:tilepro64" >> $NOVA_CONF
+		echo "sql_connection = mysql://nova:nova@localhost/nova_bm" >> $NOVA_CONF
+        else 
+                echo "use_cow_images=True" >>  $NOVA_CONF
+		echo "firewall_driver = nova.virt.libvirt.firewall.IptablesFirewallDriver" >> $NOVA_CONF
+		echo "compute_driver = libvirt.LibvirtDriver" >> $NOVA_CONF
+		echo "libvirt_type=kvm" >> $NOVA_CONF
         fi
 fi
+
+echo "" >> $NOVA_CONF
+echo "[keystone_authtoken]" >> $NOVA_CONF
+echo "admin_tenant_name = service" >> $NOVA_CONF
+echo "admin_user = nova" >> $NOVA_CONF
+echo "admin_password = nova" >> $NOVA_CONF
+echo "auth_host = 127.0.0.1" >> $NOVA_CONF
+echo "auth_port = 35357" >> $NOVA_CONF
+echo "auth_protocol = http" >> $NOVA_CONF
+echo "signing_dir = /tmp/keystone-signing-nova" >> $NOVA_CONF
+
 if [ "$CMD" == "compute-init" ] ||
    [ "$CMD" == "single-init" ]; then
     sudo killall libvirtd
