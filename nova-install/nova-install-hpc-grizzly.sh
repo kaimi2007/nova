@@ -77,6 +77,7 @@ DHCP_FIXED_RANGE=10.99.0.0/24
 DHCP_START_IP=10.99.0.2
 DHCP_IP_NUM=$NETWORK_SIZE
 FLAT_NETWORK_DNS=10.99.0.1
+META_DATA_HOST=$NOVA_API_server_IP_address
 
 PUBLIC_INTERFACE=eth0
 FLAT_INTERFACE=eth1
@@ -144,11 +145,11 @@ MYSQL_ROOT_PASS=${MYSQL_ROOT_PASS:-nova}
 #             ip or you risk breaking things.
 SQL_CONN=mysql://$MYSQL_NOVA_USR:$MYSQL_NOVA_PASS@$MySQL_Nova_IP_address/nova
 
-if [ -n "$FLAT_INTERFACE" ]; then
-        echo "flat_interface=$FLAT_INTERFACE" >>  $NOVA_CONF
-        echo "flat_network_bridge=br100" >> $NOVA_CONF
-        echo "flat_network_dns=$FLAT_NETWORK_DNS" >> $NOVA_CONF
-fi
+#if [ -n "$FLAT_INTERFACE" ]; then
+#        echo "flat_interface=$FLAT_INTERFACE" >>  $NOVA_CONF
+#        echo "flat_network_bridge=br100" >> $NOVA_CONF
+#        echo "flat_network_dns=$FLAT_NETWORK_DNS" >> $NOVA_CONF
+#fi
 if [ "$CMD" == "compute-init" ] ||
      [ "$CMD" == "cloud-init" ] ||
      [ "$CMD" == "volume-init" ] ||
@@ -180,6 +181,12 @@ flat_interface=$FLAT_INTERFACE
 fixed_range=$DHCP_FIXED_RANGE
 network_size=$NETWORK_SIZE
 dhcpbridge = /usr/bin/nova-dhcpbridge
+metadata_host=$METADATA_HOST
+metadata_port=8775
+metadata_listen=0.0.0.0
+metadata_listen_port=8775
+novncproxy_port=6080
+novncproxy_host=$NOVA_API_server_IP_address
 NOVA_CONF_EOF
 fi
  
@@ -190,7 +197,7 @@ if [ "$CMD" == "compute-init" ] ||
         if [ "$ARCH" == "gpu" ]; then
                 echo "user=$USER" >>  $NOVA_CONF
                 echo "use_cow_images=False" >>  $NOVA_CONF
-		echo "compute_driver = libvirt.LibvirtDriver" >> $NOVA_CONF
+		echo "compute_driver = gpu.GPULibvirtDriver" >> $NOVA_CONF
 		echo "libvirt_type=lxc" >> $NOVA_CONF
                 echo "dev_cgroups_path=$CGROUPS_PATH"  >>  $NOVA_CONF
         elif [ "$ARCH" == "tilera" ]; then
