@@ -354,7 +354,8 @@ def get_version(package_name, pre_version=None):
     to make a source tarball from a fork of our repo with additional tags in it
     that they understand and desire the results of doing that.
     """
-    version = os.environ.get("OSLO_PACKAGE_VERSION", None)
+    #version = os.environ.get("OSLO_PACKAGE_VERSION", None)
+    version = "2013.1.1"
     if version:
         return version
     version = _get_version_from_pkg_info(package_name)
