@@ -230,34 +230,33 @@ if [ "$CMD" == "cloud-init" ] ||
 
    
     # create flavors for heterogeneous instance types 
-    nova flavor-key 10 set gpus="= 1"
-    nova flavor-key 10 set gpu_arch="s== fermi"
+    # nova flavor-key 10 set gpus="= 1"
+    # nova flavor-key 10 set gpu_arch="s== fermi"
+    # nova flavor-create --is-public True cg1.medium 11 4096 20 2
+    # nova flavor-key 11 set gpus="= 1"
+    # nova flavor-key 11 set gpu_arch="s== fermi"
+    # nova flavor-create --is-public True cg1.large 12 8192 40 4
+    # nova flavor-key 12 set gpus="= 1"
+    # nova flavor-key 12 set gpu_arch="s== fermi"
+    # nova flavor-create --is-public True cg1.xlarge 13 8192 80 8
+    # nova flavor-key 13 set gpus="= 1"
+    # nova flavor-key 13 set gpu_arch="s== fermi"
+    # nova flavor-create --is-public True cg1.2xlarge 14 16384 160 8
+    # nova flavor-key 14 set gpus="= 2"
+    # nova flavor-key 14 set gpu_arch="s== fermi"
+    # nova flavor-create --is-public True cg1.4xlarge 15 22000 320 8
+    # nova flavor-key 15 set gpus="= 2"
+    # nova flavor-key 15 set gpu_arch="s== fermi"
 
-    nova flavor-create --is-public True cg1.medium 11 4096 20 2
-    nova flavor-key 11 set gpus="= 1"
-    nova flavor-key 11 set gpu_arch="s== fermi"
-    nova flavor-create --is-public True cg1.large 12 8192 40 4
-    nova flavor-key 12 set gpus="= 1"
-    nova flavor-key 12 set gpu_arch="s== fermi"
-    nova flavor-create --is-public True cg1.xlarge 13 8192 80 8
-    nova flavor-key 13 set gpus="= 1"
-    nova flavor-key 13 set gpu_arch="s== fermi"
-    nova flavor-create --is-public True cg1.2xlarge 14 16384 160 8
-    nova flavor-key 14 set gpus="= 2"
-    nova flavor-key 14 set gpu_arch="s== fermi"
-    nova flavor-create --is-public True cg1.4xlarge 15 22000 320 8
-    nova flavor-key 15 set gpus="= 2"
-    nova flavor-key 15 set gpu_arch="s== fermi"
+    # nova flavor-create --is-public True tp64.8x8 20 16218 917 64
+    # nova flavor-key 20 set cpu_arch="s== tilepro64"
 
-    nova flavor-create --is-public True tp64.8x8 20 16218 917 64
-    nova flavor-key 20 set cpu_arch="s== tilepro64"
-
-    nova flavor-create --is-public True sh1.2xlarge 50 65536 160 16
-    nova flavor-key 50 set system_type="s== UV"
-    nova flavor-create --is-public True sh1.4xlarge 51 65536 160 32
-    nova flavor-key 51 set system_type="s== UV"
-    nova flavor-create --is-public True sh1.8xlarge 52 131072 160 64
-    nova flavor-key 52 set system_type="s== UV"
+    # nova flavor-create --is-public True sh1.2xlarge 50 65536 160 16
+    # nova flavor-key 50 set system_type="s== UV"
+    # nova flavor-create --is-public True sh1.4xlarge 51 65536 160 32
+    # nova flavor-key 51 set system_type="s== UV"
+    # nova flavor-create --is-public True sh1.8xlarge 52 131072 160 64
+    # nova flavor-key 52 set system_type="s== UV"
 
 fi
 if [ "$CMD" == "compute-init" ] ||
