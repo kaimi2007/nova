@@ -364,7 +364,10 @@ Requires:         python-memcached
 Requires:         python-sqlalchemy0.7
 Requires:         python-migrate
 
+Requires: 	  python-paste
+Requires: 	  python-paste-deploy
 Requires:         python-paste-deploy1.5
+Requires: 	  python-routes
 Requires:         python-routes1.12
 Requires:         python-webob1.0
 
