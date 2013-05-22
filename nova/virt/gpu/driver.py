@@ -51,8 +51,9 @@ class GPULibvirtDriver(driver.LibvirtDriver):
         if libvirt is None:
             libvirt = __import__('libvirt')
 
-        assert CONF.libvirt_type == 'lxc', "Only LXC is supported for GPU"
-        gpu_utils.init_host_gpu(self.list_live_instance_uuids())
+        gpu_utils.get_instance_type_extra_specs_capabilities()
+        if CONF.libvirt_type.lower() == 'lxc':
+            gpu_utils.init_host_gpu(self.list_live_instance_uuids())
 
     def list_live_instance_uuids(self):
         uuids = []
@@ -76,11 +77,16 @@ class GPULibvirtDriver(driver.LibvirtDriver):
     def destroy(self, instance, network_info, block_device_info=None):
         super(GPULibvirtDriver, self).destroy(instance, network_info,
               block_device_info)
+        if CONF.libvirt_type != 'lxc':
+            return
         gpu_utils.deallocate_gpus(instance)
 
     @exception.wrap_exception()
     def reboot(self, instance, network_info, reboot_type='SOFT',
                block_device_info=None):
+        if CONF.libvirt_type != 'lxc':
+            return super(GPULibvirtDriver, self).reboot(instance, 
+                         network_info, reboot_type, block_device_info)
         gpu_utils.deallocate_gpus(instance)
         t = super(GPULibvirtDriver, self).reboot(instance, network_info,
                   reboot_type, block_device_info)
@@ -98,9 +104,11 @@ class GPULibvirtDriver(driver.LibvirtDriver):
     @exception.wrap_exception()
     def spawn(self, context, instance, image_meta, injected_files,
               admin_password, network_info=None, block_device_info=None):
-        t = super(GPULibvirtDriver, self).spawn(context, instance,
+        super(GPULibvirtDriver, self).spawn(context, instance,
                   image_meta, injected_files, admin_password,
                   network_info, block_device_info)
+        if CONF.libvirt_type != 'lxc':
+            return 
         try:
             virt_dom = self._lookup_by_name(instance['name'])
             inst_type = self.virtapi.instance_type_get(
@@ -118,10 +126,8 @@ class GPULibvirtDriver(driver.LibvirtDriver):
             raise Exception(_('Error in GPU allocation, overcommitted.'))
         LOG.info(_("Instance spawned successfully."),
                      instance=instance)
-        return t
 
     def get_guest_disk_path(self, xml):
-
         if xml is None:
             raise 
         doc = etree.fromstring(xml)
@@ -131,6 +137,10 @@ class GPULibvirtDriver(driver.LibvirtDriver):
         return disk_path
 
     def attach_volume(self, connection_info, instance, mountpoint):
+        if CONF.libvirt_type != 'lxc':
+            super(GPULibvirtDriver, self).attach_volume(
+                     connection_info, instance, mountpoint)
+            return
         instance_name = instance['name']
         virt_dom = self._lookup_by_name(instance_name)
         disk_dev = mountpoint.rpartition("/")[2]
@@ -154,7 +164,7 @@ class GPULibvirtDriver(driver.LibvirtDriver):
             state = driver.LIBVIRT_POWER_STATE[virt_dom.info()[0]]
             if state == power_state.RUNNING:
                 flags |= libvirt.VIR_DOMAIN_AFFECT_LIVE
-            if CONF.libvirt_type == 'lxc':
+            if CONF.libvirt_type.lower() == 'lxc':
                 gpu_utils._attach_lxc_volume(source_dev, 
                                    '/dev/%s' % disk_info['dev'],
                                    virt_dom, instance)
@@ -176,11 +186,15 @@ class GPULibvirtDriver(driver.LibvirtDriver):
 
 
     def detach_volume(self, connection_info, instance, mountpoint):
+        if CONF.libvirt_type != 'lxc':
+            super(GPULibvirtDriver, self).detach_volume(
+                    connection_info, instance, mountpoint)
+            return
         instance_name = instance['name']
         disk_dev = mountpoint.rpartition("/")[2]
         try:
             virt_dom = self._lookup_by_name(instance_name)
-            if CONF.libvirt_type == 'lxc':
+            if CONF.libvirt_type.lower() == 'lxc':
                 gpu_utils._detach_lxc_volume(disk_dev, virt_dom, 
                                         instance_name)
             else:
