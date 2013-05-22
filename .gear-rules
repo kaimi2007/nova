@@ -1,4 +1,5 @@
 spec: openstack-nova.spec
+copy: ./*.patch
 #copy: redhat/*
 #copy: etc/nova/nova.conf
 #copy: etc/init.d/*
