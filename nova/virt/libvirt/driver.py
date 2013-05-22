@@ -2134,6 +2134,8 @@ class LibvirtDriver(driver.ComputeDriver):
         inst_path = libvirt_utils.get_instance_path(instance)
         disk_mapping = disk_info['mapping']
 
+        CONSOLE = "console=tty0 console=ttyS0"
+
         guest = vconfig.LibvirtConfigGuest()
         guest.virt_type = CONF.libvirt_type
         guest.name = instance['name']
@@ -2186,7 +2188,7 @@ class LibvirtDriver(driver.ComputeDriver):
         if CONF.libvirt_type == "lxc":
             guest.os_type = vm_mode.EXE
             guest.os_init_path = "/sbin/init"
-            guest.os_cmdline = "console=ttyS0"
+            guest.os_cmdline = CONSOLE
         elif CONF.libvirt_type == "uml":
             guest.os_type = vm_mode.UML
             guest.os_kernel = "/usr/bin/linux"
@@ -2203,8 +2205,8 @@ class LibvirtDriver(driver.ComputeDriver):
                     if CONF.libvirt_type == "xen":
                         guest.os_cmdline = "ro"
                     else:
-                        guest.os_cmdline = ("root=%s console=ttyS0" %
-                                            root_device_name)
+                        guest.os_cmdline = ("root=%s %s" % (root_device_name,
+                                                            CONSOLE))
 
                 if rescue.get('ramdisk_id'):
                     guest.os_initrd = os.path.join(inst_path, "ramdisk.rescue")
@@ -2213,8 +2215,8 @@ class LibvirtDriver(driver.ComputeDriver):
                 if CONF.libvirt_type == "xen":
                     guest.os_cmdline = "ro"
                 else:
-                    guest.os_cmdline = ("root=%s console=ttyS0" %
-                                        root_device_name)
+                    guest.os_cmdline = ("root=%s %s" % (root_device_name,
+                                                        CONSOLE))
                 if instance['ramdisk_id']:
                     guest.os_initrd = os.path.join(inst_path, "ramdisk")
             else:
@@ -3145,7 +3147,7 @@ class LibvirtDriver(driver.ComputeDriver):
                                           instance['user_id'],
                                           instance['project_id'])
 
-    def pre_live_migration(self, context, instance_ref, block_device_info,
+    def pre_live_migration(self, context, instance, block_device_info,
                            network_info, migrate_data=None):
         """Preparation live migration."""
         # Steps for volume backed instance live migration w/o shared storage.
@@ -3160,18 +3162,18 @@ class LibvirtDriver(driver.ComputeDriver):
         if is_volume_backed and not (is_block_migration or is_shared_storage):
 
             # Create the instance directory on destination compute node.
-            instance_dir = libvirt_utils.get_instance_path(instance_ref)
+            instance_dir = libvirt_utils.get_instance_path(instance)
             if os.path.exists(instance_dir):
                 raise exception.DestinationDiskExists(path=instance_dir)
             os.mkdir(instance_dir)
 
             # Touch the console.log file, required by libvirt.
-            console_file = self._get_console_log_path(instance_ref)
+            console_file = self._get_console_log_path(instance)
             libvirt_utils.file_open(console_file, 'a').close()
 
             # if image has kernel and ramdisk, just download
             # following normal way.
-            self._fetch_instance_kernel_ramdisk(context, instance_ref)
+            self._fetch_instance_kernel_ramdisk(context, instance)
 
         # Establishing connection to volume server.
         block_device_mapping = driver.block_device_info_get_mapping(
@@ -3196,15 +3198,17 @@ class LibvirtDriver(driver.ComputeDriver):
         max_retry = CONF.live_migration_retry_count
         for cnt in range(max_retry):
             try:
-                self.plug_vifs(instance_ref, network_info)
+                self.plug_vifs(instance, network_info)
                 break
             except exception.ProcessExecutionError:
                 if cnt == max_retry - 1:
                     raise
                 else:
-                    LOG.warn(_("plug_vifs() failed %(cnt)d."
-                               "Retry up to %(max_retry)d for %(hostname)s.")
-                               % locals())
+                    LOG.warn(_('plug_vifs() failed %(cnt)d. Retry up to '
+                               '%(max_retry)d.'),
+                             {'cnt': cnt,
+                              'max_retry': max_retry},
+                             instance=instance)
                     greenthread.sleep(1)
 
     def pre_block_migration(self, ctxt, instance, disk_info_json):
@@ -3347,15 +3351,18 @@ class LibvirtDriver(driver.ComputeDriver):
             if disk_type == "qcow2":
                 backing_file = libvirt_utils.get_disk_backing_file(path)
                 virt_size = disk.get_disk_size(path)
+                over_commit_size = int(virt_size) - dk_size
             else:
                 backing_file = ""
                 virt_size = 0
+                over_commit_size = 0
 
             disk_info.append({'type': disk_type,
                               'path': path,
                               'virt_disk_size': virt_size,
                               'backing_file': backing_file,
-                              'disk_size': dk_size})
+                              'disk_size': dk_size,
+                              'over_committed_disk_size': over_commit_size})
         return jsonutils.dumps(disk_info)
 
     def get_disk_over_committed_size_total(self):
@@ -3368,9 +3375,8 @@ class LibvirtDriver(driver.ComputeDriver):
                 disk_infos = jsonutils.loads(
                         self.get_instance_disk_info(i_name))
                 for info in disk_infos:
-                    i_vt_sz = int(info['virt_disk_size'])
-                    i_dk_sz = int(info['disk_size'])
-                    disk_over_committed_size += i_vt_sz - i_dk_sz
+                    disk_over_committed_size += int(
+                        info['over_committed_disk_size'])
             except OSError as e:
                 if e.errno == errno.ENOENT:
                     LOG.error(_("Getting disk size of %(i_name)s: %(e)s") %

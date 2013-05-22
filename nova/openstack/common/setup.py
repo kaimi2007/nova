@@ -171,8 +171,8 @@ def generate_authors():
                            " log --format='%aN <%aE>' | sort -u | "
                            "egrep -v '" + jenkins_email + "'")
             changelog = _run_shell_command(git_log_cmd)
-            signed_cmd = ("git log --git-dir=" + git_dir +
-                          " | grep -i Co-authored-by: | sort -u")
+            signed_cmd = ("git --git-dir=" + git_dir +
+                          " log | grep -i Co-authored-by: | sort -u")
             signed_entries = _run_shell_command(signed_cmd)
             if signed_entries:
                 new_entries = "\n".join(
@@ -354,8 +354,7 @@ def get_version(package_name, pre_version=None):
     to make a source tarball from a fork of our repo with additional tags in it
     that they understand and desire the results of doing that.
     """
-    #version = os.environ.get("OSLO_PACKAGE_VERSION", None)
-    version = "2013.1.1"
+    version = os.environ.get("OSLO_PACKAGE_VERSION", None)
     if version:
         return version
     version = _get_version_from_pkg_info(package_name)

@@ -30,27 +30,27 @@ Requires:	libvirt-devel
 Requires:	libvirt-python
 Requires:	lxc-isi
 
-#Requires:	openstack-nova-node-full = 2013.1-grizzly
+#Requires:	openstack-nova-node-full = 2013.1.1-2.el6
 Requires:	euca2ools = 2.1.3-1.el6
 Requires:	openstack-keystone = 2013.1-1.el6
 Requires:	python-keystoneclient = 1:0.2.3-2.el6
-Requires:       python-nova = 2013.1-grizzly
-Requires:	openstack-nova-network = 2013.1-grizzly
-Requires:	openstack-nova-scheduler = 2013.1-grizzly
-Requires:	openstack-nova-objectstore = 2013.1-grizzly
-Requires:	openstack-nova-api = 2013.1-grizzly
-Requires:	openstack-nova-conductor = 2013.1-grizzly
+Requires:       python-nova = 2013.1.1-2.el6
+Requires:	openstack-nova-network = 2013.1.1-2.el6
+Requires:	openstack-nova-scheduler = 2013.1.1-2.el6
+Requires:	openstack-nova-objectstore = 2013.1.1-2.el6
+Requires:	openstack-nova-api = 2013.1.1-2.el6
+Requires:	openstack-nova-conductor = 2013.1.1-2.el6
 
 Requires:       python-glance = 2013.1-1.el6
 Requires:	openstack-glance = 2013.1-1.el6
 Requires:	openstack-dashboard = 2013.1-1.el6
-Requires:	openstack-nova-cert = 2013.1-grizzly
+Requires:	openstack-nova-cert = 2013.1.1-2.el6
 #Requires:	openstack-cinder = 2013.1-2.el6
 Requires:	openstack-cinder
-Requires:	openstack-nova-compute = 2013.1-grizzly
+Requires:	openstack-nova-compute = 2013.1.1-2.el6
 # Transaction check error
 #Requires:	openstack-nova-common = 2013.1-2.el6
-#Requires:	openstack-nova-xvpvncproxy = 2013.1-grizzly
+#Requires:	openstack-nova-xvpvncproxy = 2013.1.1-2.el6
 #Requires:	openstack-nova-xvpvncproxy
 
 %description

@@ -1,16 +1,14 @@
 %global with_doc %{!?_without_doc:1}%{?_without_doc:0}
 
 Name:             openstack-nova
-Version:          2013.1
-Release:	  grizzly
-#Release:          2%{?dist}
-%global ext	  noarch
+Version:          2013.1.1
+Release:          2%{?dist}
 Summary:          OpenStack Compute (nova)
 
 Group:            Applications/System
 License:          ASL 2.0
 URL:              http://openstack.org/projects/compute/
-Source0:          https://launchpad.net/nova/grizzly/2013.1/+download/nova-2013.1.tar.gz
+Source0:          https://launchpad.net/nova/grizzly/2013.1/+download/nova-%{version}.tar.gz
 
 Source1:          nova.conf
 Source6:          nova.logrotate
@@ -47,13 +45,13 @@ Source21:         nova-polkit.pkla
 Source22:         nova-ifc-template
 
 #
-# patches_base=2013.1
+# patches_base=2013.1.1
 #
-#Patch0001: ./patches/0001-Ensure-we-don-t-access-the-net-when-building-docs.patch
-#Patch0002: ./patches/0002-improve-handling-of-an-empty-dnsmasq-domain.patch
+Patch0001: 0001-Ensure-we-don-t-access-the-net-when-building-docs.patch
+Patch0002: 0002-Check-QCOW2-image-size-during-root-disk-creation.patch
 
 # This is EPEL specific and not upstream
-#Patch100:         ./patches/openstack-nova-newdeps.patch
+Patch100:         openstack-nova-newdeps.patch
 
 BuildArch:        noarch
 BuildRequires:    intltool
@@ -67,29 +65,15 @@ BuildRequires:    python-routes1.12
 BuildRequires:    python-sqlalchemy0.7
 BuildRequires:    python-webob1.0
 
-BuildRequires:	  python-docutils
-BuildRequires:	  python-jinja2
-
-#Requires:         openstack-nova-compute = %{version}-%{release}.%{ext}
-#Requires:         openstack-nova-cert = %{version}-%{release}.%{ext}
-#Requires:         openstack-nova-scheduler = %{version}-%{release}.%{ext}
-#Requires:         openstack-nova-api = %{version}-%{release}.%{ext}
-#Requires:         openstack-nova-network = %{version}-%{release}.%{ext}
-#Requires:         openstack-nova-objectstore = %{version}-%{release}.%{ext}
-#Requires:         openstack-nova-conductor = %{version}-%{release}.%{ext}
-#Requires:         openstack-nova-console = %{version}-%{release}.%{ext}
-#Requires:         openstack-nova-console = %{version}-%{release}.%{ext}
-
-Requires:   %{name}
-Requires:   %{name}-api
-Requires:   %{name}-compute
-Requires:   %{name}-cert
-Requires:   %{name}-network
-Requires:   %{name}-objectstore
-Requires:   %{name}-scheduler
-Requires:   %{name}-conductor
-Requires:   %{name}-console
-Requires:   %{name}-novncproxy
+Requires:         openstack-nova-compute = %{version}-%{release}
+Requires:         openstack-nova-cert = %{version}-%{release}
+Requires:         openstack-nova-scheduler = %{version}-%{release}
+Requires:         openstack-nova-api = %{version}-%{release}
+Requires:         openstack-nova-network = %{version}-%{release}
+Requires:         openstack-nova-objectstore = %{version}-%{release}
+Requires:         openstack-nova-conductor = %{version}-%{release}
+Requires:         openstack-nova-console = %{version}-%{release}
+Requires:         openstack-nova-cells = %{version}-%{release}
 
 
 %description
@@ -107,6 +91,7 @@ Summary:          Components common to all OpenStack Nova services
 Group:            Applications/System
 
 Requires:         python-nova = %{version}-%{release}
+Requires:         python-keystoneclient
 
 Requires(post):   chkconfig
 Requires(postun): initscripts
@@ -178,6 +163,7 @@ Requires:         dnsmasq
 #Requires:         dnsmasq-utils
 # tunctl is needed where `ip tuntap` is not available
 Requires:         tunctl
+Requires:         ebtables
 
 %description network
 OpenStack Compute (codename Nova) is open source software designed to
@@ -354,20 +340,12 @@ Requires:         python-cheetah
 Requires:         python-ldap
 Requires:         python-stevedore
 
-Requires:         seabios 
-Requires:         usbredir
-Requires:         celt051
-Requires:         spice-server
-Requires:         memcached
 Requires:         python-memcached
 
 Requires:         python-sqlalchemy0.7
 Requires:         python-migrate
 
-Requires: 	  python-paste
-Requires: 	  python-paste-deploy
 Requires:         python-paste-deploy1.5
-Requires: 	  python-routes
 Requires:         python-routes1.12
 Requires:         python-webob1.0
 
@@ -408,11 +386,11 @@ This package contains documentation files for nova.
 %prep
 %setup -q -n nova-%{version}
 
-#%patch0001 -p1
-#%patch0002 -p1
+%patch0001 -p1
+%patch0002 -p1
 
 # Apply EPEL patch
-#%patch100 -p1
+%patch100 -p1
 
 find . \( -name .gitignore -o -name .placeholder \) -delete
 
@@ -720,7 +698,7 @@ fi
 %files common
 %doc LICENSE
 %dir %{_sysconfdir}/nova
-%{_sysconfdir}/nova/release 
+%{_sysconfdir}/nova/release
 %config(noreplace) %attr(-, root, nova) %{_sysconfdir}/nova/nova.conf
 %config(noreplace) %attr(-, root, nova) %{_sysconfdir}/nova/api-paste.ini
 %config(noreplace) %attr(-, root, nova) %{_sysconfdir}/nova/rootwrap.conf
@@ -836,7 +814,20 @@ fi
 %endif
 
 %changelog
-* Thu Apr 11 2013 Nikola Đipanov <pbrady@redhat.com> - 2013.1-2
+* Fri May 17 2013 Nikola Đipanov <ndipanov@redhat.com> - 2013.1.1-2
+- Check QCOW2 image size during root disk creation (CVE-2013-2096)
+
+* Mon May 13 2013 Pádraig Brady <pbrady@redhat.com> - 2013.1.1-1
+- Update to stable/grizzly 2013.1.1 release
+
+* Mon May 13 2013 Pádraig Brady <pbrady@redhat.com> - 2013.1-4
+- Make openstack-nova metapackage depend on openstack-nova-cells
+- Add a dependency on python-keystonclient (for auth middleware)
+
+* Fri May 10 2013 Pádraig Brady <pbrady@redhat.com> - 2013.1-3
+- Make openstack-nova-network depend on ebtables #961567
+
+* Thu Apr 11 2013 Pádraig Brady <pbrady@redhat.com> - 2013.1-2
 - Fix nova network dnsmasq invocation failure #951144
 
 * Mon Apr 08 2013 Nikola Đipanov <ndipanov@redhat.com> - 2013.1-1
