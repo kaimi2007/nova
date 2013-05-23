@@ -71,6 +71,11 @@ disk_opts = [
                       ],
                     help='mkfs commands for ephemeral device. '
                          'The format is <os_type>=<mkfs command>'),
+    # ISI
+    cfg.StrOpt('user',
+               default='/root',
+               help='Home directory of default user. Default value is /root.'),
+    # end of ISI
     ]
 
 CONF = cfg.CONF
@@ -434,7 +439,14 @@ def _inject_key_into_fs(key, fs):
 
     LOG.debug(_("Inject key fs=%(fs)s key=%(key)s") %
               locals())
-    sshdir = os.path.join('root', '.ssh')
+    # ISI
+    user = CONF.user
+    if user.startswith("/"):
+        user = user[1:]
+    sshdir = os.path.join(user, '.ssh')
+    # !ISI
+    #sshdir = os.path.join('root', '.ssh')
+    # end of ISI
     fs.make_path(sshdir)
     fs.set_ownership(sshdir, "root", "root")
     fs.set_permissions(sshdir, 0700)

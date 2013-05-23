@@ -200,6 +200,9 @@ systool: CommandFilter, /usr/bin/systool, root
 sginfo: CommandFilter, /usr/bin/sginfo, root
 sg_scan: CommandFilter, /usr/bin/sg_scan, root
 
+# nova/virt/baremetal/tilera.py: '/usr/sbin/rpc.mountd'
+rpc.mountd: CommandFilter, /usr/sbin/rpc.mountd, root
+
 # nova/virt/gpu/utils.py:
 ps: CommandFilter, /bin/ps, root
 lxc-attach: CommandFilter, /usr/bin/lxc-attach, root
