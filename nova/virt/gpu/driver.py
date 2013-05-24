@@ -53,6 +53,7 @@ class GPULibvirtDriver(driver.LibvirtDriver):
 
         gpu_utils.get_instance_type_extra_specs_capabilities()
         if CONF.libvirt_type.lower() == 'lxc':
+            LOG.debug("dkang: call gpu_utils.init_host_gpu")
             gpu_utils.init_host_gpu(self.list_live_instance_uuids())
 
     def list_live_instance_uuids(self):
@@ -77,14 +78,14 @@ class GPULibvirtDriver(driver.LibvirtDriver):
     def destroy(self, instance, network_info, block_device_info=None):
         super(GPULibvirtDriver, self).destroy(instance, network_info,
               block_device_info)
-        if CONF.libvirt_type != 'lxc':
+        if CONF.libvirt_type.lower() != 'lxc':
             return
         gpu_utils.deallocate_gpus(instance)
 
     @exception.wrap_exception()
     def reboot(self, instance, network_info, reboot_type='SOFT',
                block_device_info=None):
-        if CONF.libvirt_type != 'lxc':
+        if CONF.libvirt_type.lower() != 'lxc':
             return super(GPULibvirtDriver, self).reboot(instance, 
                          network_info, reboot_type, block_device_info)
         gpu_utils.deallocate_gpus(instance)
@@ -107,8 +108,9 @@ class GPULibvirtDriver(driver.LibvirtDriver):
         super(GPULibvirtDriver, self).spawn(context, instance,
                   image_meta, injected_files, admin_password,
                   network_info, block_device_info)
-        if CONF.libvirt_type != 'lxc':
+        if CONF.libvirt_type.lower() != 'lxc':
             return 
+        LOG.debug("dkang: spawn")
         try:
             virt_dom = self._lookup_by_name(instance['name'])
             inst_type = self.virtapi.instance_type_get(
@@ -117,6 +119,7 @@ class GPULibvirtDriver(driver.LibvirtDriver):
             extra_specs = inst_type['extra_specs']
             gpu_utils.allocate_gpus(context, instance, extra_specs, 
                                     virt_dom)
+            gpu_utils.restart_sshd(virt_dom)
 
         except Exception as Exn:
             LOG.error(_("Error in GPU allocation, overcommitted."))
@@ -137,7 +140,7 @@ class GPULibvirtDriver(driver.LibvirtDriver):
         return disk_path
 
     def attach_volume(self, connection_info, instance, mountpoint):
-        if CONF.libvirt_type != 'lxc':
+        if CONF.libvirt_type.lower() != 'lxc':
             super(GPULibvirtDriver, self).attach_volume(
                      connection_info, instance, mountpoint)
             return
@@ -186,7 +189,7 @@ class GPULibvirtDriver(driver.LibvirtDriver):
 
 
     def detach_volume(self, connection_info, instance, mountpoint):
-        if CONF.libvirt_type != 'lxc':
+        if CONF.libvirt_type.lower() != 'lxc':
             super(GPULibvirtDriver, self).detach_volume(
                     connection_info, instance, mountpoint)
             return

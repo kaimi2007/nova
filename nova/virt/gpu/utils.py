@@ -253,6 +253,29 @@ def deallocate_gpus(inst):
     save_gpu_allocation(gpus_allocated)
     return
 
+def restart_sshd(virt_dom):
+    # get id of the virt_dom
+    spid = str(virt_dom.ID())
+
+    init_pid = 0
+    # get PID of the init process
+    try:
+        out, err = utils.execute('ps', '-o', 'pid', '--ppid', spid,
+                  '--noheaders', run_as_root=True,
+                  check_exit_code=False)
+        init_pid = str(int(out))
+    except Exception:
+        LOG.error(_("Failed to get pid of the container"))
+        raise Exception(_("LXC container not found"))
+
+    try:
+        LOG.info(_("Restart sshd of the VM because of SELinux bug"))
+        out, err = utils.execute('lxc-attach', '-n', init_pid,
+                      '--', '/sbin/service', 'sshd', 'restart', 
+                      run_as_root=True)
+    except Exception:
+        LOG.error(_("Failed to restart sshd of the VM"))
+        pass
 
 def _attach_lxc_volume(host_dev, disk_dev, virt_dom, instance):
     LOG.info(_('ISI: attaching LXC block device'))
