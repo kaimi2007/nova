@@ -66,17 +66,17 @@ NOVA_CONF=/etc/nova/nova.conf
 NETWORK_SIZE=256
 USER=/home/nova
 CGROUPS_PATH=/cgroup/devices/libvirt/lxc
-# We assume that IP address of eth0 (PUBLIC_INTERFACE) of cloud controller is 10.1.1.4
+# We assume that IP address of eth0 (PUBLIC_INTERFACE) of cloud controller is 127.0.0.1
 # We assume that the bridge br100 is associated with eth1 (FLAT_INTERFACE).
 # The followings should be changed if your network settings are different from this.
-NOVA_API_server_IP_address=10.1.1.4
+NOVA_API_server_IP_address=127.0.0.1
 Rabbitmq_IP_address=$NOVA_API_server_IP_address
 Glance_server_IP_address=$NOVA_API_server_IP_address
 Volume_server_IP_address=$NOVA_API_server_IP_address
 Keystone_server_IP_address=$NOVA_API_server_IP_address
 MySQL_Nova_IP_address=$NOVA_API_server_IP_address
 METADATA_HOST=$NOVA_API_server_IP_address
-DHCP_FIXED_RANGE=10.99.0.0/24
+DHCP_FIXED_RANGE=192.168.0.0/24
 DHCP_IP_NUM=$NETWORK_SIZE
 
 PUBLIC_INTERFACE=eth0
