@@ -53,7 +53,6 @@ class GPULibvirtDriver(driver.LibvirtDriver):
 
         gpu_utils.get_instance_type_extra_specs_capabilities()
         if CONF.libvirt_type.lower() == 'lxc':
-            LOG.debug("dkang: call gpu_utils.init_host_gpu")
             gpu_utils.init_host_gpu(self.list_live_instance_uuids())
 
     def list_live_instance_uuids(self):
@@ -110,7 +109,6 @@ class GPULibvirtDriver(driver.LibvirtDriver):
                   network_info, block_device_info)
         if CONF.libvirt_type.lower() != 'lxc':
             return 
-        LOG.debug("dkang: spawn")
         try:
             virt_dom = self._lookup_by_name(instance['name'])
             inst_type = self.virtapi.instance_type_get(
