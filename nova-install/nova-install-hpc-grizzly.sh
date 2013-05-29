@@ -171,14 +171,15 @@ if [ "$CMD" == "compute-init" ] ; then
 		echo "compute_driver = nova.virt.baremetal.driver.BareMetalDriver" >> $NOVA_CONF
 		echo "ram_allocation_ratio = 1.0" >> $NOVA_CONF
 		echo "reserved_host_memory_mb = 0" >> $NOVA_CONF
+		echo "quota_cores = 640" >> $NOVA_CONF
 		echo "" >> $NOVA_CONF
 		echo "[baremetal]" >> $NOVA_CONF
 		echo "net_config_template = /usr/lib/python2.6/site-packages/nova/virt/baremetal/net-static.ubuntu.template"  >> $NOVA_CONF
 		echo "tftp_root = /tftpboot" >> $NOVA_CONF
-		echo "power_manager = nova.virt.baremetal.tilera_pdu.PDU" >> $NOVA_CONF
-		echo "driver = nova.virt.baremetal.tilera.TILERA" >> $NOVA_CONF
+		echo "power_manager = nova.virt.baremetal.tilera_pdu.Pdu" >> $NOVA_CONF
+		echo "driver = nova.virt.baremetal.tilera.Tilera" >> $NOVA_CONF
 		echo "instance_type_extra_specs = cpu_arch:tilepro64" >> $NOVA_CONF
-		echo "sql_connection = mysql://nova:nova@localhost/nova_bm" >> $NOVA_CONF
+		echo "sql_connection = mysql://$MYSQL_NOVA_USR:$MYSQL_NOVA_PASS@$MySQL_Nova_IP_address/nova_bm" >> $NOVA_CONF
         elif [ "$ARCH" == "uv" ]; then
 		echo "sql_connection = mysql://$MYSQL_NOVA_USR:$MYSQL_NOVA_PASS@$MySQL_Nova_IP_address/nova"  >>  $NOVA_CONF
                 echo "use_cow_images=True" >>  $NOVA_CONF
