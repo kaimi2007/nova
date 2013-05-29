@@ -55,7 +55,7 @@ ARCH=$2
 MYSQL_ROOT_USR=root
 MYSQL_ROOT_PASS=nova
 MYSQL_NOVA_USR=nova
-MYSQL_NOVA_PASS=nova
+MYSQL_NOVA_PASS=secrete
 Keystone_User_Nova=nova
 Keystone_Password_Nova=secrete
 NET_MAN=FlatDHCPManager
@@ -69,12 +69,12 @@ CGROUPS_PATH=/cgroup/devices/libvirt/lxc
 # We assume that IP address of eth0 (PUBLIC_INTERFACE) of cloud controller is 127.0.0.1
 # We assume that the bridge br100 is associated with eth1 (FLAT_INTERFACE).
 # The followings should be changed if your network settings are different from this.
-NOVA_API_server_IP_address=127.0.0.1
+NOVA_API_server_IP_address=10.0.5.4
 Rabbitmq_IP_address=$NOVA_API_server_IP_address
-Glance_server_IP_address=$NOVA_API_server_IP_address
+Glance_server_IP_address=10.0.5.7
 Volume_server_IP_address=$NOVA_API_server_IP_address
-Keystone_server_IP_address=$NOVA_API_server_IP_address
-MySQL_Nova_IP_address=$NOVA_API_server_IP_address
+Keystone_server_IP_address=10.0.5.7
+MySQL_Nova_IP_address=10.0.5.7
 METADATA_HOST=$NOVA_API_server_IP_address
 DHCP_FIXED_RANGE=192.168.0.0/24
 DHCP_IP_NUM=$NETWORK_SIZE
@@ -154,8 +154,7 @@ fi
 
 chown nova:nova $NOVA_CONF
 chmod 600  $NOVA_CONF
-if [ "$CMD" == "compute-init" ] ||
-   [ "$CMD" == "single-init" ]; then
+if [ "$CMD" == "compute-init" ] ; then
         if [ "$ARCH" == "gpu" ]; then
 		echo "sql_connection = mysql://$MYSQL_NOVA_USR:$MYSQL_NOVA_PASS@$MySQL_Nova_IP_address/nova"  >>  $NOVA_CONF
                 echo "user=$USER" >>  $NOVA_CONF
@@ -192,6 +191,11 @@ if [ "$CMD" == "compute-init" ] ||
 		echo "compute_driver = libvirt.LibvirtDriver" >> $NOVA_CONF
 		echo "libvirt_type=kvm" >> $NOVA_CONF
         fi
+else
+	echo "sql_connection = mysql://$MYSQL_NOVA_USR:$MYSQL_NOVA_PASS@$MySQL_Nova_IP_address/nova"  >>  $NOVA_CONF
+        echo "use_cow_images=True" >>  $NOVA_CONF
+	echo "compute_driver = libvirt.LibvirtDriver" >> $NOVA_CONF
+	echo "libvirt_type=kvm" >> $NOVA_CONF
 fi
 
 echo "" >> $NOVA_CONF
