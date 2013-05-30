@@ -44,10 +44,10 @@ opts = [
                default=1,
                help='power status of tilera PDU is ON'),
     cfg.IntOpt('tile_pdu_status',
-               default=80,
+               default=9,
                help='power status of tilera PDU'),
     cfg.IntOpt('tile_power_wait',
-               default=9,
+               default=80,
                help='wait time in seconds until check the result '
                     'after tilera power operations'),
     ]
