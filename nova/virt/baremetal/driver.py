@@ -250,7 +250,7 @@ class BareMetalDriver(driver.ComputeDriver):
                         )
             self.driver.activate_bootloader(context, node, instance)
             self.power_on(instance, node)
-            self.driver.activate_node(context, node, instance)
+            self.driver.activate_node(context, node, instance, network_info)
             _update_state(context, node, instance, baremetal_states.ACTIVE)
         except Exception:
             with excutils.save_and_reraise_exception():

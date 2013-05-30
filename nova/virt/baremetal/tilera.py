@@ -21,6 +21,7 @@ Class for Tilera bare-metal nodes.
 
 import base64
 import os
+import subprocess
 
 from oslo.config import cfg
 
@@ -40,6 +41,9 @@ tilera_opts = [
                default='$pybasedir/nova/virt/baremetal/'
                             'net-dhcp.ubuntu.template',
                help='Template file for injected network config'),
+    cfg.StrOpt('tile_monitor',
+               default='/usr/local/TileraMDE/bin/tile-monitor',
+               help='tile-monitor path'),
     ]
 
 LOG = logging.getLogger(__name__)
@@ -355,7 +359,7 @@ class Tilera(base.NodeDriver):
             open_ip = base64.b64decode(user_data)
             utils.execute(rule_path, node_ip, open_ip)
 
-    def activate_node(self, context, node, instance):
+    def activate_node(self, context, node, instance, network_info):
         """Wait for Tilera deployment to complete."""
 
         locals = {'error': '', 'started': False}
@@ -380,6 +384,13 @@ class Tilera(base.NodeDriver):
                 node_ip = node['pm_address']
                 user_data = instance['user_data']
                 try:
+                    for id, (network, mapping) in enumerate(network_info):
+                        inst_ip = mapping['ips'][0]['ip']
+                    ifg_cmd = (CONF.baremetal.tile_monitor +
+                        " --resume --net " + str(node_ip) +
+                        " -- ifconfig xgbe0 " + str(inst_ip) + "/24")
+                    LOG.info(_(ifg_cmd))
+                    subprocess.Popen(ifg_cmd, shell=True)
                     self._iptables_set(node_ip, user_data)
                 except Exception as ex:
                     self.deactivate_bootloader(context, node, instance)
