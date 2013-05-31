@@ -35,6 +35,7 @@ from nova.virt.baremetal import baremetal_states
 from nova.virt.baremetal import base
 from nova.virt.baremetal import db
 from nova.virt.baremetal import utils as bm_utils
+from nova.virt.libvirt import utils as libvirt_utils
 
 tilera_opts = [
     cfg.StrOpt('net_config_template',
@@ -405,6 +406,20 @@ class Tilera(base.NodeDriver):
         if locals['error']:
             raise exception.InstanceDeployFailure(
                     locals['error'] % instance['uuid'])
+
+    def get_console_output(self, node, instance):
+        inst_path = os.path.join(CONF.instances_path, instance['name'])
+        console_log = inst_path + "/console.log"
+        kmsg_cmd = (CONF.baremetal.tile_monitor +
+                    " --resume --net " + node['pm_address'] +
+                    " -- dmesg > " + console_log)
+        subprocess.Popen(kmsg_cmd, shell=True)
+        with libvirt_utils.file_open(console_log, 'rb') as fp:
+            log_data, remaining = utils.last_bytes(fp, 1024000)
+            if remaining > 0:
+                LOG.info(_('Truncated console log returned, %d bytes ignored'),
+                         remaining, instance=instance)
+            return log_data
 
     def deactivate_node(self, context, node, instance):
         pass
