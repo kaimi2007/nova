@@ -40,6 +40,7 @@ Requires:	openstack-nova-scheduler = 2013.1.1-2.el6
 Requires:	openstack-nova-objectstore = 2013.1.1-2.el6
 Requires:	openstack-nova-api = 2013.1.1-2.el6
 Requires:	openstack-nova-conductor = 2013.1.1-2.el6
+Requires:	openstack-nova-console = 2013.1.1-2.el6
 
 Requires:       python-glance = 2013.1-1.el6
 Requires:	openstack-glance = 2013.1-1.el6
@@ -52,6 +53,7 @@ Requires:	openstack-nova-compute = 2013.1.1-2.el6
 #Requires:	openstack-nova-common = 2013.1-2.el6
 #Requires:	openstack-nova-xvpvncproxy = 2013.1.1-2.el6
 #Requires:	openstack-nova-xvpvncproxy
+Requires:	openstack-nova-novncproxy = 0.4-7.el6
 
 %description
 Installs all the DODCS OpenStack software using packages. 
