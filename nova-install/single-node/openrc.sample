@@ -1,0 +1,9 @@
+export EC2_URL=http://127.0.0.1:8773/services/Cloud
+export OS_PASSWORD=secrete
+export OS_AUTH_URL=http://localhost:5000/v2.0/
+export OS_USERNAME=admin
+export OS_TENANT_NAME=demo
+export MYSQL_Root_Password=R%Fd3vhk
+export LIBVIRT_DEBUG=yes
+export NOVA_DEFAULT_ENDPOINT=http://localhost:8773/services/Cloud
+export NOVA_DEFAULT_REGION=nova

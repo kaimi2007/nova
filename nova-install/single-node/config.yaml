@@ -1,0 +1,82 @@
+---
+admin:     root
+adminPass:     R%Fd3vhk
+
+# CC_ADDR Is left NULL to force user to change it
+
+defaults:
+    OS_DIST: grizzly
+    ROOT_USER:     root
+    MYSQL_ROOT_PASSWORD:     R%Fd3vhk
+    TOKEN:    999888777666
+    ENDPOINT: http://127.0.0.1:35357/v2.0
+    INSTALL:    all
+    CREDENTIAL_FILE: /root/openrc
+    NUM_NODES:  1
+    VM_TYPE: kvm
+    VM_RAMDISK: initrd
+    VM_KERNEL: vmlinuz
+    VM_FS: kvm-fs
+    DODCS_SCRIPT:   /usr/local/nova/nova-install-hpc-grizzly.sh
+    LOCALHOST: 127.0.0.1
+    RHEL_ISO_NAME: CentOS-6.3-x86_64-bin-DVD1.iso
+    DODCS_ISO_NAME: DODCS_grizzly.iso
+    RHEL_ISO_PATH: /usr/share/iso/
+    DODCS_ISO_PATH: /usr/share/iso/
+    PUBLIC_INTERFACE: eth2
+    BRIDGE: br100
+    NUM_NICS: 1
+    CC_ADDR:
+    ARCH: x86_64
+    IMAGE_LOC: /tmp/images/
+    MYSQL_GLANCE_USER: glance
+    MYSQL_GLANCE_PASSWORD: secrete
+    MYSQL_KEYSTONE_USER: keystone
+    MYSQL_KEYSTONE_PASSWORD: secrete
+    MYSQL_CINDER_USER: cinder
+    MYSQL_CINDER_PASSWORD: secrete
+    MYSQL_CINDER_TENANT: service
+    CINDER_SERVER_IP_ADDRESS: 127.0.0.1
+    NOVA_ADMIN_USER: nova
+    NOVA_ADMIN_PASSWORD: secrete
+    NOVA_ADMIN_TENANT: service
+    KEYSTONE_PUBLIC_PORT: 5000
+    KEYSTONE_ADMIN_PORT: 35357
+    KEYSTONE_COMPUTE_PORT: 8774
+    NOVA_REGION: RegionOne
+
+# Keystone Initialization
+MYSQL_KEYSTONE:  
+    user:      keystone
+    password:  secrete
+
+# Glance Database
+MYSQL_GLANCE:
+    user:      glance
+    password:  secrete
+
+MYSQL_NOVA:
+    user:      nova
+    password:  secrete
+
+MYSQL_CINDER:
+    user:      cinder
+    password:  secrete
+
+# This is the admin user
+default user:
+    name:     musleh
+    password: secrete
+
+service users:
+    name:     glance
+    password: secrete
+
+    name:     nova
+    password: secrete
+
+    name:     keystone
+    password: secrete
+
+    name:     cinder
+    password: secrete
