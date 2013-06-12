@@ -176,7 +176,6 @@ function clean() {
     # remove images from glance  
     remove_glance_images "clean"
     remove_install_files
-    yum erase dodcs-openstack openstack-* python-nova nova-install
 }
 
 # Function to uninstall all packages / configurations / Dependencies
@@ -2848,6 +2847,7 @@ function setup_images() {
 function remove_install_files() {
 
     echo "Removing Installed Files ..."
+    eval "bash erase-all.sh"
     eval "bash clean.sh"
     echo "DONE!"
 }

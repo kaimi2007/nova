@@ -7,6 +7,15 @@
 # README
 
 
+## Included Files:
+   - restart,.sh   # Script to restart all NOVA+Glance+KeyStone+Cidner Services
+   - erase-all.sh  # Script to remove all dodcs/openstack/nova packages
+   - clean.sh	   # Script to remove log files
+   - OS-config.py  # Configuration file for configuring dodcs-install
+   - OS-install.sh # Main Script
+   - helper.sh	   # Bash File that contains bash functions
+
+
 ## Prerequisites:
 
 Installation of the following rpms:
@@ -24,6 +33,9 @@ Installation of the following rpms:
   c) Other parameters can be left to the default values
 
 ## Running
+
+# Clean:
+$ clear; bash ./OS-install.sh -F config.yaml -T clean
 
 # Create backup:
 $ clear; bash ./OS-install.sh -F config.yaml -T backup
