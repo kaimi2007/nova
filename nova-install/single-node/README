@@ -31,6 +31,12 @@ Installation of the following rpms:
   a) ISO Paths + Namesneed to be specified
   b) Correct eth port name (default eth0) but user needs to double check
   c) Other parameters can be left to the default values
+  d) Location of Image files: $IMAGE_LOC
+  e) IP Address of Services: ${CC_ADDR} # Set to local IP Address
+
+Note: 
+#  Using 127.0.0.1 as CC_ADDR may work in the general case, but it is preferable to use
+#  the actual IP Address for a port.  
 
 ## Running
 

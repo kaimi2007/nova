@@ -1,13 +1,13 @@
 ---
 admin:     root
-adminPass:     R%Fd3vhk
+adminPass:     secretpass
 
 # CC_ADDR Is left NULL to force user to change it
 
 defaults:
     OS_DIST: grizzly
     ROOT_USER:     root
-    MYSQL_ROOT_PASSWORD:     R%Fd3vhk
+    MYSQL_ROOT_PASSWORD:     secretpass
     TOKEN:    999888777666
     ENDPOINT: http://127.0.0.1:35357/v2.0
     INSTALL:    all
