@@ -383,7 +383,7 @@ function update_creds() {
 	    delete_creds "${var}"
             # sed "$ a ${newstr}" ${filename} > "temp.txt"
             #sed "s/${replace}/${newstr}/g" ${filename} > "temp.txt"
-            mv "temp.txt" ${filename}
+            # mv "temp.txt" ${filename}
         else
             echo "Variable: ${var} not found!, adding it to credentials file..."
 	fi

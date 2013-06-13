@@ -2634,12 +2634,12 @@ function create_keystone_user() {
 
     local username=$1
     local userpass=$2
-    local tenant=$3 # May not be specified
+    # local tenant=$3 # May not be specified
     local user_id
     
-    if [ -e "${tenant}" ]
+    if [ $# -eq 3 ]
     then
-	user_id=$(get_id keystone user-create --name "${username}" --pass "${userpass}" --tenant-id "${tenant}")
+	user_id=$(get_id keystone user-create --name "${username}" --pass "${userpass}" --tenant-id "$3")
     else
 	user_id=$(get_id keystone user-create --name "${username}" --pass "${userpass}")
     fi
