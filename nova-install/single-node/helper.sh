@@ -381,7 +381,7 @@ function update_creds() {
             echo "Variable: ${var} found!"
             echo "oldstr: ${replace} | newstr: ${newstr}"
 	    delete_creds "${var}"
-            sed "$ a ${newstr}" ${filename} > "temp.txt"
+            # sed "$ a ${newstr}" ${filename} > "temp.txt"
             #sed "s/${replace}/${newstr}/g" ${filename} > "temp.txt"
             mv "temp.txt" ${filename}
         else
