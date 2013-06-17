@@ -92,25 +92,25 @@ function get_ec2_accesskey() {
 
 # Function to check whether or not there is enough
 # free space
-function has_enough_space() {
-
-    local loc=$(get_free_space "${1}" )
-    local size=$2    
-}
+#function has_enough_space() {
+#
+#    local loc=$(get_free_space "${1}" )
+#    local size=$2    
+#}
 
 # Function to return the amount of free space for a specified directory
-function get_free_space() {
+#function get_free_space() {
 
-    set +o errexit
-    local loc=$1
-    if [ -z "${loc}" ]
-    then
-	loc="./"
-    fi
+#    set +o errexit
+#    local loc=$1
+#    if [ -z "${loc}" ]
+#    then
+#	loc="./"
+#    fi
 
-    set -o errexit
-    echo $(($(stat -f --format="%a*%S" ${loc} )))
-}
+#    set -o errexit
+#    echo $(($(stat -f --format="%a*%S" ${loc} )))
+#}
 
 # Function to determine the number of network cards a machine has
 function get_num_nics() {
@@ -316,7 +316,7 @@ function is_novaservice_enabled() {
 function delete_creds() {
 
     set +o errexit
-    local filename="/root/openrc"
+    local filename="${CREDENTIAL_FILE}"
     local var=$1
 
     if [ -e "{var}" ]
@@ -341,7 +341,7 @@ function source_creds() {
 
     if [ ! -e "${filename}" ]
     then
-	filename="/root/openrc"
+	filename="${CREDENTIAL_FILE}"
     fi
 
     echo "Sourcing Credentials File: ${filename}"
@@ -366,10 +366,10 @@ function update_creds() {
     local newstr="export "${var}"\="${newval}
     local found
 
-    if [ ! -e "${filename}" ]
-    then
-	filename="/root/openrc"
-    fi
+    # if [ ! -e "${filename}" ]
+    # then
+    #	filename="/root/openrc"
+    # fi
 
     echo "Updating Credentials File: ${filename}"
     if [ -e "${filename}" ]
@@ -389,8 +389,9 @@ function update_creds() {
 	fi
 
         echo "newstr: ${newstr}"
-        sed "$ a ${newstr}" ${filename} > "temp.txt"
-        mv "temp.txt" ${filename}
+        # sed "$ a ${newstr}" ${filename} > "temp.txt"
+        # mv "temp.txt" ${filename}
+        echo "${newstr//\\/}" >> ${filename}
 
     else
         echo "Credentials File: ${filename} does not exist, cannot source!"

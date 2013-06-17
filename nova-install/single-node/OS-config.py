@@ -21,20 +21,25 @@ def parse_config(fname):
     data = yaml.load(open(fname))
     return data
 
-def get_config_value(config, parameter):
+def getMySQL(config):
+    entry = config.get('defaults', None)
+    name = entry.get("ROOT_USER", None)
+    pswd = entry.get("MYSQL_ROOT_PASSWORD", None)
+    return [name, pswd]
 
-    admin=config['admin']
-    adminPass=config['adminPass']
+def get_config_value(config, parameter):
 
     entry = config.get('defaults', None)
     value = entry.get(parameter, None)
     assert(value != 'None') # Sanity Check
     print "%s" % value
+    return value
 
 def version():
     try:
-        con = mdb.connect('localhost', 'root',
-                          'R%Fd3vhk', 'mysql');
+        [admin, adminPass]=getMySQL(config)
+        con = mdb.connect('localhost', admin,
+                          adminPass, 'mysql');
         cur = con.cursor()
         cur.execute("SELECT VERSION()")
 
@@ -52,15 +57,13 @@ def version():
             con.close()
 
 # Python Routine to clean all users + Databases from MySQL
+# TODO Pick from variables?
 def clean_all(config):
 
-    admin=config['admin']
-    adminPass=config['adminPass']
-
-    delete_db_user(config, "nova", "MYSQL_NOVA")
-    delete_db_user(config, "glance", "MYSQL_GLANCE")
-    delete_db_user(config, "keystone", "MYSQL_KEYSTONE")
-    delete_db_user(config, "cinder", "MYSQL_CINDER")
+    delete_db_user(config, "MYSQL_NOVA")
+    delete_db_user(config, "MYSQL_GLANCE")
+    delete_db_user(config, "MYSQL_KEYSTONE")
+    delete_db_user(config, "MYSQL_CINDER")
 
     delete_db(config, "nova")
     delete_db(config, "keystone")
@@ -137,6 +140,7 @@ def create_keystone_tenant(tenant, desc):
 def list_mysql_db():
     
     try:
+        # get admin and pass? is this function user at all?
         con = mdb.connect('localhost', admin,
                           adminPass, 'mysql');
 
@@ -158,8 +162,7 @@ def list_mysql_db():
 # Delete the database from MYSQL
 def delete_db(config, dbName):
 
-    admin=config['admin']
-    adminPass=config['adminPass']
+    [admin, adminPass]=getMySQL(config)
 
     print "Deleting database %s" % dbName
 
@@ -185,8 +188,7 @@ def delete_db(config, dbName):
 # Create a new Database in MYSQL
 def create_db(config, dbName):
 
-    admin=config['admin']
-    adminPass=config['adminPass']
+    [admin, adminPass]=getMySQL(config)
     con=None
 
     print "Creating database %s" % dbName
@@ -210,14 +212,10 @@ def create_db(config, dbName):
             con.close()
 
 # Check to see if user is in database
-def is_user_in_db(config, userName, dbName):
+def is_user_in_db(config, userName):
 
-    admin=config['admin']
-    adminPass=config['adminPass']
-    entry = config.get(userName, None)
+    [admin, adminPass]=getMySQL(config)
 
-    user = entry.get('user', None)
-    password = entry.get('password', None)
     con=None
     try:
         con = mdb.connect('localhost', admin,
@@ -229,12 +227,12 @@ def is_user_in_db(config, userName, dbName):
         userlist = cur.fetchall()
 
         for line in userlist:
-            if user in line:
-                print "User %s exists in database" % user
+            if userName in line:
+                print "User %s exists in database" % userName
                 return True
 
         # User not found
-        print "User %s not Found in db" % user
+        print "User %s not Found in db" % userName
         return False
         
     except mdb.Error, e:
@@ -246,23 +244,18 @@ def is_user_in_db(config, userName, dbName):
         if con:
             con.close()
 
-# Create a new User for specified Database in MYSQL
-def create_db_user(config, dbName, userName):
+# Create a new User in MYSQL
+def create_db_user(config, dbName, userName, password):
 
-    admin=config['admin']
-    adminPass=config['adminPass']
-    entry = config.get(userName, None)
+    [admin, adminPass]=getMySQL(config)
 
-    user = entry.get('user', None)
-    password = entry.get('password', None)
-
-    print "Creating new user/password: %s %s for db: %s" % (user, password, dbName)
+    print "Creating new user/password: %s %s for db: %s" % (userName, password, dbName)
 
     # Check to make sure user doesn't already exist
-    user_found = is_user_in_db(config, userName, dbName)
+    user_found = is_user_in_db(config, userName)
 
     if user_found:
-        print "User %s already exists not recreating" % user
+        print "User %s already exists not recreating" % userName
         return
 
     try:
@@ -272,25 +265,25 @@ def create_db_user(config, dbName, userName):
         
         # Create the user
         if not user_found:
-            command=("CREATE USER \'%s\'" % user) + "@'%\'" + (" IDENTIFIED BY \'%s\';" % password)
+            command=("CREATE USER \'%s\'" % userName) + "@'%\'" + (" IDENTIFIED BY \'%s\';" % password)
             print "Command: %s" % command
             cur.execute(command)
 
-            command=("CREATE USER \'%s\'" % user) + "@'localhost\'" + (" IDENTIFIED BY \'%s\';" % password)
+            command=("CREATE USER \'%s\'" % userName) + "@'localhost\'" + (" IDENTIFIED BY \'%s\';" % password)
             cur.execute(command)
 
         # Set the privileges (do so again even if the user already exists)
-        command=("GRANT ALL PRIVILEGES ON %s.* TO '%s'@\'") % (dbName, user) + "%\' WITH GRANT OPTION;"
+        command=("GRANT ALL PRIVILEGES ON %s.* TO '%s'@\'") % (dbName, userName) + "%\' WITH GRANT OPTION;"
         print "Command: %s" % command
         cur.execute(command)
          
-        command=("GRANT ALL PRIVILEGES ON %s.* TO '%s'@\'localhost\'") % (dbName, user) + " WITH GRANT OPTION;"
+        command=("GRANT ALL PRIVILEGES ON %s.* TO '%s'@\'localhost\'") % (dbName, userName) + " WITH GRANT OPTION;"
         print "Command: %s" % command
         cur.execute(command)
 
         # if dbName == nova, then permission needs to be granted to the bridge too
 
-        command=("GRANT ALL PRIVILEGES ON %s.* TO '%s'@\'10.99.0.1\'") % (dbName, user) + " WITH GRANT OPTION;"
+        command=("GRANT ALL PRIVILEGES ON %s.* TO '%s'@\'10.99.0.1\'") % (dbName, userName) + " WITH GRANT OPTION;"
         print "Command: %s" % command
         cur.execute(command)
 
@@ -315,20 +308,15 @@ def create_db_user(config, dbName, userName):
 
 
 # Delete a user from the Database
-def delete_db_user(config, dbName, userName):
+def delete_db_user(config, userName):
 
-    admin=config['admin']
-    adminPass=config['adminPass']
+    [admin, adminPass]=getMySQL(config)
 
     print "deleting userName %s" % userName
 
-    entry = config.get(userName, None)
-    user = entry.get('user', None)
-    password = entry.get('password', None)
-
-    print "Deleting new user/password: %s %s for db: %s" % (user, password, dbName)
+    print "Deleting new user/password: %s %s" % (user, password)
     # Check to make sure user exists                                                                         
-    user_found = is_user_in_db(config, userName, dbName)
+    user_found = is_user_in_db(config, userName)
     if user_found:
 
         try:
@@ -336,11 +324,11 @@ def delete_db_user(config, dbName, userName):
                               adminPass, 'mysql')
             cur = con.cursor()
 
-            command="DELETE FROM mysql.user WHERE user = '%s';" % user
+            #command="DELETE FROM mysql.user WHERE user = '%s';" % user
+            #cur.execute(command)
+            command=("DROP USER \'%s\'" % userName) + "@'%\'"
             cur.execute(command)
-            command=("DROP USER \'%s\'" % user) + "@'%\'"
-            cur.execute(command)
-            command=("DROP USER \'%s\'" % user) + "@'localhost\'"
+            command=("DROP USER \'%s\'" % userName) + "@'localhost\'"
             cur.execute(command)
             command ="FLUSH PRIVILEGES";
             cur.execute(command)
@@ -360,10 +348,9 @@ def configure_glance(config):
 
     print "Configuring glance ..."
 
-    admin=config['admin']
-    adminPass=config['adminPass']
-    mysql_glance_user=config['MYSQL_GLANCE']['user']
-    mysql_glance_password=config['MYSQL_GLANCE']['password']
+    [admin, adminPass]=getMySQL(config)
+    glance_user=get_config_value(config, 'MYSQL_GLANCE_USER')
+    glance_password=get_config_value(config, 'MYSQL_GLANCE_PASSWORD')
 
     print "admin: %s" % admin
     print "adminPass: %s" % adminPass
@@ -377,7 +364,8 @@ def configure_glance(config):
         create_db(config, "glance")
 
         # Create the glance user
-        create_db_user(config, "glance", "MYSQL_GLANCE")
+        print "Creating glance user %s/%s" % (user, password)
+        create_db_user(config, "glance", user, password)
 
     except mdb.Error, e:
          print "Error %d: %s" % (e.args[0],e.args[1])
@@ -387,8 +375,7 @@ def configure_nova(config):
                       
     print "Configuring nova ..."
 
-    admin=config['admin']
-    adminPass=config['adminPass']
+    [admin, adminPass]=getMySQL(config)
 
     try:
         con = mdb.connect('localhost', admin,
@@ -399,7 +386,10 @@ def configure_nova(config):
         create_db(config, "nova")
 
         # Create the nova user                                                           
-        create_db_user(config, "nova", "MYSQL_NOVA")
+        user=get_config_value(config, "MYSQL_NOVA_USER")
+        password=get_config_value(config, "MYSQL_NOVA_PASSWORD")
+        print "Creating nova user %s/%s" % (user, password)
+        create_db_user(config, "nova", user, password)
 
     except mdb.Error, e:
          print "Error %d: %s" % (e.args[0],e.args[1])
@@ -410,8 +400,7 @@ def configure_cinder(config):
 
     print "Configuring cinder ..."
 
-    admin=config['admin']
-    adminPass=config['adminPass']
+    [admin, adminPass]=getMySQL(config)
 
     try:
         con = mdb.connect('localhost', admin,
@@ -421,7 +410,10 @@ def configure_cinder(config):
         # Create the Cinder Database
         create_db(config, "cinder")
         # Create the cinder user 
-        create_db_user(config, "cinder", "MYSQL_CINDER")
+        user=get_config_value(config, "MYSQL_CINDER_USER")
+        password=get_config_value(config, "MYSQL_CINDER_PASSWORD")
+        print "Creating cinder user %s/%s" % (user, password)
+        create_db_user(config, "cinder", user, password)
 
     except mdb.Error, e:
          print "Error %d: %s" % (e.args[0],e.args[1])
@@ -471,8 +463,7 @@ def initialize_keystone(config):
 
     print "Initializing keystone authentication ..."
 
-    admin=config['admin']
-    adminPass=config['adminPass']
+    [admin, adminPass]=getMySQL(config)
 
     print "admin: %s" % admin
     print "adminPass: %s" % adminPass
@@ -480,7 +471,10 @@ def initialize_keystone(config):
     # Create the keystone Database
     create_db(config, "keystone")
     # Create the keystone user
-    create_db_user(config, "keystone", "MYSQL_KEYSTONE")
+    user=get_config_value(config, "MYSQL_KEYSTONE_USER")
+    password=get_config_value(config, "MYSQL_KEYSTONE_PASSWORD")
+    print "Creating keystone user %s/%s" % (user, password)
+    create_db_user(config, "keystone", user, password)
 
 
 
@@ -524,7 +518,7 @@ if __name__ == '__main__':
     elif module_name == "delete_db_user":
         dbName = sys.argv[3]
         userName = sys.argv[4]
-        delete_db_user(config_file, dbName, userName)
+        delete_db_user(config_file, userName)
     elif module_name == "create_keystone_user":
 
         try:

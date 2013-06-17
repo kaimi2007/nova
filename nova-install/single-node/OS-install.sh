@@ -98,12 +98,13 @@ declare -a RHEL_REPO_PATH
 declare -a DODCS_REPO_PATH
 
 declare PUBLIC_INTERFACE
+declare FLAT_INTERFACE
 declare BRIDGE
 declare CC_ADDR
 
 declare NOVA_ADMIN_USER
 declare NOVA_ADMIN_PASSWORD
-declare NOVA_ADMIN_TENANT
+declare NOVA_ADMIN_TENANT   ## Common for all services
 declare MYSQL_NOVA_USER
 declare MYSQL_NOVA_PASSWORD
 declare NOVA_API_SERVER_IP_ADDRESS # IP address of node where the nova-api is running
@@ -115,6 +116,8 @@ declare -a KEYSTONE_SERVER_IP_ADDRESS # IP address of node where the keystone se
 declare KEYSTONE_PUBLIC_PORT
 declare KEYSTONE_ADMIN_PORT
 declare KEYSTONE_COMPUTE_PORT
+declare KEYSTONE_ADMIN_USER
+declare KEYSTONE_ADMIN_PASSWORD
 
 declare MYSQL_GLANCE_USER
 declare MYSQL_GLANCE_PASSWORD
@@ -123,8 +126,15 @@ declare GLANCE_ADMIN_PASSWORD
 
 declare MYSQL_CINDER_USER
 declare MYSQL_CINDER_PASSWORD
-declare MYSQL_CINDER_TENANT
+# declare MYSQL_CINDER_TENANT
+declare CINDER_ADMIN_USER
 declare CINDER_ADMIN_PASSWORD
+
+
+declare ADMIN_USER
+declare ADMIN_PASSWORD
+declare DEMO_USER
+declare DEMO_PASSWORD
 
 declare -a GLANCE_SERVER_IP_ADDRESS # IP address of node where the Glance server is running
 declare -a VOLUME_SERVER_IP_ADDRESS # IP address of node where the Volume server is running
@@ -502,6 +512,7 @@ function parse_configFile_defaults() {
 	RHEL_ISO_PATH=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "RHEL_ISO_PATH")
 	DODCS_ISO_PATH=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "DODCS_ISO_PATH")
 	DEFAULT_PUBLIC_INTERFACE=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "PUBLIC_INTERFACE")
+	FLAT_INTERFACE=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "FLAT_INTERFACE")
 	DEFAULT_BRIDGE=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "BRIDGE")
 	DEFAULT_NUM_NICS=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "NUM_NICS")
 	CC_ADDR=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "CC_ADDR")
@@ -510,8 +521,13 @@ function parse_configFile_defaults() {
 
 	DEFAULT_MYSQL_GLANCE_USER=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "MYSQL_GLANCE_USER")
 	DEFAULT_MYSQL_GLANCE_PASSWORD=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "MYSQL_GLANCE_PASSWORD")
+	GLANCE_ADMIN_USER=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "GLANCE_ADMIN_USER")
+	GLANCE_ADMIN_PASSWORD=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "GLANCE_ADMIN_PASSWORD")
 	DEFAULT_MYSQL_KEYSTONE_USER=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "MYSQL_KEYSTONE_USER")
 	DEFAULT_MYSQL_KEYSTONE_PASSWORD=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "MYSQL_KEYSTONE_PASSWORD")
+	KEYSTONE_ADMIN_USER=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "KEYSTONE_ADMIN_USER")
+	KEYSTONE_ADMIN_PASSWORD=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "KEYSTONE_ADMIN_PASSWORD")
+
 	KEYSTONE_PUBLIC_PORT=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "KEYSTONE_PUBLIC_PORT")
 	KEYSTONE_ADMIN_PORT=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "KEYSTONE_ADMIN_PORT")
 	KEYSTONE_COMPUTE_PORT=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "KEYSTONE_COMPUTE_PORT")
@@ -520,15 +536,23 @@ function parse_configFile_defaults() {
 	DEFAULT_NOVA_ADMIN_TENANT=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "NOVA_ADMIN_TENANT")
 	NOVA_REGION=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "NOVA_REGION")
 	DEFAULT_GLANCE_ADMIN_USER=${DEFAULT_MYSQL_GLANCE_USER}
-	MYSQL_NOVA_USER=${DEFAULT_NOVA_ADMIN_USER}
-	MYSQL_NOVA_PASSWORD=${DEFAULT_NOVA_ADMIN_PASSWORD}
+	MYSQL_NOVA_USER=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "MYSQL_NOVA_USER")
+	MYSQL_NOVA_PASSWORD=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "MYSQL_NOVA_PASSWORD")
+
+	ADMIN_USER=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "ADMIN_USER")
+	ADMIN_PASSWORD=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "ADMIN_PASSWORD")
+	DEMO_USER=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "DEMO_USER")
+	DEMO_PASSWORD=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "DEMO_PASSWORD")
+
 
 	if [ "${OS_DIST}" == "grizzly" ]
 	then
 	    MYSQL_CINDER_USER=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "MYSQL_CINDER_USER")
 	    MYSQL_CINDER_PASSWORD=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "MYSQL_CINDER_PASSWORD")
 	    MYSQL_CINDER_ADMIN_PASSWORD=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "MYSQL_CINDER_ADMIN_PASSWORD")
-	    MYSQL_CINDER_TENANT=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "MYSQL_CINDER_TENANT")
+	    ## MYSQL_CINDER_TENANT=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "MYSQL_CINDER_TENANT")
+	    CINDER_ADMIN_USER=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "CINDER_ADMIN_USER")
+	    CINDER_ADMIN_PASSWORD=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "CINDER_ADMIN_PASSWORD")
 	    CINDER_SERVER_IP_ADDRESS=$(python OS-config.py ${CONFIG_FILE} "get_config_value" "CINDER_SERVER_IP_ADDRESS")
 	fi
    
@@ -670,7 +694,6 @@ Install Step: ${INSTALL_STEP} (only applies to 'all' installation mode)
 Install Kernel Flag: ${DO_KERNEL_INSTALL}
 Verbose: ${VERBOSE}
 Crendetials File: ${CREDENTIAL_FILE}
-Admin user: ${ADMIN}
 Admin Token: ${YOUR_ADMIN_TOKEN}
 Num Nodes: ${NUM_NODES}
 HPC-Script: ${DODCS_SCRIPT}
@@ -692,6 +715,7 @@ DODCS ISO: ${DODCS_ISO}
 
 ----- Network Parameters  -----
 Public Interface: ${PUBLIC_INTERFACE}
+Flat Interface: ${FLAT_INTERFACE}
 Cloud IP Address: ${CC_ADDR}
 Num NICS: ${NUM_NICS}
 ETH Port: ${ETH_PORT}
@@ -702,29 +726,43 @@ MySQL Root User: ${MYSQL_ROOT_USER}
 MySQL Root Password: ${MYSQL_ROOT_PASSWORD}
 
 ----- KeyStone Parameters -----
-KeyStone User: ${MYSQL_KEYSTONE_USER}
-KeyStone Password: ${MYSQL_KEYSTONE_PASSWORD}
+KeyStone MySQL User: ${MYSQL_KEYSTONE_USER}
+KeyStone MySQL Password: ${MYSQL_KEYSTONE_PASSWORD}
+Keystone keystone User: ${KEYSTONE_ADMIN_USER}
+Keystone keystone Password: ${KEYSTONE_ADMIN_PASSWORD}
 Keystone_server_IP_address: ${KEYSTONE_SERVER_IP_ADDRESS}
 Keystone public_port: ${KEYSTONE_PUBLIC_PORT}
 Keystone admin_port: ${KEYSTONE_ADMIN_PORT}
-Keystone compute_port ${KEYSTONE_COMPUTE_PORT}
+Keystone compute_port: ${KEYSTONE_COMPUTE_PORT}
 
 ----- Glance Parameters   -----
-Glance User: ${MYSQL_GLANCE_USER}
-Glance Password: ${MYSQL_GLANCE_PASSWORD}
+Glance MySQL User: ${MYSQL_GLANCE_USER}
+Glance MySQL Password: ${MYSQL_GLANCE_PASSWORD}
+Glance keystone User: ${GLANCE_ADMIN_USER}
+Glance keystone Password: ${GLANCE_ADMIN_PASSWORD}
 Glance_server_IP_address: ${GLANCE_SERVER_IP_ADDRESS}
 
 ----- Cinder Parameters  -----
-Cinder User: ${MYSQL_CINDER_USER}
-Cinder Password: ${MYSQL_CINDER_PASSWORD}
+Cinder MySQL User: ${MYSQL_CINDER_USER}
+Cinder MySQL Password: ${MYSQL_CINDER_PASSWORD}
+Cinder keystone User: ${CINDER_ADMIN_USER}
+Cinder keystone Password: ${CINDER_ADMIN_PASSWORD}
 Cinder Server_IP_address: ${CINDER_SERVER_IP_ADDRESS}
 
 -----  Nova Parameters    -----
-Nova User: ${MYSQL_NOVA_USER}
-Nova Password: ${MYSQL_NOVA_PASSWORD}
-Nova Admin_Tenant: ${NOVA_ADMIN_TENANT}
+Nova MySQL User: ${MYSQL_NOVA_USER}
+Nova MySQL Password: ${MYSQL_NOVA_PASSWORD}
+Nova keystone User: ${NOVA_ADMIN_USER}
+Nova keystone Password: ${NOVA_ADMIN_PASSWORD}
 NOVA_API_server_IP_address: ${NOVA_API_SERVER_IP_ADDRESS}
 Nova Region: ${NOVA_REGION}
+
+----- Common for all services -----
+Service Admin Tenant: ${NOVA_ADMIN_TENANT}
+Admin keystone user: ${ADMIN_USER}
+Admin keystone password: ${ADMIN_PASSWORD}
+Demo keystone user: ${DEMO_USER}
+Demo keystone password: ${DEMO_PASSWORD}
 
 ----------------------------------------------
 
@@ -1674,6 +1712,18 @@ function setup_example_files() {
     echo "DONE!"
 }
 
+# Create + populate credentials file
+function setup_credentials() {
+    touch ${CREDENTIAL_FILE}
+    update_creds "EC2\_URL" "http://127.0.0.1:8773/services/Cloud" ${CREDENTIAL_FILE}
+    update_creds "OS\_USERNAME" ${ADMIN_USER} ${CREDENTIAL_FILE}
+    update_creds "OS\_PASSWORD" ${ADMIN_PASSWORD} ${CREDENTIAL_FILE}
+    update_creds "OS\_TENANT\_NAME" ${NOVA_ADMIN_TENANT} ${CREDENTIAL_FILE}
+    update_creds "OS\_AUTH\_URL" "http://localhost:5000/v2.0/" ${CREDENTIAL_FILE}
+    update_creds "MYSQL\_Root\_Password" ${MYSQL_ROOT_PASSWORD} ${CREDENTIAL_FILE}
+    update_creds "LIBVIRT\_DEBUG" "yes" ${CREDENTIAL_FILE}
+}
+
 # Create + Populate KeyStone
 function setup_keystone() {
 
@@ -2029,6 +2079,28 @@ EOF
     echo "DONE!"
 }
 
+function replace_values() {
+    local filename=$1
+    local varname=$2
+    local oldvalue=$3
+    local newvalue=$4
+    local disable_str="${varname}\s*=\s*${oldvalue}"
+    echo "Replacing ${varname} = ${oldvalue} => ${newvalue} in ${filename}"
+    found=$(grep "${disable_str}" ${filename} )
+    if [ found ]
+    then
+        verbose && echo "Updating ${varname}"
+        replace_str="${varname}=${newvalue}"
+        verbose && echo "new string: ${replace_str}"
+        local cmd="s/${disable_str}/${replace_str}/g"
+        echo "Sed command ${cmd}"
+        sed -i "${cmd}" ${filename}
+    else
+        error_exit "${disable_str} not found in ${filename}"
+    fi
+
+}
+
 # Configure NOVA
 function configure_nova() {
 
@@ -2037,7 +2109,7 @@ function configure_nova() {
     cd ${OS_INSTALL_DIR}
     clear; python OS-config.py ${CONFIG_FILE} "configure_nova"
 
-    # Edit the hpc script as needed                                                         
+    # Edit the hpc script as needed                             
     rebase_hpc_script "${DODCS_SCRIPT}"
     echo "NOVA configuration DONE!"
 }
@@ -2217,7 +2289,7 @@ function configure_cinder() {
     python OS-config.py ${CONFIG_FILE} "configure" --set /etc/nova/nova.conf DEFAULT enabled_apis ec2,osapi_compute,metadata
 
     python OS-config.py ${CONFIG_FILE} "configure" --set /etc/cinder/cinder.conf DEFAULT auth_strategy keystone
-    python OS-config.py ${CONFIG_FILE} "configure" --set /etc/cinder/cinder.conf keystone_authtoken admin_tenant_name ${MYSQL_CINDER_TENANT}
+    python OS-config.py ${CONFIG_FILE} "configure" --set /etc/cinder/cinder.conf keystone_authtoken admin_tenant_name ${NOVA_ADMIN_TENANT}
     python OS-config.py ${CONFIG_FILE} "configure" --set /etc/cinder/cinder.conf keystone_authtoken admin_user ${MYSQL_CINDER_USER}
     python OS-config.py ${CONFIG_FILE} "configure" --set /etc/cinder/cinder.conf keystone_authtoken admin_password ${MYSQL_CINDER_PASSWORD}
 
@@ -2453,6 +2525,20 @@ verbose && echo "Deleting line(${linenum})"
         error_exit "admin-password--not-found"
     fi
 
+    # A few other things. Should probably merge it with 
+    # the previous substitutions
+
+    replace_values ${script} "PUBLIC_INTERFACE" ".*" ${PUBLIC_INTERFACE} 
+    replace_values ${script} "BRIDGE" ".*" ${BRIDGE} 
+    replace_values ${script} "FLAT_INTERFACE" ".*" ${FLAT_INTERFACE} 
+    replace_values ${script} "admin_tenant_name" ".*\"" "${NOVA_ADMIN_TENANT}\"" 
+    replace_values ${script} "Keystone_User_Nova" ".*" ${NOVA_ADMIN_USER} 
+    replace_values ${script} "Keystone_Password_Nova" ".*" "${NOVA_ADMIN_PASSWORD}" 
+    local head_cc_addr=`expr match "${CC_ADDR}" '\([0-9]*\.[0-9]*\.\)'`
+    ## echo "CC_ADDR ${CC_ADDR}, head ${head_cc_addr}"
+    replace_values ${script} "DHCP_FIXED_RANGE" "[0-9]*\.[0-9]*\." "${head_cc_addr}"
+    ## read -p "Press Enter to continue"
+
     # update nova permissions
     # logs may not exist (if its a first-time run)
     set +o errexit
@@ -2502,8 +2588,8 @@ function create_keystone_creds() {
     projectrole=$( create_keystone_role "Project1")
 
     echo "Creating Users..."
-    useradmin=$(create_keystone_user "admin" "secrete")
-    userdemo=$(create_keystone_user "demo" "demosecrete")
+    useradmin=$(create_keystone_user "${ADMIN_USER}" "${ADMIN_PASSWORD}")
+    userdemo=$(create_keystone_user "${DEMO_USER}" "${DEMO_PASSWORD}")
 
     echo "Creating Tenants..."
     tenantadmin=$(create_keystone_tenant "admin" "AdminTenant")
@@ -3028,7 +3114,6 @@ fi
 
 verify_install
 
-
 # Any use of uninitialized variable will exit
 # Set it here and not at top of script to allow
 # default parameters to be used if none specified
@@ -3194,6 +3279,7 @@ if [ "${INSTALL_STEP}" == "13" ]
 then
     set -o errexit
     echo "<============ Step (13/21)  Started  =============>"
+    setup_credentials
     setup_keystone
     echo "<============ Step (13/21) Completed =============>"
     let INSTALL_STEP+=1
