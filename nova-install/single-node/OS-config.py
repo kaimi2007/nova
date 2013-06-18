@@ -349,8 +349,8 @@ def configure_glance(config):
     print "Configuring glance ..."
 
     [admin, adminPass]=getMySQL(config)
-    glance_user=get_config_value(config, 'MYSQL_GLANCE_USER')
-    glance_password=get_config_value(config, 'MYSQL_GLANCE_PASSWORD')
+    user=get_config_value(config, 'MYSQL_GLANCE_USER')
+    password=get_config_value(config, 'MYSQL_GLANCE_PASSWORD')
 
     print "admin: %s" % admin
     print "adminPass: %s" % adminPass
