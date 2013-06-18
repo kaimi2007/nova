@@ -2290,8 +2290,8 @@ function configure_cinder() {
 
     python OS-config.py ${CONFIG_FILE} "configure" --set /etc/cinder/cinder.conf DEFAULT auth_strategy keystone
     python OS-config.py ${CONFIG_FILE} "configure" --set /etc/cinder/cinder.conf keystone_authtoken admin_tenant_name ${NOVA_ADMIN_TENANT}
-    python OS-config.py ${CONFIG_FILE} "configure" --set /etc/cinder/cinder.conf keystone_authtoken admin_user ${MYSQL_CINDER_USER}
-    python OS-config.py ${CONFIG_FILE} "configure" --set /etc/cinder/cinder.conf keystone_authtoken admin_password ${MYSQL_CINDER_PASSWORD}
+    python OS-config.py ${CONFIG_FILE} "configure" --set /etc/cinder/cinder.conf keystone_authtoken admin_user ${CINDER_ADMIN_USER}
+    python OS-config.py ${CONFIG_FILE} "configure" --set /etc/cinder/cinder.conf keystone_authtoken admin_password ${CINDER_ADMIN_PASSWORD}
 
     # On RHEL, manually adjust config to integrate
     # persistent volumes on tgtd startup
@@ -2784,13 +2784,13 @@ function gen_ec2_token() {
     unset SERVICE_ENDPOINT
 
     auth_url="http://127.0.0.1:5000/v2.0/"
-    (keystone --os-user admin --os-password secrete --os-tenant-name demo --os-auth-url=${auth_url} catalog --service ec2)
+    (keystone --os-user ${ADMIN_USER}  --os-password ${ADMIN_PASSWORD} --os-tenant-name ${NOVA_ADMIN_TENANT} --os-auth-url=${auth_url} catalog --service ec2)
 
     echo "Regenerating EC2 credentials Token..."
     unset SERVICE_TOKEN
     unset SERVICE_ENDPOINT
     
-    result=$(keystone --os-user admin --os-password secrete --os-tenant-name demo --os-auth-url=${auth_url} ec2-credentials-create)
+    result=$(keystone --os-user ${ADMIN_USER} --os-password ${ADMIN_PASSWORD} --os-tenant-name demo --os-auth-url=${auth_url} ec2-credentials-create)
 
     echo "result: ${result}"
     
@@ -2819,7 +2819,7 @@ function gen_ec2_token() {
     echo "Generating nova certification files..."
     # These require OS_USERNAME to be set
     source_creds "${CREDENTIAL_FILE}"
-    (isvarset ${OS_USERNAME} ) && set ${OS_USERNAME:=admin}
+    (isvarset ${OS_USERNAME} ) && set ${OS_USERNAME:=${ADMIN_USER}}
 
     cert_enabled=$(is_novaservice_enabled "nova\-cert")
 
@@ -2880,7 +2880,8 @@ function gen_ec2_token() {
 
     echo "retrieving new EC2 token for keystone"
 
-    result=$(keystone --os-user admin --os-password secrete --os-tenant-name admin --os-auth-url=${auth_url} token-get )
+    # Leaving tenant as admin, it's not a variable
+    result=$(keystone --os-user ${ADMIN_USER} --os-password ${ADMIN_PASSWORD} --os-tenant-name admin --os-auth-url=${auth_url} token-get )
     echo "${result}"
     values=`echo "${result}" | cut -d '|' -f3`
     echo "${values}" > "temp.txt"
