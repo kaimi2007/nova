@@ -1,13 +1,13 @@
 ---
-admin:     root
-adminPass:     secretpass
-
 # CC_ADDR Is left NULL to force user to change it
 
 defaults:
     OS_DIST: grizzly
+
+    # MySQL root user and password
     ROOT_USER:     root
     MYSQL_ROOT_PASSWORD:     secretpass
+ 
     TOKEN:    999888777666
     ENDPOINT: http://127.0.0.1:35357/v2.0
     INSTALL:    all
@@ -21,62 +21,60 @@ defaults:
     LOCALHOST: 127.0.0.1
     RHEL_ISO_NAME: CentOS-6.3-x86_64-bin-DVD1.iso
     DODCS_ISO_NAME: DODCS_grizzly.iso
-    RHEL_ISO_PATH: /usr/share/iso/
-    DODCS_ISO_PATH: /usr/share/iso/
-    PUBLIC_INTERFACE: eth2
+    RHEL_ISO_PATH: /usr/share/iso
+    DODCS_ISO_PATH: /usr/share/iso
+ 
+    # Network interface for the host
+    PUBLIC_INTERFACE: eth0
+    # Network interface for the VMs
+    FLAT_INTERFACE: eth1
     BRIDGE: br100
     NUM_NICS: 1
-    CC_ADDR:
+    CC_ADDR: 
     ARCH: x86_64
+    
+    # Script will look for image files here
     IMAGE_LOC: /tmp/images/
-    MYSQL_GLANCE_USER: glance
-    MYSQL_GLANCE_PASSWORD: secrete
+
+    # MySQL users and their passwords    
     MYSQL_KEYSTONE_USER: keystone
-    MYSQL_KEYSTONE_PASSWORD: secrete
+    MYSQL_KEYSTONE_PASSWORD: keystone_s
+    MYSQL_GLANCE_USER: glance
+    MYSQL_GLANCE_PASSWORD: glance_s
     MYSQL_CINDER_USER: cinder
-    MYSQL_CINDER_PASSWORD: secrete
-    MYSQL_CINDER_TENANT: service
-    CINDER_SERVER_IP_ADDRESS: 127.0.0.1
+    MYSQL_CINDER_PASSWORD: cinder_s
+    MYSQL_NOVA_USER: nova
+    MYSQL_NOVA_PASSWORD: nova_s
+
+    # Keystone user and their passwords. May be the same as MySQL, but don't
+    # have to
+    KEYSTONE_ADMIN_USER: keystone
+    KEYSTONE_ADMIN_PASSWORD: keystone_k
+    GLANCE_ADMIN_USER: glance
+    GLANCE_ADMIN_PASSWORD: glance_k
+    CINDER_ADMIN_USER: cinder
+    CINDER_ADMIN_PASSWORD: cinder_k
     NOVA_ADMIN_USER: nova
-    NOVA_ADMIN_PASSWORD: secrete
+    NOVA_ADMIN_PASSWORD: nova_k
+
+    # Service tenant common for all services
     NOVA_ADMIN_TENANT: service
+        
+    # Admin of everything in keystone. This goes into credentials file
+    ADMIN_USER: admin
+    ADMIN_PASSWORD: admin_k
+
+    # Demo user in keystone
+    DEMO_USER: demo
+    DEMO_PASSWORD: demo_k
+
+    # IP's, ports and such
+    CINDER_SERVER_IP_ADDRESS: 127.0.0.1
+
+    # The port numbers and region may not always propagate correctly 
+    # into config files. Better not change these
     KEYSTONE_PUBLIC_PORT: 5000
     KEYSTONE_ADMIN_PORT: 35357
     KEYSTONE_COMPUTE_PORT: 8774
     NOVA_REGION: RegionOne
 
-# Keystone Initialization
-MYSQL_KEYSTONE:  
-    user:      keystone
-    password:  secrete
-
-# Glance Database
-MYSQL_GLANCE:
-    user:      glance
-    password:  secrete
-
-MYSQL_NOVA:
-    user:      nova
-    password:  secrete
-
-MYSQL_CINDER:
-    user:      cinder
-    password:  secrete
-
-# This is the admin user
-default user:
-    name:     musleh
-    password: secrete
-
-service users:
-    name:     glance
-    password: secrete
-
-    name:     nova
-    password: secrete
-
-    name:     keystone
-    password: secrete
-
-    name:     cinder
-    password: secrete
