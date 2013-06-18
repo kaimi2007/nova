@@ -2288,6 +2288,7 @@ function configure_cinder() {
     # The following is the default apis with 'osapi_volume' removed
     python OS-config.py ${CONFIG_FILE} "configure" --set /etc/nova/nova.conf DEFAULT enabled_apis ec2,osapi_compute,metadata
 
+    python OS-config.py ${CONFIG_FILE} "configure" --set /etc/cinder/cinder.conf DEFAULT sql_connection "mysql://${MYSQL_CINDER_USER}:${MYSQL_CINDER_PASSWORD}@localhost/cinder"
     python OS-config.py ${CONFIG_FILE} "configure" --set /etc/cinder/cinder.conf DEFAULT auth_strategy keystone
     python OS-config.py ${CONFIG_FILE} "configure" --set /etc/cinder/cinder.conf keystone_authtoken admin_tenant_name ${NOVA_ADMIN_TENANT}
     python OS-config.py ${CONFIG_FILE} "configure" --set /etc/cinder/cinder.conf keystone_authtoken admin_user ${CINDER_ADMIN_USER}
