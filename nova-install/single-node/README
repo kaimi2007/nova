@@ -11,10 +11,24 @@
    - restart,.sh   # Script to restart all NOVA+Glance+KeyStone+Cidner Services
    - erase-all.sh  # Script to remove all dodcs/openstack/nova packages
    - clean.sh	   # Script to remove log files
-   - OS-config.py  # Configuration file for configuring dodcs-install
+   - OS-config.py  # Python File that contains routines for configuring MYSQL database
    - OS-install.sh # Main Script
    - helper.sh	   # Bash File that contains bash functions
+   - config.yaml   # Configuration file for configuring dodcs-install
 
+Note:
+===
+This installation script will install and configure services required
+to start instances. If you want to use VNC console from the dashboard,
+make sure to start openstack-nova-novncproxy and
+openstack-nova-consoleauth. The script will install and configure these,
+but it will not automatically start them. If you want to use Cinder (the
+volume service), you will need to finish the configuration process
+yourself as described in the installation manual. The script will
+install the required packages, but you still have to decide on the
+location of volumes on your system and adjust /etc/cinder/cinder.conf
+accordingly. Also run 'cinder-manage db sync' to initialize the database.
+===
 
 ## Prerequisites:
 
@@ -34,9 +48,6 @@ Installation of the following rpms:
   d) Location of Image files: $IMAGE_LOC
   e) IP Address of Services: ${CC_ADDR} # Set to local IP Address
 
-Note: 
-#  Using 127.0.0.1 as CC_ADDR may work in the general case, but it is preferable to use
-#  the actual IP Address for a port.  
 
 ## Running
 
