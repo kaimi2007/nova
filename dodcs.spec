@@ -44,7 +44,8 @@ Requires:	openstack-nova-console = 2013.1.1-2.el6
 
 Requires:       python-glance = 2013.1-1.el6
 Requires:	openstack-glance = 2013.1-1.el6
-Requires:	openstack-dashboard = 2013.1-1.el6
+#Requires:	openstack-dashboard = 2013.1-1.el6
+Requires:	openstack-dashboard = 2013.1.1-1.el6
 Requires:	openstack-nova-cert = 2013.1.1-2.el6
 #Requires:	openstack-cinder = 2013.1-2.el6
 Requires:	openstack-cinder
