@@ -20,6 +20,7 @@ GPU support under a connection to a hypervisor through libvirt.
 """
 
 import os
+import pickle
 
 from lxml import etree
 from oslo.config import cfg
@@ -36,11 +37,42 @@ from nova.virt.libvirt import driver
 from nova.virt.libvirt import utils as libvirt_utils
 
 libvirt = None
+volume_devices = {}
+volume_device_file = ''
 
 LOG = logging.getLogger(__name__)
 
-CONF = cfg.CONF
 
+lxc_volume_opts = [
+    cfg.StrOpt('volume_device_file',
+               default='volume_devices',
+               help='Full path of the file keeping the information of gpus allocated'),
+]
+
+CONF = cfg.CONF
+CONF.register_opts(lxc_volume_opts)
+
+
+def load_volume_devices():
+    global volume_device_file
+    try:
+        input = open(volume_device_file, 'r')
+        data = pickle.load(input)
+        input.close()
+        return data
+    except Exception:
+        LOG.error("Failed to open Volume Device information")
+        return {}
+
+def save_volume_devices(volume_devices):
+    global volume_device_file
+    try:
+        output = open(volume_device_file, 'w')
+        pickle.dump(volume_devices, output, pickle.HIGHEST_PROTOCOL)
+        output.close()
+    except Exception:
+        LOG.error("Failed to save Volume Device information")
+        pass
 
 
 class GPULibvirtDriver(driver.LibvirtDriver):
@@ -53,7 +85,16 @@ class GPULibvirtDriver(driver.LibvirtDriver):
 
         gpu_utils.get_instance_type_extra_specs_capabilities()
         if CONF.libvirt_type.lower() == 'lxc':
+            global volume_devices
+            global volume_device_file
+
+            volume_device_file = CONF.state_path + '/' + CONF.volume_device_file
+#            LOG.info("dkang: init: volume_device_file - %s" \
+#                          % volume_device_file)
             gpu_utils.init_host_gpu(self.list_live_instance_uuids())
+            volume_devices = load_volume_devices()
+            LOG.info("dkang: init: volume_devices %s" \
+                          % str(volume_devices))
 
     def list_live_instance_uuids(self):
         uuids = []
@@ -157,6 +198,20 @@ class GPULibvirtDriver(driver.LibvirtDriver):
         self.set_cache_mode(conf)
 
         source_dev = self.get_guest_disk_path(conf.to_xml())
+
+        # dkang: LXC: check if the device is already being used
+        global volume_devices
+
+#        LOG.info("dkang: attach: volume_devices = %s" % str(volume_devices))
+        uuid = virt_dom.UUIDString()
+        if uuid in volume_devices:
+            LOG.info("This instance(%s) already has volume." % uuid)
+            device_list = volume_devices[uuid]
+#            LOG.info("dkang: device_list = %s" % str(device_list))
+            for device in device_list:
+                if disk_info['dev'] == device:
+                    raise exception.DeviceIsBusy(device=disk_dev)
+#            LOG.info(_("dkang: this instance does not use the volume device."))
         try:
             # NOTE(vish): We can always affect config because our
             #             domains are persistent, but we should only
@@ -169,9 +224,25 @@ class GPULibvirtDriver(driver.LibvirtDriver):
                 gpu_utils._attach_lxc_volume(source_dev, 
                                    '/dev/%s' % disk_info['dev'],
                                    virt_dom, instance)
+                # dkang: LXC: manage device list per instance
+#                LOG.info("dkang: about to attach the volume at %s." \
+#                          % disk_info['dev'])
+                if uuid in volume_devices:
+                    device_list = volume_devices[uuid]
+                else:
+                    device_list = []
+                device_list.append(disk_info['dev'])
+                volume_devices[uuid] = device_list
+#                LOG.info("dkang: after attach: volume_devices %s" \
+#                          % str(volume_devices))
+                save_volume_devices(volume_devices)
             else:
                 virt_dom.attachDeviceFlags(conf.to_xml(), flags)
         except Exception, ex:
+            if CONF.libvirt_type.lower() == 'lxc':
+                LOG.error(_("Error in Volume attachment."))
+                LOG.error(_("Only one volume can be attached."))
+                return
             if isinstance(ex, libvirt.libvirtError):
                 errcode = ex.get_error_code()
                 if errcode == libvirt.VIR_ERR_OPERATION_FAILED:
@@ -198,6 +269,22 @@ class GPULibvirtDriver(driver.LibvirtDriver):
             if CONF.libvirt_type.lower() == 'lxc':
                 gpu_utils._detach_lxc_volume(disk_dev, virt_dom, 
                                         instance_name)
+                # dkang: LXC: manage device list per instance
+                global volume_devices
+
+                uuid = virt_dom.UUIDString()
+                if uuid in volume_devices:
+                    device_list = volume_devices[uuid]
+                    device_list.remove(disk_dev)
+                    if device_list == []:
+                        del volume_devices[uuid]
+                    else:
+                        volume_devices[uuid] = device_list
+                    save_volume_devices(volume_devices)
+                    LOG.info("detach: volume_devices %s" \
+                          % str(volume_devices))
+                else:
+                    LOG.info("Unknown volume device is asked to be detached");
             else:
                 xml = self._get_disk_xml(virt_dom.XMLDesc(0), disk_dev)
                 if not xml:
