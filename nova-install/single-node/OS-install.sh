@@ -159,7 +159,7 @@ Syntax
    OS-install.sh -T {type" -A {admin} -v {qemu | kvm}
    -F: Name of config-file (config.yaml)
    -K: Install Kernel Upgrade as part of Installation process
-   -T: Installation type: all (single node) | controller | compute | parseonly | genec2token | geneucakey | leanmysql | fullclean | clean | backup | restore 
+   -T: Installation type: all (single node) | controller | compute | parseonly | genec2token | geneucakey | leanmysql | fullclean | clean | backup 
    -S: Start Main Installation at step number (max:22)
    -V: Verbose (print line number script is executing)
 USAGE
@@ -207,83 +207,6 @@ function clean_all() {
     install_mysql "clean"
     config_yum_repos "clean"
     echo "Clean ALL DONE!"
-}
-
-# Function to restore original files if OS-install went wrong/errored out
-function restore_original() {
-
-    local MSG="
-Restoring Original system network / openstack-related Install files \n
-PLEASE BE SURE TO HAVE RAN THE BACKUP OPTION PRIOR TO INSTALL/RESTORE \n"
-    echo -e ${MSG}
-
-    set +o errexit
-
-    local bkpext="-bkp"
-    local orig="/etc/sysconfig/network-scripts"
-    local bkp=${orig}$bkpext}
-    local deletefile
-
-    echo "Restoring original network-scripts folder"
-    cp -r ${bkp} ${orig}
-
-    orig="/usr/local/nova/nova-install-hpc-${OS_DIST}.sh"
-    bkp=${orig}${bkpext}
-    echo "restoring folsom script"
-    cp -r ${folsomscriptbkp} ${folsomscript}
-
-    orig="\/etc\/keystone\/default\_catalog\.templates"
-    bkp="\/usr\/local\/nova\/examples\/keystone\/default\_catalog\.templates"
-    echo "restoring keystone catalog file"
-    cp ${bkp} ${orig}
-
-    orig="\/etc\/glance\/glance\-api\.conf"
-    bkp="\/etc\/glance\/glance\-api\.conf\.bkp"
-    echo "restoring ${orig} file"
-    cp ${bkp} ${orig}
-
-    orig="\/etc\/glance\/glance\-registry\.conf"
-    bkp="\/etc\/glance\/glance\-registry\.conf\.bkp"
-    echo "restoring ${orig} file"
-    cp ${bkp} ${orig}
-
-    orig="\/etc\/nova\/api\.paste"
-    bkp="\/etc\/nova\/api\.paste\.bkp"
-    echo "restoring ${orig} file"
-    cp ${bkp} ${orig}
-
-    echo "removing any leftover glance images..."
-    rm -rf /var/lib/glance/images/*
-
-    echo "Removing any leftover nova instances..."
-    rm -rf /var/lib/nova/instances/_base/*
-    if [ "${OS_DIST}" == "folsom" ]
-    then
-	rm -rf /var/lib/nova/instances/instance-*
-    else
-	rm -rf /var/lib/nova/instances/*-*
-    fi
-
-    echo "Restoring original credential (openrc) file..."
-    cp -r openrc.sample openrc
-
-    echo "Removing old certification files..."
-    deletefile="${OS_INSTALL_DIR}\/userkey.pem"
-    rm -rf ${deletefile}
-
-    deletefile="${OS_INSTALL_DIR}\/pk.pem"
-    rm -rf ${deletefile}
-
-    deletefile="${OS_INSTALL_DIR}\/cacert.pem"
-    rm -rf ${deletefile}
-
-    deletefile="${OS_INSTALL_DIR}\/cert.pem"
-    rm -rf ${deletefile}
-
-    service network restart
-
-    echo "Done!"
-    set -o errexit
 }
 
 # Function to create backups of the necessary files/folders to allow for
@@ -334,7 +257,7 @@ function process_command_line() {
 	    T)
 		INSTALL=$(echo "${OPTARG}" | tr [A-Z] [a-z] )
 		case ${INSTALL} in
-		    all|fullclean|clean|cleanmysql|single|controller|compute|node|parseonly|genec2token|geneucakey|backup|restore)
+		    all|fullclean|clean|cleanmysql|single|controller|compute|node|parseonly|genec2token|geneucakey|backup)
 			;;
 		    *)
 			usage
@@ -3107,10 +3030,6 @@ elif [ ${INSTALL} == "geneucakey" ]
 elif [ ${INSTALL} == "backup" ]
     then
     create_backup
-    exit 1
-elif [ ${INSTALL} == "restore" ]
-    then
-    restore_original
     exit 1
 fi
 
