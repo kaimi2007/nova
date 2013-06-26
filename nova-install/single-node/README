@@ -8,7 +8,7 @@
 
 
 ## Included Files:
-   - restart,.sh   # Script to restart all NOVA+Glance+KeyStone+Cidner Services
+   - restart.sh   # Script to restart all NOVA+Glance+KeyStone+Cidner Services
    - erase-all.sh  # Script to remove all dodcs/openstack/nova packages
    - clean.sh	   # Script to remove log files
    - OS-config.py  # Python File that contains routines for configuring MYSQL database
