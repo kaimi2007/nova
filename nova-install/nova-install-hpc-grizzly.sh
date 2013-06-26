@@ -232,6 +232,7 @@ if [ "$CMD" == "cloud-init" ] ||
     service openstack-nova-objectstore restart
     service openstack-nova-scheduler restart
     service openstack-nova-cert restart
+    service openstack-nova-conductor restart
 
    
     # create flavors for heterogeneous instance types 
@@ -267,7 +268,7 @@ fi
 if [ "$CMD" == "compute-init" ] ||
    [ "$CMD" == "single-init" ]; then
        echo "start openstack-nova-compute"
-      service openstack-nova-conductor restart
+#      service openstack-nova-conductor restart
       service openstack-nova-compute restart
 fi
 
