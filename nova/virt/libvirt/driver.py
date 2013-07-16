@@ -90,6 +90,10 @@ from nova.virt.libvirt import imagebackend
 from nova.virt.libvirt import imagecache
 from nova.virt.libvirt import utils as libvirt_utils
 from nova.virt import netutils
+# kyao
+from nova.compute.ibutil import IbUtil
+from nova.network.model import VIF
+# !kyao
 
 native_threading = patcher.original("threading")
 native_Queue = patcher.original("Queue")
@@ -2419,6 +2423,11 @@ class LibvirtDriver(driver.ComputeDriver):
 
     def _create_domain_and_network(self, xml, instance, network_info,
                                    block_device_info=None):
+# kyao
+        LOG.debug(_('_create_domain_and_network network_info: %s'), network_info)
+        network_info = [(network,mapping) for (network,mapping) in network_info if 'mac' in mapping]
+        LOG.debug(_('_create_domain_and_network network_info: %s'), network_info)
+# ! kyao
 
         """Do required network setup and create domain."""
         block_device_mapping = driver.block_device_info_get_mapping(
@@ -3688,6 +3697,9 @@ class HostState(object):
         super(HostState, self).__init__()
         self._stats = {}
         self.driver = driver
+        # kyao 
+        self.ibutils = IbUtil.getInstance()
+        # !kyao 
         self.update_status()
 
     def get_host_stats(self, refresh=False):
@@ -3717,6 +3729,9 @@ class HostState(object):
         data["hypervisor_hostname"] = self.driver.get_hypervisor_hostname()
         data["supported_instances"] = \
             self.driver.get_instance_capabilities()
+# kyao
+        self.ibutils.update_status(data)
+# !kyao
 
         self._stats = data
 

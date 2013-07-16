@@ -292,8 +292,10 @@ class IptablesFirewallDriver(FirewallDriver):
     def _do_project_network_rules(self, ipv4_rules, ipv6_rules, network_info):
         # make sure this is legacy nw_info
         network_info = self._handle_network_info_model(network_info)
-
-        cidrs = [network['cidr'] for (network, _i) in network_info]
+# kyao
+#        cidrs = [network['cidr'] for (network, _i) in network_info]
+        cidrs = [network['cidr'] for (network, _i) in network_info if network['cidr']]
+# !kyao
         for cidr in cidrs:
             ipv4_rules.append('-s %s -j ACCEPT' % (cidr,))
         if CONF.use_ipv6:

@@ -31,6 +31,9 @@ VIF_TYPE_BRIDGE = 'bridge'
 VIF_TYPE_802_QBG = '802.1qbg'
 VIF_TYPE_802_QBH = '802.1qbh'
 VIF_TYPE_OTHER = 'other'
+# kyao
+VIF_TYPE_PCI = 'pci'
+# !kyao
 
 # Constant for max length of network interface names
 # eg 'bridge' in the Network class or 'devname' in
@@ -177,6 +180,33 @@ class Subnet(Model):
         subnet['gateway'] = IP.hydrate(subnet['gateway'])
         return subnet
 
+# kyao
+class Passthrough(Model):
+    """Represent SR-IOV passthrough in Nova."""
+    def __init__(self, type=None, domain=None, bus=None, slot=None, function=None, **kwargs):
+        super(Passthrough, self).__init__()
+        self['passthrough'] = VIF_TYPE_PCI
+        self['domain'] = domain
+        self['bus'] = bus
+        self['slot'] = slot
+        self['function'] = function
+        self['type'] = VIF_TYPE_PCI
+
+    def fixed_ips(self):
+        return []
+
+    def floating_ips(self):
+        return []
+
+    def labeled_ips(self):
+        return []
+
+    @classmethod
+    def hydrate(cls, passthrough):
+        if passthrough:
+            passthrough = Passthrough(**ensure_string_keys(passthrough))
+        return passthrough
+# !kyao
 
 class Network(Model):
     """Represents a Network in Nova."""
@@ -346,6 +376,24 @@ class NetworkInfo(list):
 
         network_info = []
         for vif in self:
+            # kyao
+            if 'passthrough' in vif.keys():
+                network_dict={'passthrough' : vif['passthrough'],
+                              'injected' : False,
+                              'cidr' : None}
+                info_dict={'vif_type' : vif['type'],
+                           'domain' : vif['domain'],
+                           'bus' : vif['bus'],
+                           'slot' : vif['slot'],
+                           'function' : vif['function'],
+                           'dhcp_server' : None,
+                           'ips' : [],
+                           'ip6s' : [],
+                           }
+                network_info.append((network_dict, info_dict))
+                continue
+            # !kyao
+
             # if vif doesn't have network or that network has no subnets, quit
             if not vif['network'] or not vif['network']['subnets']:
                 continue

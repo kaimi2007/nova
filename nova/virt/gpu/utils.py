@@ -48,12 +48,12 @@ gpu_usage_file = ''
 LOG = logging.getLogger(__name__)
 
 gpu_opts = [
-    cfg.ListOpt('instance_type_extra_specs',
-                default=[],
-                help='a list of additional capabilities corresponding to '
-                'instance_type_extra_specs for this compute '
-                'host to advertise. Valid entries are name=value, pairs '
-                'For example, "key1:val1, key2:val2"'),
+    # cfg.ListOpt('instance_type_extra_specs',
+    #             default=[],
+    #             help='a list of additional capabilities corresponding to '
+    #             'instance_type_extra_specs for this compute '
+    #             'host to advertise. Valid entries are name=value, pairs '
+    #             'For example, "key1:val1, key2:val2"'),
     cfg.StrOpt('dev_cgroups_path',
                default='/cgroup/devices/libvirt/lxc',
                help='Path of the LXC cgroup'),

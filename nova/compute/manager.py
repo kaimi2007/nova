@@ -77,6 +77,9 @@ from nova.virt import storage_users
 from nova.virt import virtapi
 from nova import volume
 
+# kyao
+from nova.compute.ibutil import IbUtil
+# !kyao
 
 compute_opts = [
     cfg.StrOpt('console_host',
@@ -351,6 +354,10 @@ class ComputeManager(manager.SchedulerDependentManager):
         # compute manager via the virtapi, so we want it to be fully
         # initialized before that happens.
         self.driver = driver.load_compute_driver(self.virtapi, compute_driver)
+        # kyao
+        self.ibutils = IbUtil(self.driver)
+        self.ibutils.init_host_ib()
+        # !kyao
 
     def _get_resource_tracker(self, nodename):
         rt = self._resource_tracker_dict.get(nodename)
@@ -1069,6 +1076,11 @@ class ComputeManager(manager.SchedulerDependentManager):
                                 macs=macs,
                                 conductor_api=self.conductor_api,
                                 security_groups=security_groups)
+            # kyao
+            pci_vif = self.ibutils.get_vif(context, instance)
+            if pci_vif:
+                network_info.append(pci_vif)
+            # !kyao
         except Exception:
             with excutils.save_and_reraise_exception():
                 LOG.exception(_('Instance failed network setup'),
@@ -1157,6 +1169,9 @@ class ComputeManager(manager.SchedulerDependentManager):
     def _deallocate_network(self, context, instance):
         LOG.debug(_('Deallocating network for instance'), instance=instance)
         self.network_api.deallocate_for_instance(context, instance)
+        # kyao
+        self.ibutils.deallocate_for_instance(context, instance)
+        # !kyao
 
     def _get_volume_bdms(self, bdms):
         """Return only bdms that have a volume_id."""

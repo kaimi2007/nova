@@ -596,3 +596,62 @@ class QuantumLinuxBridgeVIFDriver(LibvirtGenericVIFDriver):
 
     def unplug(self, instance, vif):
         self.unplug_bridge(instance, vif)
+
+# kyao
+class LibvirtPassthroughVIFDriver(LibvirtGenericVIFDriver):
+    """Allow SR-IOV PCI passthrough"""
+
+    def __init__(self, get_connection):
+	super(LibvirtPassthroughVIFDriver, self).__init__(get_connection)
+        # self.ibutils = ibutil.IbUtil()
+        # #self.ibutils.init_host_ib(self.list_live_instance_uuids())
+	# self.ibutils.init_host_ib([])
+
+    def get_config(self, instance, network, mapping, image_meta):
+        vif_type = mapping.get('vif_type')
+
+        LOG.debug(_("vif_type=%(vif_type)s instance=%(instance)s "
+                    "network=%(network)s mapping=%(mapping)s")
+                  % locals())
+
+        if vif_type is None:
+            raise exception.NovaException(
+                _("vif_type parameter must be present "
+                  "for this vif_driver implementation"))
+
+        if vif_type == network_model.VIF_TYPE_PCI:
+            sriov = vconfig.LibvirtConfigGuestSRIOV()
+	    sriov.bus = mapping['bus']
+	    sriov.slot = mapping['slot']
+	    sriov.function = mapping['function']
+	    return sriov
+
+	else:
+	    return super(LibvirtPassthroughVIFDriver, self).get_config(instance, network, mapping, image_meta)
+
+    def plug(self, instance, vif):
+        traceback.print_stack()
+        network, mapping = vif
+        vif_type = mapping.get('vif_type')
+	if vif_type == network_model.VIF_TYPE_PCI:
+            self.plug(instance, vif)
+	else:
+	    super(LibvirtPassthroughVIFDriver, self).plug(instance, vif)
+
+    def unplug(self, instance, vif):
+        network, mapping = vif
+        vif_type = mapping.get('vif_type')
+	if vif_type == network_model.VIF_TYPE_PCI:
+	    self.unplug(instance, vif)
+	else:
+	    super(LibvirtPassthroughVIFDriver, self).unplug(instance, vif)
+
+    def plug(self, instance, vif):
+        pass
+
+    def unplug(self, instance, vif):
+	pass
+
+# !kyao
+
+		

@@ -570,6 +570,37 @@ class LibvirtConfigGuestFilesys(LibvirtConfigGuestDevice):
         return dev
 
 
+# dkang, tatiana, kyao: ib support
+class LibvirtConfigGuestSRIOV(LibvirtConfigGuestDevice):
+
+    def __init__(self, **kwargs):
+        super(LibvirtConfigGuestSRIOV, self).__init__(
+            root_name="hostdev",
+            **kwargs)
+
+        self.bus = "0x0"
+        self.slot = "0x0"
+        self.function = "0x0"
+
+    def format_dom(self):
+        dev = super(LibvirtConfigGuestSRIOV, self).format_dom()
+
+        dev.set("mode", 'subsystem')
+        dev.set("type", 'pci')
+        dev.set("managed", 'yes')
+
+        e_source = etree.Element("source")
+        e_addr = etree.Element("address")
+        e_addr.set("domain",'0x0000')
+        e_addr.set("bus", self.bus)
+        e_addr.set("slot", self.slot)
+        e_addr.set("function", self.function)
+        e_source.append(e_addr);
+        dev.append(e_source)
+
+        return dev
+# !dkang, tatiana, kyao
+
 class LibvirtConfigGuestInterface(LibvirtConfigGuestDevice):
 
     def __init__(self, **kwargs):
