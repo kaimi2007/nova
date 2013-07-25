@@ -33,8 +33,8 @@ ib_opts = [
     ]
 
 ibutil_opts = [
-    cfg.StrOpt('instance_type_extra_specs',
-               default='',
+    cfg.ListOpt('instance_type_extra_specs',
+               default=[],
                help='Additional host resource specification')
 ]
 
@@ -74,7 +74,7 @@ class IbUtil(object):
             return
         if not self.extra_specs:
             LOG.debug( _("__init__: instance_type_extra_specs %s .") % CONF.instance_type_extra_specs)
-            for pair in CONF.instance_type_extra_specs.split(','):
+            for pair in CONF.instance_type_extra_specs:
                 keyval = pair.split(':', 1)
                 keyval[0] = keyval[0].strip()
                 keyval[1] = keyval[1].strip()
