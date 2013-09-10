@@ -1,5 +1,13 @@
 #!/bin/env bash
 
+DROP_DB=0
+
+if [ "$1" == "--dropdb" ];
+then
+   DROP_DB=1
+fi
+
+
 openstack_packages="openstack-cinder-api \
  openstack-cinder-doc \
  openstack-cinder-scheduler \
@@ -28,6 +36,7 @@ openstack_packages="openstack-cinder-api \
  openstack-quantum-openvswitch \
  openstack-quantum-ryu \
  openstack-quantum \           
+ openstack-utils \
  euca2ools \
  python-cinder \
  python-cinderclient \
@@ -75,3 +84,10 @@ yum -y erase $libvirtpackages
 mysql_packages="mysql-server rabbitmq-server"
 
 yum -y erase $mysql_packages
+
+
+if [ $DROP_DB -eq 1 ];
+then
+   echo "Deleting MySQL db directory"
+   rm -Rf /var/lib/mysql
+fi
