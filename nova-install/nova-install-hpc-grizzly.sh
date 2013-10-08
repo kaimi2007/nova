@@ -189,13 +189,13 @@ if [ "$CMD" == "compute-init" ] ; then
         else 
 		echo "sql_connection = mysql://$MYSQL_NOVA_USR:$MYSQL_NOVA_PASS@$MySQL_Nova_IP_address/nova"  >>  $NOVA_CONF
                 echo "use_cow_images=True" >>  $NOVA_CONF
-		echo "compute_driver = libvirt.LibvirtDriver" >> $NOVA_CONF
+		echo "compute_driver = gpu.GPULibvirtDriver" >> $NOVA_CONF
 		echo "libvirt_type=kvm" >> $NOVA_CONF
         fi
 else
 	echo "sql_connection = mysql://$MYSQL_NOVA_USR:$MYSQL_NOVA_PASS@$MySQL_Nova_IP_address/nova"  >>  $NOVA_CONF
         echo "use_cow_images=True" >>  $NOVA_CONF
-	echo "compute_driver = libvirt.LibvirtDriver" >> $NOVA_CONF
+	echo "compute_driver = gpu.GPULibvirtDriver" >> $NOVA_CONF
 	echo "libvirt_type=kvm" >> $NOVA_CONF
 fi
 
