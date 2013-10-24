@@ -51,7 +51,18 @@ if (not hasattr(migrate, '__version__') or
 
 
 # NOTE(jkoelker) Delay importing migrate until we are patched
-from migrate import exceptions as versioning_exceptions
+# When using python-migrate 0.6 version (dodcs-sw-iso), we have to use
+# more specific path. But openstack-havana repo includes 0.7.2 version.
+# So we have to remove old stuffs cleanly or upgrade to 0.7.2.
+# In case of 0.6 version,  we have to use the following patch.
+# ====================================================================
+#from migrate import exceptions as versioning_exceptions
+try:
+    # Try the more specific path first (migrate <= 0.6)
+    from migrate.versioning import exceptions as versioning_exceptions
+except ImportError:
+    # Use the newer path (migrate >= 0.7)
+    from migrate import exceptions as versioning_exceptions
 from migrate.versioning import api as versioning_api
 from migrate.versioning.repository import Repository
 

@@ -49,7 +49,7 @@ opts = [
                default=9,
                help='power status of tilera PDU'),
     cfg.IntOpt('tile_power_wait',
-               default=9,
+               default=90,
                help='wait time in seconds until check the result '
                     'after tilera power operations'),
     ]
@@ -110,8 +110,9 @@ class Pdu(base.PowerManager):
                 return CONF.baremetal.tile_pdu_off
         else:
             try:
+                # Tilera board is connected from #5 outlet on ePDU
                 utils.execute(CONF.baremetal.tile_pdu_mgr,
-                          CONF.baremetal.tile_pdu_ip, mode)
+                          CONF.baremetal.tile_pdu_ip, self.node_id + 5, mode)
                 time.sleep(CONF.baremetal.tile_power_wait)
                 return mode
             except processutils.ProcessExecutionError:
