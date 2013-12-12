@@ -130,6 +130,7 @@ class HostState(object):
         self.hypervisor_hostname = None
         self.cpu_info = None
         self.supported_instances = None
+        self.extra_specs = None 
 
         # Resource oversubscription values for the compute host:
         self.limits = {}
@@ -182,6 +183,11 @@ class HostState(object):
         if compute.get('supported_instances'):
             self.supported_instances = jsonutils.loads(
                     compute.get('supported_instances'))
+
+        if compute.get('extra_specs'):
+            self.extra_specs = jsonutils.loads(compute.get('extra_specs'))
+            for key, val in self.extra_specs.iteritems():
+                setattr(self, key, val)
 
         # Don't store stats directly in host_state to make sure these don't
         # overwrite any values, or get overwritten themselves. Store in self so
