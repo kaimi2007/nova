@@ -23,7 +23,7 @@ def upgrade(migrate_engine):
     compute_nodes = utils.get_table(migrate_engine, 'compute_nodes')
     host_ip = Column('host_ip', types.IPAddress())
     supported_instances = Column('supported_instances', Text)
-    extra_spec = Column('extra_specs', Text)
+    extra_specs = Column('extra_specs', Text)
     compute_nodes.create_column(host_ip)
     compute_nodes.create_column(supported_instances)
     compute_nodes.create_column(extra_specs)
