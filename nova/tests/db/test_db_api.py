@@ -5210,6 +5210,7 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
                                  hypervisor_hostname='abracadabra104',
                                  host_ip='127.0.0.1',
                                  supported_instances='',
+                                 extra_specs='',
                                  pci_stats='')
         # add some random stats
         self.stats = dict(num_instances=3, num_proj_12345=2,
