@@ -15,31 +15,22 @@
 from sqlalchemy import Column, Text
 
 from nova.db.sqlalchemy import api as db
-from nova.db.sqlalchemy import types
 from nova.db.sqlalchemy import utils
 
 
 def upgrade(migrate_engine):
     compute_nodes = utils.get_table(migrate_engine, 'compute_nodes')
-    host_ip = Column('host_ip', types.IPAddress())
-    supported_instances = Column('supported_instances', Text)
-    compute_nodes.create_column(host_ip)
-    compute_nodes.create_column(supported_instances)
+    extra_specs = Column('extra_specs', Text)
+    compute_nodes.create_column(extra_specs)
     shadow_compute_nodes = utils.get_table(migrate_engine,
             db._SHADOW_TABLE_PREFIX + 'compute_nodes')
-    host_ip = Column('host_ip', types.IPAddress())
-    supported_instances = Column('supported_instances', Text)
-    shadow_compute_nodes.create_column(host_ip)
-    shadow_compute_nodes.create_column(supported_instances)
-    # NOTE: don't need to populate the new columns since they will
-    # automatically be populate by a periodic task
+    extra_specs = Column('extra_specs', Text)
+    shadow_compute_nodes.create_column(extra_specs)
 
 
 def downgrade(migrate_engine):
     compute_nodes = utils.get_table(migrate_engine, 'compute_nodes')
-    compute_nodes.drop_column('host_ip')
-    compute_nodes.drop_column('supported_instances')
+    compute_nodes.drop_column('extra_specs')
     shadow_compute_nodes = utils.get_table(migrate_engine,
             db._SHADOW_TABLE_PREFIX + 'compute_nodes')
-    shadow_compute_nodes.drop_column('host_ip')
-    shadow_compute_nodes.drop_column('supported_instances')
+    shadow_compute_nodes.drop_column('extra_specs')
