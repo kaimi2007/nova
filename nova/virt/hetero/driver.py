@@ -174,7 +174,7 @@ class HeteroLibvirtDriver(driver.LibvirtDriver):
             self.destroy(instance, network_info, block_device_info)
             #db.instance_update(context, instance['uuid'],
             #        {'vm_state': vm_states.DELETED})
-            raise Exception(('Error in gpu allocation, overcommitted.'))
+            raise Exception(_('Error in gpu allocation, overcommitted.'))
         LOG.info(_("Instance spawned successfully."),
                      instance=instance)
 
