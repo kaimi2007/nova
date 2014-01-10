@@ -1,0 +1,347 @@
+From 1c0ecb318049e451eb8e1f6a012dfd144e51d53a Mon Sep 17 00:00:00 2001
+From: Vladan Popovic <vpopovic@redhat.com>
+Date: Thu, 17 Oct 2013 07:41:20 -0400
+Subject: [PATCH] Remove unnecessary steps for cold snapshots
+
+Up until now when we created cold snapshots we were stopping the
+instance, create an internal snapshot, extract the snapshot to a file
+and then delete the internal snapshot before bringing up the instance.
+
+If the instance is shut down, there's no concurrent writer, so the image
+can be directly extracted without taking an internal snapshot first,
+because the snapshot and the current state are the same.
+
+In this patch the creation and deletion of the internal snapshot are
+removed to eliminate the extra steps and optimize the creation of
+snapshots a bit.
+
+Closes-Bug: #1242819
+Closes-Bug: #1247185
+
+Change-Id: I429fa2e1e26aea321eecbf14edd11263fff525ae
+(cherry picked from commit 8c985874c7885f31871204d3f83ce547fefc5fb6)
+
+Conflicts:
+	nova/virt/libvirt/imagebackend.py
+---
+ nova/tests/virt/libvirt/fake_imagebackend.py  |  4 +-
+ nova/tests/virt/libvirt/fake_libvirt_utils.py | 10 +---
+ nova/tests/virt/libvirt/test_libvirt.py       |  4 +-
+ nova/virt/libvirt/driver.py                   |  6 +--
+ nova/virt/libvirt/imagebackend.py             | 66 ++++-----------------------
+ nova/virt/libvirt/utils.py                    | 33 ++------------
+ 6 files changed, 18 insertions(+), 105 deletions(-)
+
+diff --git a/nova/tests/virt/libvirt/fake_imagebackend.py b/nova/tests/virt/libvirt/fake_imagebackend.py
+index 23672dc..96600d6 100644
+--- a/nova/tests/virt/libvirt/fake_imagebackend.py
++++ b/nova/tests/virt/libvirt/fake_imagebackend.py
+@@ -54,7 +54,7 @@ class Backend(object):
+ 
+         return FakeImage(instance, name)
+ 
+-    def snapshot(self, path, name, image_type=''):
++    def snapshot(self, path, image_type=''):
+         #NOTE(bfilippov): this is done in favor for
+         # snapshot tests in test_libvirt.LibvirtConnTestCase
+-        return imagebackend.Backend(True).snapshot(path, name, image_type)
++        return imagebackend.Backend(True).snapshot(path, image_type)
+diff --git a/nova/tests/virt/libvirt/fake_libvirt_utils.py b/nova/tests/virt/libvirt/fake_libvirt_utils.py
+index 4799837..1872922 100644
+--- a/nova/tests/virt/libvirt/fake_libvirt_utils.py
++++ b/nova/tests/virt/libvirt/fake_libvirt_utils.py
+@@ -138,15 +138,7 @@ def chown(path, owner):
+     pass
+ 
+ 
+-def create_snapshot(disk_path, snapshot_name):
+-    pass
+-
+-
+-def delete_snapshot(disk_path, snapshot_name):
+-    pass
+-
+-
+-def extract_snapshot(disk_path, source_fmt, snapshot_name, out_path, dest_fmt):
++def extract_snapshot(disk_path, source_fmt, out_path, dest_fmt):
+     files[out_path] = ''
+ 
+ 
+diff --git a/nova/tests/virt/libvirt/test_libvirt.py b/nova/tests/virt/libvirt/test_libvirt.py
+index 6410be3..358662b 100644
+--- a/nova/tests/virt/libvirt/test_libvirt.py
++++ b/nova/tests/virt/libvirt/test_libvirt.py
+@@ -6262,12 +6262,12 @@ disk size: 4.4M''', ''))
+     def _do_test_extract_snapshot(self, dest_format='raw', out_format='raw'):
+         self.mox.StubOutWithMock(utils, 'execute')
+         utils.execute('qemu-img', 'convert', '-f', 'qcow2', '-O', out_format,
+-                      '-s', 'snap1', '/path/to/disk/image', '/extracted/snap')
++                      '/path/to/disk/image', '/extracted/snap')
+ 
+         # Start test
+         self.mox.ReplayAll()
+         libvirt_utils.extract_snapshot('/path/to/disk/image', 'qcow2',
+-                                       'snap1', '/extracted/snap', dest_format)
++                                       '/extracted/snap', dest_format)
+ 
+     def test_extract_snapshot_raw(self):
+         self._do_test_extract_snapshot()
+diff --git a/nova/virt/libvirt/driver.py b/nova/virt/libvirt/driver.py
+index 5c05307..077c79b 100644
+--- a/nova/virt/libvirt/driver.py
++++ b/nova/virt/libvirt/driver.py
+@@ -1372,7 +1372,6 @@ class LibvirtDriver(driver.ComputeDriver):
+                 virt_dom.managedSave(0)
+ 
+         snapshot_backend = self.image_backend.snapshot(disk_path,
+-                snapshot_name,
+                 image_type=source_format)
+ 
+         if live_snapshot:
+@@ -1381,7 +1380,6 @@ class LibvirtDriver(driver.ComputeDriver):
+         else:
+             LOG.info(_("Beginning cold snapshot process"),
+                      instance=instance)
+-            snapshot_backend.snapshot_create()
+ 
+         update_task_state(task_state=task_states.IMAGE_PENDING_UPLOAD)
+         snapshot_directory = CONF.libvirt_snapshots_directory
+@@ -1398,8 +1396,6 @@ class LibvirtDriver(driver.ComputeDriver):
+                 else:
+                     snapshot_backend.snapshot_extract(out_path, image_format)
+             finally:
+-                if not live_snapshot:
+-                    snapshot_backend.snapshot_delete()
+                 new_dom = None
+                 # NOTE(dkang): because previous managedSave is not called
+                 #              for LXC, _create_domain must not be called.
+@@ -1492,7 +1488,7 @@ class LibvirtDriver(driver.ComputeDriver):
+ 
+         # Convert the delta (CoW) image with a backing file to a flat
+         # image with no backing file.
+-        libvirt_utils.extract_snapshot(disk_delta, 'qcow2', None,
++        libvirt_utils.extract_snapshot(disk_delta, 'qcow2',
+                                        out_path, image_format)
+ 
+     def _volume_snapshot_update_status(self, context, snapshot_id, status):
+diff --git a/nova/virt/libvirt/imagebackend.py b/nova/virt/libvirt/imagebackend.py
+index e900789..57c1910 100644
+--- a/nova/virt/libvirt/imagebackend.py
++++ b/nova/virt/libvirt/imagebackend.py
+@@ -223,25 +223,17 @@ class Image(object):
+                               'size': size})
+             raise exception.InstanceTypeDiskTooSmall()
+ 
+-    def snapshot_create(self):
+-        raise NotImplementedError()
+-
+     def snapshot_extract(self, target, out_format):
+         raise NotImplementedError()
+ 
+-    def snapshot_delete(self):
+-        raise NotImplementedError()
+-
+ 
+ class Raw(Image):
+-    def __init__(self, instance=None, disk_name=None, path=None,
+-                 snapshot_name=None):
++    def __init__(self, instance=None, disk_name=None, path=None):
+         super(Raw, self).__init__("file", "raw", is_block_dev=False)
+ 
+         self.path = (path or
+                      os.path.join(libvirt_utils.get_instance_path(instance),
+                                   disk_name))
+-        self.snapshot_name = snapshot_name
+         self.preallocate = CONF.preallocate_images != 'none'
+         self.correct_format()
+ 
+@@ -271,25 +263,17 @@ class Raw(Image):
+                     copy_raw_image(base, self.path, size)
+         self.correct_format()
+ 
+-    def snapshot_create(self):
+-        pass
+-
+     def snapshot_extract(self, target, out_format):
+         images.convert_image(self.path, target, out_format)
+ 
+-    def snapshot_delete(self):
+-        pass
+-
+ 
+ class Qcow2(Image):
+-    def __init__(self, instance=None, disk_name=None, path=None,
+-                 snapshot_name=None):
++    def __init__(self, instance=None, disk_name=None, path=None):
+         super(Qcow2, self).__init__("file", "qcow2", is_block_dev=False)
+ 
+         self.path = (path or
+                      os.path.join(libvirt_utils.get_instance_path(instance),
+                                   disk_name))
+-        self.snapshot_name = snapshot_name
+         self.preallocate = CONF.preallocate_images != 'none'
+ 
+     def create_image(self, prepare_template, base, size, *args, **kwargs):
+@@ -336,25 +320,18 @@ class Qcow2(Image):
+             with fileutils.remove_path_on_error(self.path):
+                 copy_qcow2_image(base, self.path, size)
+ 
+-    def snapshot_create(self):
+-        libvirt_utils.create_snapshot(self.path, self.snapshot_name)
+-
+     def snapshot_extract(self, target, out_format):
+         libvirt_utils.extract_snapshot(self.path, 'qcow2',
+-                                       self.snapshot_name, target,
++                                       target,
+                                        out_format)
+ 
+-    def snapshot_delete(self):
+-        libvirt_utils.delete_snapshot(self.path, self.snapshot_name)
+-
+ 
+ class Lvm(Image):
+     @staticmethod
+     def escape(filename):
+         return filename.replace('_', '__')
+ 
+-    def __init__(self, instance=None, disk_name=None, path=None,
+-                 snapshot_name=None):
++    def __init__(self, instance=None, disk_name=None, path=None):
+         super(Lvm, self).__init__("block", "raw", is_block_dev=True)
+ 
+         if path:
+@@ -377,11 +354,6 @@ class Lvm(Image):
+         self.sparse = CONF.libvirt_sparse_logical_volumes
+         self.preallocate = not self.sparse
+ 
+-        if snapshot_name:
+-            self.snapshot_name = snapshot_name
+-            self.snapshot_path = os.path.join('/dev', self.vg,
+-                                              self.snapshot_name)
+-
+     def _can_fallocate(self):
+         return False
+ 
+@@ -419,25 +391,13 @@ class Lvm(Image):
+             with excutils.save_and_reraise_exception():
+                 libvirt_utils.remove_logical_volumes(path)
+ 
+-    def snapshot_create(self):
+-        size = CONF.libvirt_lvm_snapshot_size
+-        cmd = ('lvcreate', '-L', size, '-s', '--name', self.snapshot_name,
+-               self.path)
+-        libvirt_utils.execute(*cmd, run_as_root=True, attempts=3)
+-
+     def snapshot_extract(self, target, out_format):
+-        images.convert_image(self.snapshot_path, target, out_format,
++        images.convert_image(self.path, target, out_format,
+                              run_as_root=True)
+ 
+-    def snapshot_delete(self):
+-        # NOTE (rmk): Snapshot volumes are automatically zeroed by LVM
+-        cmd = ('lvremove', '-f', self.snapshot_path)
+-        libvirt_utils.execute(*cmd, run_as_root=True, attempts=3)
+-
+ 
+ class Rbd(Image):
+-    def __init__(self, instance=None, disk_name=None, path=None,
+-                 snapshot_name=None, **kwargs):
++    def __init__(self, instance=None, disk_name=None, path=None, **kwargs):
+         super(Rbd, self).__init__("block", "rbd", is_block_dev=True)
+         if path:
+             try:
+@@ -445,8 +405,7 @@ class Rbd(Image):
+             except IndexError:
+                 raise exception.InvalidDevicePath(path=path)
+         else:
+-            self.rbd_name = '%s_%s' % (instance['name'], disk_name)
+-        self.snapshot_name = snapshot_name
++            self.rbd_name = '%s_%s' % (instance['uuid'], disk_name)
+         if not CONF.libvirt_images_rbd_pool:
+             raise RuntimeError(_('You should specify'
+                                  ' libvirt_images_rbd_pool'
+@@ -549,16 +508,10 @@ class Rbd(Image):
+         args += self._ceph_args()
+         libvirt_utils.import_rbd_image(*args)
+ 
+-    def snapshot_create(self):
+-        pass
+-
+     def snapshot_extract(self, target, out_format):
+         snap = 'rbd:%s/%s' % (self.pool, self.rbd_name)
+         images.convert_image(snap, target, out_format)
+ 
+-    def snapshot_delete(self):
+-        pass
+-
+ 
+ class Backend(object):
+     def __init__(self, use_cow):
+@@ -589,12 +542,11 @@ class Backend(object):
+         backend = self.backend(image_type)
+         return backend(instance=instance, disk_name=disk_name)
+ 
+-    def snapshot(self, disk_path, snapshot_name, image_type=None):
++    def snapshot(self, disk_path, image_type=None):
+         """Returns snapshot for given image
+ 
+         :path: path to image
+-        :snapshot_name: snapshot name
+         :image_type: type of image
+         """
+         backend = self.backend(image_type)
+-        return backend(path=disk_path, snapshot_name=snapshot_name)
++        return backend(path=disk_path)
+diff --git a/nova/virt/libvirt/utils.py b/nova/virt/libvirt/utils.py
+index d7c92b7..c2171c1 100644
+--- a/nova/virt/libvirt/utils.py
++++ b/nova/virt/libvirt/utils.py
+@@ -504,33 +504,11 @@ def chown(path, owner):
+     execute('chown', owner, path, run_as_root=True)
+ 
+ 
+-def create_snapshot(disk_path, snapshot_name):
+-    """Create a snapshot in a disk image
++def extract_snapshot(disk_path, source_fmt, out_path, dest_fmt):
++    """Extract a snapshot from a disk image.
++    Note that nobody should write to the disk image during this operation.
+ 
+     :param disk_path: Path to disk image
+-    :param snapshot_name: Name of snapshot in disk image
+-    """
+-    qemu_img_cmd = ('qemu-img', 'snapshot', '-c', snapshot_name, disk_path)
+-    # NOTE(vish): libvirt changes ownership of images
+-    execute(*qemu_img_cmd, run_as_root=True)
+-
+-
+-def delete_snapshot(disk_path, snapshot_name):
+-    """Create a snapshot in a disk image
+-
+-    :param disk_path: Path to disk image
+-    :param snapshot_name: Name of snapshot in disk image
+-    """
+-    qemu_img_cmd = ('qemu-img', 'snapshot', '-d', snapshot_name, disk_path)
+-    # NOTE(vish): libvirt changes ownership of images
+-    execute(*qemu_img_cmd, run_as_root=True)
+-
+-
+-def extract_snapshot(disk_path, source_fmt, snapshot_name, out_path, dest_fmt):
+-    """Extract a named snapshot from a disk image
+-
+-    :param disk_path: Path to disk image
+-    :param snapshot_name: Name of snapshot in disk image
+     :param out_path: Desired path of extracted snapshot
+     """
+     # NOTE(markmc): ISO is just raw to qemu-img
+@@ -543,11 +521,6 @@ def extract_snapshot(disk_path, source_fmt, snapshot_name, out_path, dest_fmt):
+     if CONF.libvirt_snapshot_compression and dest_fmt == "qcow2":
+         qemu_img_cmd += ('-c',)
+ 
+-    # When snapshot name is omitted we do a basic convert, which
+-    # is used by live snapshots.
+-    if snapshot_name is not None:
+-        qemu_img_cmd += ('-s', snapshot_name)
+-
+     qemu_img_cmd += (disk_path, out_path)
+     execute(*qemu_img_cmd)
+ 
