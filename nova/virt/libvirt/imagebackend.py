@@ -193,25 +193,25 @@ class Image(object):
                           (CONF.preallocate_images, self.path))
         return can_fallocate
 
-    def snapshot_create(self):
-        raise NotImplementedError()
+    # 0004 def snapshot_create(self):
+    # 0004    raise NotImplementedError()
 
     def snapshot_extract(self, target, out_format):
         raise NotImplementedError()
 
-    def snapshot_delete(self):
-        raise NotImplementedError()
+    # 0004 def snapshot_delete(self):
+    # 0004    raise NotImplementedError()
 
 
 class Raw(Image):
-    def __init__(self, instance=None, disk_name=None, path=None,
-                 snapshot_name=None):
+    def __init__(self, instance=None, disk_name=None, path=None):
+    # 0004             snapshot_name=None):
         super(Raw, self).__init__("file", "raw", is_block_dev=False)
 
         self.path = (path or
                      os.path.join(libvirt_utils.get_instance_path(instance),
                                   disk_name))
-        self.snapshot_name = snapshot_name
+        # 0004 self.snapshot_name = snapshot_name
         self.preallocate = CONF.preallocate_images != 'none'
         self.correct_format()
 

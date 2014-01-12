@@ -128,33 +128,6 @@ diff --git a/nova/virt/libvirt/imagebackend.py b/nova/virt/libvirt/imagebackend.
 index e900789..57c1910 100644
 --- a/nova/virt/libvirt/imagebackend.py
 +++ b/nova/virt/libvirt/imagebackend.py
-@@ -223,25 +223,17 @@ class Image(object):
-                               'size': size})
-             raise exception.InstanceTypeDiskTooSmall()
- 
--    def snapshot_create(self):
--        raise NotImplementedError()
--
-     def snapshot_extract(self, target, out_format):
-         raise NotImplementedError()
- 
--    def snapshot_delete(self):
--        raise NotImplementedError()
--
- 
- class Raw(Image):
--    def __init__(self, instance=None, disk_name=None, path=None,
--                 snapshot_name=None):
-+    def __init__(self, instance=None, disk_name=None, path=None):
-         super(Raw, self).__init__("file", "raw", is_block_dev=False)
- 
-         self.path = (path or
-                      os.path.join(libvirt_utils.get_instance_path(instance),
-                                   disk_name))
--        self.snapshot_name = snapshot_name
-         self.preallocate = CONF.preallocate_images != 'none'
-         self.correct_format()
- 
 @@ -271,25 +263,17 @@ class Raw(Image):
                      copy_raw_image(base, self.path, size)
          self.correct_format()
