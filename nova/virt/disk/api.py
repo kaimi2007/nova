@@ -81,6 +81,12 @@ disk_opts = [
                      'and may not be necessary if the image contains a recent '
                      'version of cloud-init. Possible mechanisms require '
                      'the nbd driver (for qcow and raw), or loop (for raw).'),
+
+    # ISI
+    cfg.StrOpt('user',
+               default='/root',
+               help='Home directory of default user. Default value is /root.'),
+    # end of ISI
     ]
 
 CONF = cfg.CONF
@@ -465,7 +471,14 @@ def _inject_key_into_fs(key, fs):
     """
 
     LOG.debug(_("Inject key fs=%(fs)s key=%(key)s"), {'fs': fs, 'key': key})
-    sshdir = os.path.join('root', '.ssh')
+    # ISI
+    user = CONF.user
+    if user.startswith("/"):
+        user = user[1:]
+    sshdir = os.path.join(user, '.ssh')
+    # !ISI
+    #sshdir = os.path.join('root', '.ssh')
+    # end of ISI
     fs.make_path(sshdir)
     fs.set_ownership(sshdir, "root", "root")
     fs.set_permissions(sshdir, 0o700)
