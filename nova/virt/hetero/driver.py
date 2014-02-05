@@ -28,6 +28,7 @@ from oslo.config import cfg
 from nova.compute import power_state
 from nova import context as nova_context
 from nova import exception
+from nova import utils
 from nova.openstack.common import excutils
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
@@ -49,6 +50,15 @@ lxc_volume_opts = [
     cfg.StrOpt('volume_device_file',
                default='volume_devices',
                help='Full path of the file keeping the information of gpus allocated'),
+    cfg.StrOpt('use_lxc_attach',
+               default=True,
+               help='whether lxc-attach is available or not'),
+    cfg.ListOpt('instance_type_extra_specs',
+               default=[],
+               help='a list of additional capabilities corresponding to '
+               'instance_type_extra_specs for this compute '
+               'host to advertise. Valid entries are name=value, pairs '
+               'For example, "key1:val1, key2:val2"'),
 ]
 
 CONF = cfg.CONF
@@ -93,12 +103,12 @@ class HeteroLibvirtDriver(driver.LibvirtDriver):
             global volume_device_file
 
             volume_device_file = CONF.state_path + '/' + CONF.volume_device_file
-            LOG.info(_("dkang: init: volume_device_file - %s" \
-                          % volume_device_file))
+#            LOG.info(_("init: volume_device_file - %s" \
+#                          % volume_device_file))
             gpu_utils.init_host_gpu(self.list_live_instance_uuids())
             volume_devices = load_volume_devices()
-            LOG.info(_("dkang: init: volume_devices %s" \
-                          % str(volume_devices)))
+#            LOG.info(_("init: volume_devices %s" \
+#                          % str(volume_devices)))
 
     def list_live_instance_uuids(self):
         uuids = []
@@ -117,64 +127,69 @@ class HeteroLibvirtDriver(driver.LibvirtDriver):
     def host_state(self):
         if not self._host_state:
             self._host_state = HeteroHostState(self)
-        LOG.info(_("dkang: host_state = %s" % str(self._host_state)))
+#        LOG.info(_("host_state = %s" % str(self._host_state)))
         return self._host_state
 
     def destroy(self, instance, network_info, block_device_info=None,
                 destroy_disks=True, context=None):
+        gpu_utils.deallocate_gpus(instance)
         super(HeteroLibvirtDriver, self).destroy(instance, network_info,
               block_device_info, destroy_disks, context)
         if CONF.libvirt_type.lower() != 'lxc':
             return
-        gpu_utils.deallocate_gpus(instance)
+        #gpu_utils.deallocate_gpus(instance)
 
     @exception.wrap_exception()
     def reboot(self, context, instance, network_info, reboot_type='SOFT',
                block_device_info=None, bad_volumes_callback=None):
-        LOG.info(_("dkang: Instance is soft rebooting."))
+#        LOG.info(_("Instance is soft rebooting."))
         if CONF.libvirt_type.lower() != 'lxc':
             return super(HeteroLibvirtDriver, self).reboot(context, instance, 
                          network_info, reboot_type, block_device_info,
                          bad_volumes_callback)
-        gpu_utils.deallocate_gpus(instance)
+#        gpu_utils.deallocate_gpus(instance)
         t = super(HeteroLibvirtDriver, self).reboot(instance, network_info,
                   reboot_type, block_device_info, bad_volumes_callback)
-        ctxt = nova_context.get_admin_context()
-        inst_path = libvirt_utils.get_instance_path(instance)
-        container_dir = os.path.join(inst_path, 'rootfs')
-        inst_type = self.virtapi.instance_type_get(
-            nova_context.get_admin_context(read_deleted='yes'),
-            instance['instance_type_id'])
-        extra_specs = inst_type['extra_specs']
-        virt_dom = self._lookup_by_name(instance['name'])
-        gpu_utils.allocate_gpus(ctxt, instance, extra_specs, virt_dom) 
+#        ctxt = nova_context.get_admin_context()
+#        inst_path = libvirt_utils.get_instance_path(instance)
+#        container_dir = os.path.join(inst_path, 'rootfs')
+#        inst_type = self.virtapi.instance_type_get(
+#            nova_context.get_admin_context(read_deleted='yes'),
+#            instance['instance_type_id'])
+#        extra_specs = inst_type['extra_specs']
+#        virt_dom = self._lookup_by_name(instance['name'])
+#        cuda_flag = gpu_utils.allocate_gpus(ctxt, instance, extra_specs, virt_dom) 
+        gpu_utils.allow_gpus(instance)
         return t
 
     @exception.wrap_exception()
     def spawn(self, context, instance, image_meta, injected_files,
               admin_password, network_info=None, block_device_info=None):
-        super(HeteroLibvirtDriver, self).spawn(context, instance,
-                  image_meta, injected_files, admin_password,
-                  network_info, block_device_info)
-        if CONF.libvirt_type.lower() != 'lxc':
-            return 
-        try:
-            virt_dom = self._lookup_by_name(instance['name'])
+
+        if CONF.libvirt_type.lower() == 'lxc':
+#            virt_dom = self._lookup_by_name(instance['name'])
             inst_type = self.virtapi.instance_type_get(
                 nova_context.get_admin_context(read_deleted='yes'),
-                instance['instance_type_id'])
+                    instance['instance_type_id'])
             extra_specs = inst_type['extra_specs']
-            LOG.info(_("dkang: before allocate_gpus"))
-            gpu_utils.allocate_gpus(context, instance, extra_specs, virt_dom)
-            LOG.info(_("dkang: before restart_sshd"))
-            gpu_utils.restart_sshd(virt_dom)
-            LOG.info(_("dkang: after restart_sshd"))
-        except Exception as Exn:
-            LOG.error(_("Error in gpu allocation, overcommitted."))
-            self.destroy(instance, network_info, block_device_info)
-            #db.instance_update(context, instance['uuid'],
-            #        {'vm_state': vm_states.DELETED})
-            raise Exception(_('Error in gpu allocation, overcommitted.'))
+            cuda_flag = gpu_utils.allocate_gpus(context, instance,
+                                 extra_specs)
+            # write to a temporary file locally first
+            injected_files.append(("/etc/environment", cuda_flag))
+#            LOG.info(_("injected_files = %s." % str(injected_files)))
+  
+        try:
+            super(HeteroLibvirtDriver, self).spawn(context, instance,
+                  image_meta, injected_files, admin_password,
+                  network_info, block_device_info)
+        except Exception:
+            if CONF.libvirt_type.lower() == 'lxc':
+                gpu_utils.deallocate_gpus(instance)
+            return
+
+        if CONF.libvirt_type.lower() == 'lxc':
+            gpu_utils.allow_gpus(instance)
+
         LOG.info(_("Instance spawned successfully."),
                      instance=instance)
 
@@ -213,16 +228,16 @@ class HeteroLibvirtDriver(driver.LibvirtDriver):
         # dkang: LXC: check if the device is already being used
         global volume_devices
 
-#        LOG.info(_("dkang: attach: volume_devices = %s" % str(volume_devices)))
+#        LOG.info(_("attach: volume_devices = %s" % str(volume_devices)))
         uuid = virt_dom.UUIDString()
         if uuid in volume_devices:
             LOG.info(_("This instance(%s) already has volume." % uuid))
             device_list = volume_devices[uuid]
-#            LOG.info(_("dkang: device_list = %s" % str(device_list)))
+#            LOG.info(_("device_list = %s" % str(device_list)))
             for device in device_list:
                 if disk_info['dev'] == device:
                     raise exception.DeviceIsBusy(device=disk_dev)
-#            LOG.info(_("dkang: this instance does not use the volume device."))
+#            LOG.info(_("this instance does not use the volume device."))
         try:
             # NOTE(vish): We can always affect config because our
             #             domains are persistent, but we should only
@@ -236,7 +251,7 @@ class HeteroLibvirtDriver(driver.LibvirtDriver):
                                    '/dev/%s' % disk_info['dev'],
                                    virt_dom, instance)
                 # dkang: LXC: manage device list per instance
-#                LOG.info(_("dkang: about to attach the volume at %s." \
+#                LOG.info(_("about to attach the volume at %s." \
 #                          % disk_info['dev']))
                 if uuid in volume_devices:
                     device_list = volume_devices[uuid]
@@ -244,7 +259,7 @@ class HeteroLibvirtDriver(driver.LibvirtDriver):
                     device_list = []
                 device_list.append(disk_info['dev'])
                 volume_devices[uuid] = device_list
-#                LOG.info(_("dkang: after attach: volume_devices %s" \
+#                LOG.info(_("after attach: volume_devices %s" \
 #                          % str(volume_devices)))
                 save_volume_devices(volume_devices)
             else:
@@ -344,11 +359,9 @@ class HeteroLibvirtDriver(driver.LibvirtDriver):
 
         # Temporary: convert supported_instances into a string, while keeping
         # the RPC version as JSON. Can be changed when RPC broadcast is removed
-        LOG.info("dkang: get_available_resource")
         stats = self.host_state.get_host_stats(refresh=True)
         stats['supported_instances'] = jsonutils.dumps(
                 stats['supported_instances'])
-        LOG.info("dkang: stat = %s" % str(stats))
         return stats
 
 '''
@@ -459,15 +472,20 @@ class HeteroHostState(driver.HostState):
         If 'refresh' is True, run update the stats first.
         """
         if refresh or not self._stats:
-            LOG.info(_("dkang: refresh: update_status = [%s]" % str(self._stats)))
             self.update_status()
-        LOG.info(_("dkang: self._stats = [%s]" % str(self._stats)))
         return self._stats
 
     def update_status(self):
         data = super(HeteroHostState, self).update_status()
-        LOG.info(_("dkang: before: update_status = [%s]" % str(data)))
         data = gpu_utils.update_status(data)
-        LOG.info(_("dkang: after: update_status = [%s]" % str(data)))
+
+        extra_specs = {}
+        for pair in CONF.instance_type_extra_specs:
+            keyval = pair.split(':', 1)
+            keyval[0] = keyval[0].strip()
+            keyval[1] = keyval[1].strip()
+            extra_specs[keyval[0]] = keyval[1]
+        data['extra_specs'] = jsonutils.dumps(extra_specs)
+
         self._stats = data
         return data

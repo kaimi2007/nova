@@ -38,6 +38,8 @@ from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova import utils
+from nova.virt.disk import api as disk
+from nova.virt.libvirt import utils as libvirt_utils
 from oslo.config import cfg
 
 # Variables for tracking gpus available and gpus allocateed
@@ -94,7 +96,7 @@ def init_host_gpu(live_instance_uuids):
     assert CONF.libvirt_type.lower() == 'lxc', "Only LXC is supported for GPU"
     num_gpus = 0
     gpu_usage_file = CONF.state_path + '/' + CONF.gpu_usage_file
-    LOG.info(_("dkang: extra_specs = %s" % str(extra_specs)))
+#    LOG.info(_("extra_specs = %s" % str(extra_specs)))
     if 'gpus' in extra_specs:
         num_gpus = extra_specs['gpus']
         gpus_available = range(int(extra_specs['gpus']))
@@ -157,8 +159,8 @@ def save_gpu_allocation(gpus_allocated):
 def get_instance_type_extra_specs_capabilities():
     """Return additional capabilities to advertise for this compute host."""
     global extra_specs
-    LOG.info(_("dkang: CONF.instance_type_extra_specs = %s" 
-                % str(CONF.instance_type_extra_specs)))
+#    LOG.info(_("CONF.instance_type_extra_specs = %s" 
+#                % str(CONF.instance_type_extra_specs)))
     for pair in CONF.instance_type_extra_specs:
         keyval = pair.split(':', 1)
         keyval[0] = keyval[0].strip()
@@ -177,6 +179,8 @@ def allow_cgroup_device(instance, perm):
 def allow_gpus(inst):
     global num_gpus
     # Allow Nvidia Controller
+    if (num_gpus == 0):
+        return
     perm = 'c %d:255 rwm\n' % CONF.gpu_dev_major_number
     allow_cgroup_device(inst, perm)
     for i in range(int(num_gpus)):
@@ -184,7 +188,7 @@ def allow_gpus(inst):
         perm = 'c %d:%d rwm\n' % (CONF.gpu_dev_major_number, i)
         allow_cgroup_device(inst, perm)
 
-def allocate_gpus(context, instance, extra_specs, virt_dom):
+def allocate_gpus(context, instance, extra_specs):
     """Assigns gpus to a specific instance"""
     global gpus_available
     global gpus_allocated
@@ -208,60 +212,42 @@ def allocate_gpus(context, instance, extra_specs, virt_dom):
     if gpus_needed < 1:
         return
 
-    # get id of the virt_dom
-    spid = str(virt_dom.ID())
-    LOG.info(_('allocate_gpus: pid: %s ' % spid))
-
-    init_pid = 0
-    # get PID of the init process
-    try:
-        out, err = utils.execute('ps', '-o', 'pid', '--ppid', spid,
-                  '--noheaders', run_as_root=True,
-                  check_exit_code=False)
-        init_pid = str(int(out))
-    except Exception:
-        LOG.error(_("Failed to get pid of the container"))
-        raise Exception(_("LXC container not found"))
-
-    env_file = '/etc/environment'
-
-    LOG.info(_('allocate_gpus: before allow_gpus'))
-    allow_gpus(instance)
+#    LOG.info(_('allocate_gpus: before allow_gpus'))
+#    allow_gpus(instance)
     LOG.info(_('allocate_gpus: after allow_gpus'))
     gpus_allocated_list = []
-    LOG.info(_("gpus available: %s" % str(num_available_gpus())))
+    test = num_available_gpus()
+    LOG.info(_("gpus available: %d" % num_available_gpus()))
     if gpus_needed > num_available_gpus():
         raise Exception(_("Overcommit Error"))
     LOG.info(_("gpus needed : %s" % str(gpus_needed)))
     for i in range(gpus_needed):
         gpus_allocated_list.append(gpus_available.pop())
-    if (gpus_needed > 0):
-        gpus_visible = str(gpus_allocated_list).strip('[]')
-        flag = "CUDA_VISIBLE_DEVICES=%s\n" % gpus_visible
-        try:
-            out, err = utils.execute('lxc-attach', '-n', init_pid,
-                          '--', CONF.guest_tee_command, env_file, 
-                          process_input=flag,
-                          run_as_root=True)
-            gpus_allocated[instance['uuid']] = gpus_allocated_list
-            save_gpu_allocation(gpus_allocated)
-        except Exception:
-            LOG.info(_("Failed to set up GPU environment file"))
-            gpus_available.extend(gpus_allocated_list)
-            del gpus_allocated[inst['uuid']]
-            raise Exception(_("Failed to set up GPU environment file"))
+    gpus_allocated[instance['uuid']] = gpus_allocated_list
+    save_gpu_allocation(gpus_allocated)
+    gpus_visible = str(gpus_allocated_list).strip('[]')
+    env_file = os.path.join('etc', 'environment')
+    flag = "CUDA_VISIBLE_DEVICES=%s\n" % gpus_visible
+    
+    return flag
 
 def deallocate_gpus(inst):
     """Assigns gpus to a specific instance"""
     global gpus_available
     global gpus_allocated
+#    LOG.info(_('deallocate_gpu: availalble(%s)' % str(num_available_gpus())))
     if inst['uuid'] in gpus_allocated:
         gpus_available.extend(gpus_allocated[inst['uuid']])
         del gpus_allocated[inst['uuid']]
     save_gpu_allocation(gpus_allocated)
+#    LOG.info(_("gpus available after deallocate: %s" % str(num_available_gpus())))
     return
 
 def restart_sshd(virt_dom):
+
+    if (CONF.use_lxc_attach == False):
+        return
+
     # get id of the virt_dom
     spid = str(virt_dom.ID())
 
@@ -286,6 +272,10 @@ def restart_sshd(virt_dom):
         pass
 
 def _attach_lxc_volume(host_dev, disk_dev, virt_dom, instance):
+    if (CONF.use_lxc_attach == False):
+        LOG.info(_('If use_lxc_attach is False, volume attachment is NOT supported'))
+        raise
+
     LOG.info(_('ISI: attaching LXC block device'))
     LOG.debug(_('attach_volume: host_dev(%s)' % host_dev))
     LOG.debug(_('attach_volume: disk_dev(%s)' % disk_dev))
@@ -336,6 +326,10 @@ def _attach_lxc_volume(host_dev, disk_dev, virt_dom, instance):
 #                          run_as_root=True)
 
 def _detach_lxc_volume(lxc_device, virt_dom, instance):
+    if (CONF.use_lxc_attach == False):
+        LOG.info(_('If use_lxc_attach is False, volume detachment is NOT supported'))
+        raise
+
     LOG.info(_('ISI: detaching LXC block device'))
 
     #inst_path = libvirt_utils.get_instance_path(instance)
