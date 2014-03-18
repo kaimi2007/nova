@@ -1323,9 +1323,6 @@ class LibvirtDriver(driver.ComputeDriver):
         source_format = libvirt_utils.get_disk_type(disk_path)
 
         image_format = CONF.snapshot_image_format or source_format
-        # ISI: dkang
-        if source_format == "raw":
-            image_format = "raw"
 
         # NOTE(bfilippov): save lvm and rbd as raw
         if image_format == 'lvm' or image_format == 'rbd':
