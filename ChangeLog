@@ -1,6 +1,23 @@
 CHANGES
 =======
 
+2014.1
+------
+
+* Add RBAC policy for ec2 API security groups calls
+* Fix straggling uses of direct-to-database queries in nova-network
+* Update docs to reflect new default filters
+* Fix anti-affinity server-group boot failure
+* Enable ServerGroup scheduler filters by default
+* Fix Jenkins translation jobs
+* Require admin context for interfaces on ext network
+* VMware: Fixes the instance resize problem
+* mark vif_driver as deprecated and log warning
+* Ensure network interfaces are in requested order
+* Note that XML support *may* be removed
+* libvirt: pause mode is not supported by all drivers
+* Revert object-assuming changes to _post_live_migration()
+
 2014.1.rc1
 ----------
 

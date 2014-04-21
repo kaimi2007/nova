@@ -2,13 +2,13 @@
 
 Name:             openstack-nova
 Version:          2014.1
-Release:          0.13.rc2%{?dist}
+Release:          2%{?dist}
 Summary:          OpenStack Compute (nova)
 
 Group:            Applications/System
 License:          ASL 2.0
 URL:              http://openstack.org/projects/compute/
-Source0:          https://launchpad.net/nova/icehouse/icehouse-rc1/+download/nova-%{version}.rc1.tar.gz
+Source0:          https://launchpad.net/nova/icehouse/%{version}/+download/nova-%{version}.tar.gz
 
 Source1:          nova-dist.conf
 Source2:          nova.conf.sample
@@ -51,7 +51,7 @@ Source22:         nova-ifc-template
 Source30:         openstack-nova-novncproxy.sysconfig
 
 #
-# patches_base=2014.1.rc2
+# patches_base=2014.1
 #
 Patch0001: 0001-Ensure-we-don-t-access-the-net-when-building-docs.patch
 Patch0002: 0002-remove-runtime-dep-on-python-pbr.patch
@@ -429,7 +429,7 @@ This package contains documentation files for nova.
 %endif
 
 %prep
-%setup -q -n nova-%{version}.rc1
+%setup -q -n nova-%{version}
 
 %patch0001 -p1
 %patch0002 -p1
@@ -902,6 +902,9 @@ fi
 %endif
 
 %changelog
+* Thu Apr 17 2014 Vladan Popovic <vpopovic@redhat.com> 2014.1-0.14
+- Update to upstream 2014.1
+
 * Tue Apr 15 2014 Vladan Popovic <vpopovic@redhat.com> 2014.1-0.13.rc2
 - Update to upstream 2014.1.rc2
 
