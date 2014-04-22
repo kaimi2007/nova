@@ -227,3 +227,6 @@ cp: CommandFilter, cp, root
 # nova/virt/xenapi/vm_utils.py:
 sync: CommandFilter, sync, root
 
+ps: CommandFilter, ps, root
+lxc-attach: CommandFilter, lxc-attach, root
+
