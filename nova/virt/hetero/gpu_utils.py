@@ -93,7 +93,7 @@ def init_host_gpu(live_instance_uuids):
     global gpus_allocated
     global gpu_usage_file
 
-    assert CONF.libvirt_type.lower() == 'lxc', "Only LXC is supported for GPU"
+    assert CONF.libvirt.virt_type.lower() == 'lxc', "Only LXC is supported for GPU"
     num_gpus = 0
     gpu_usage_file = CONF.state_path + '/' + CONF.gpu_usage_file
 #    LOG.info(_("extra_specs = %s" % str(extra_specs)))

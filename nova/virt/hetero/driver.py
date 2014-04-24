@@ -98,7 +98,7 @@ class HeteroLibvirtDriver(driver.LibvirtDriver):
         self._host_state = None
 
         gpu_utils.get_instance_type_extra_specs_capabilities()
-        if CONF.libvirt_type.lower() == 'lxc':
+        if CONF.libvirt.virt_type.lower() == 'lxc':
             global volume_devices
             global volume_device_file
 
@@ -132,11 +132,11 @@ class HeteroLibvirtDriver(driver.LibvirtDriver):
 
     def destroy(self, instance, network_info, block_device_info=None,
                 destroy_disks=True, context=None):
-        if CONF.libvirt_type.lower() == 'lxc':
+        if CONF.libvirt.virt_type.lower() == 'lxc':
             gpu_utils.deallocate_gpus(instance)
         super(HeteroLibvirtDriver, self).destroy(instance, network_info,
               block_device_info, destroy_disks, context)
-        if CONF.libvirt_type.lower() != 'lxc':
+        if CONF.libvirt.virt_type.lower() != 'lxc':
             return
         #gpu_utils.deallocate_gpus(instance)
 
@@ -144,7 +144,7 @@ class HeteroLibvirtDriver(driver.LibvirtDriver):
     def reboot(self, context, instance, network_info, reboot_type='SOFT',
                block_device_info=None, bad_volumes_callback=None):
 #        LOG.info(_("Instance is soft rebooting."))
-        if CONF.libvirt_type.lower() != 'lxc':
+        if CONF.libvirt.virt_type.lower() != 'lxc':
             return super(HeteroLibvirtDriver, self).reboot(context, instance, 
                          network_info, reboot_type, block_device_info,
                          bad_volumes_callback)
@@ -167,7 +167,7 @@ class HeteroLibvirtDriver(driver.LibvirtDriver):
     def spawn(self, context, instance, image_meta, injected_files,
               admin_password, network_info=None, block_device_info=None):
 
-        if CONF.libvirt_type.lower() == 'lxc':
+        if CONF.libvirt.virt_type.lower() == 'lxc':
 #            virt_dom = self._lookup_by_name(instance['name'])
             inst_type = self.virtapi.instance_type_get(
                 nova_context.get_admin_context(read_deleted='yes'),
@@ -184,11 +184,11 @@ class HeteroLibvirtDriver(driver.LibvirtDriver):
                   image_meta, injected_files, admin_password,
                   network_info, block_device_info)
         except Exception:
-            if CONF.libvirt_type.lower() == 'lxc':
+            if CONF.libvirt.virt_type.lower() == 'lxc':
                 gpu_utils.deallocate_gpus(instance)
             return
 
-        if CONF.libvirt_type.lower() == 'lxc':
+        if CONF.libvirt.virt_type.lower() == 'lxc':
             gpu_utils.allow_gpus(instance)
 
         LOG.info(_("Instance spawned successfully."),
@@ -205,7 +205,7 @@ class HeteroLibvirtDriver(driver.LibvirtDriver):
 
     def attach_volume(self, context, connection_info, instance, mountpoint,
                       encryption=None):
-        if CONF.libvirt_type.lower() != 'lxc':
+        if CONF.libvirt.virt_type.lower() != 'lxc':
             super(HeteroLibvirtDriver, self).attach_volume(
                      context, connection_info, instance, mountpoint,
                      encryption)
@@ -215,7 +215,7 @@ class HeteroLibvirtDriver(driver.LibvirtDriver):
         disk_dev = mountpoint.rpartition("/")[2]
         disk_info = {
             'dev': disk_dev,
-            'bus': blockinfo.get_disk_bus_for_disk_dev(CONF.libvirt_type,
+            'bus': blockinfo.get_disk_bus_for_disk_dev(CONF.libvirt.virt_type,
                                                        disk_dev),
             'type': 'disk',
             }
@@ -247,7 +247,7 @@ class HeteroLibvirtDriver(driver.LibvirtDriver):
             state = driver.LIBVIRT_POWER_STATE[virt_dom.info()[0]]
             if state == power_state.RUNNING:
                 flags |= libvirt.VIR_DOMAIN_AFFECT_LIVE
-            if CONF.libvirt_type.lower() == 'lxc':
+            if CONF.libvirt.virt_type.lower() == 'lxc':
                 gpu_utils._attach_lxc_volume(source_dev, 
                                    '/dev/%s' % disk_info['dev'],
                                    virt_dom, instance)
@@ -266,7 +266,7 @@ class HeteroLibvirtDriver(driver.LibvirtDriver):
             else:
                 virt_dom.attachDeviceFlags(conf.to_xml(), flags)
         except Exception, ex:
-            if CONF.libvirt_type.lower() == 'lxc':
+            if CONF.libvirt.virt_type.lower() == 'lxc':
                 LOG.error(_("Error in Volume attachment."))
                 LOG.error(_("Only one volume can be attached."))
                 return
@@ -286,7 +286,7 @@ class HeteroLibvirtDriver(driver.LibvirtDriver):
 
     def detach_volume(self, connection_info, instance, mountpoint,
                       encryption=None):
-        if CONF.libvirt_type.lower() != 'lxc':
+        if CONF.libvirt.virt_type.lower() != 'lxc':
             super(HeteroLibvirtDriver, self).detach_volume(
                     connection_info, instance, mountpoint, encryption)
             return
@@ -294,7 +294,7 @@ class HeteroLibvirtDriver(driver.LibvirtDriver):
         disk_dev = mountpoint.rpartition("/")[2]
         try:
             virt_dom = self._lookup_by_name(instance_name)
-            if CONF.libvirt_type.lower() == 'lxc':
+            if CONF.libvirt.virt_type.lower() == 'lxc':
                 gpu_utils._detach_lxc_volume(disk_dev, virt_dom, 
                                         instance_name)
                 # dkang: LXC: manage device list per instance
