@@ -29,6 +29,7 @@ from nova.compute import power_state
 from nova import context as nova_context
 from nova import exception
 from nova import utils
+from nova.objects import flavor as flavor_obj
 from nova.openstack.common import excutils
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
@@ -169,7 +170,8 @@ class HeteroLibvirtDriver(driver.LibvirtDriver):
 
         if CONF.libvirt.virt_type.lower() == 'lxc':
 #            virt_dom = self._lookup_by_name(instance['name'])
-            inst_type = self.virtapi.instance_type_get(
+            #inst_type = self.virtapi.instance_type_get(
+            inst_type = flavor_obj.Flavor.get_by_id(
                 nova_context.get_admin_context(read_deleted='yes'),
                     instance['instance_type_id'])
             extra_specs = inst_type['extra_specs']
