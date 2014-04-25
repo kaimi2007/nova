@@ -131,12 +131,12 @@ class HeteroLibvirtDriver(driver.LibvirtDriver):
 #        LOG.info(_("host_state = %s" % str(self._host_state)))
         return self._host_state
 
-    def destroy(self, instance, network_info, block_device_info=None,
-                destroy_disks=True, context=None):
+    def destroy(self, context, instance, network_info, block_device_info=None,
+                destroy_disks=True):
         if CONF.libvirt.virt_type.lower() == 'lxc':
             gpu_utils.deallocate_gpus(instance)
-        super(HeteroLibvirtDriver, self).destroy(instance, network_info,
-              block_device_info, destroy_disks, context)
+        super(HeteroLibvirtDriver, self).destroy(context, instance, network_info,
+              block_device_info, destroy_disks)
         if CONF.libvirt.virt_type.lower() != 'lxc':
             return
         #gpu_utils.deallocate_gpus(instance)
