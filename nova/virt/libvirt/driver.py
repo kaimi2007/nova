@@ -5265,7 +5265,7 @@ class HostState(object):
             self.driver.get_pci_passthrough_devices()
 
         extra_specs = {}
-        for pair in CONF.libvirt.instance_type_extra_specs:
+        for pair in CONF.instance_type_extra_specs:
             keyval = pair.split(':', 1)
             keyval[0] = keyval[0].strip()
             keyval[1] = keyval[1].strip()
