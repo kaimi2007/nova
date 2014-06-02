@@ -484,10 +484,11 @@ class HeteroHostState(driver.HostState):
 
         extra_specs = {}
         for pair in CONF.instance_type_extra_specs:
-            keyval = pair.split(':', 1)
-            keyval[0] = keyval[0].strip()
-            keyval[1] = keyval[1].strip()
-            extra_specs[keyval[0]] = keyval[1]
+            if pair:
+                keyval = pair.split(':', 1)
+                keyval[0] = keyval[0].strip()
+                keyval[1] = keyval[1].strip()
+                extra_specs[keyval[0]] = keyval[1]
         data['extra_specs'] = jsonutils.dumps(extra_specs)
 
         self._stats = data
