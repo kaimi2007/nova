@@ -206,11 +206,11 @@ class HeteroLibvirtDriver(driver.LibvirtDriver):
         return disk_path
 
     def attach_volume(self, context, connection_info, instance, mountpoint,
-                      encryption=None):
+                      disk_bus=None, device_type=None, encryption=None):
         if CONF.libvirt.virt_type.lower() != 'lxc':
             super(HeteroLibvirtDriver, self).attach_volume(
                      context, connection_info, instance, mountpoint,
-                     encryption)
+                     disk_bus, device_type, encryption)
             return
         instance_name = instance['name']
         virt_dom = self._lookup_by_name(instance_name)
