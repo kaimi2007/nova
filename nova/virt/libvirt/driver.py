@@ -257,6 +257,12 @@ libvirt_opts = [
                 help='A path to a device that will be used as source of '
                      'entropy on the host. Permitted options are: '
                      '/dev/random or /dev/hwrng'),
+    cfg.ListOpt('instance_type_extra_specs',
+               default=[],
+               help='a list of additional capabilities corresponding to '
+               'instance_type_extra_specs for this compute '
+               'host to advertise. Valid entries are name=value, pairs '
+               'For example, "key1:val1, key2:val2"'),
     ]
 
 CONF = cfg.CONF
@@ -5311,6 +5317,15 @@ class HostState(object):
 
         data['pci_passthrough_devices'] = \
             self.driver.get_pci_passthrough_devices()
+
+        extra_specs = {}
+        for pair in CONF.instance_type_extra_specs:
+            if pair:
+                keyval = pair.split(':', 1)
+                keyval[0] = keyval[0].strip()
+                keyval[1] = keyval[1].strip()
+                extra_specs[keyval[0]] = keyval[1]
+        data['extra_specs'] = jsonutils.dumps(extra_specs)
 
         self._stats = data
 

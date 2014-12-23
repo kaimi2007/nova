@@ -123,6 +123,7 @@ class ComputeNode(BASE, NovaBase):
     # Note(yongli): json string PCI Stats
     # '{"vendor_id":"8086", "product_id":"1234", "count":3 }'
     pci_stats = Column(Text)
+    extra_specs = Column(Text)
 
     # extra_resources is a json string containing arbitrary
     # data about additional resources.
