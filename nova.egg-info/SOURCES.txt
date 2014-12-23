@@ -656,6 +656,12 @@ doc/api_samples/os-preserve-ephemeral-rebuild/server-post-req.json
 doc/api_samples/os-preserve-ephemeral-rebuild/server-post-req.xml
 doc/api_samples/os-preserve-ephemeral-rebuild/server-post-resp.json
 doc/api_samples/os-preserve-ephemeral-rebuild/server-post-resp.xml
+doc/api_samples/os-quota-class-sets/quota-classes-show-get-resp.json
+doc/api_samples/os-quota-class-sets/quota-classes-show-get-resp.xml
+doc/api_samples/os-quota-class-sets/quota-classes-update-post-req.json
+doc/api_samples/os-quota-class-sets/quota-classes-update-post-req.xml
+doc/api_samples/os-quota-class-sets/quota-classes-update-post-resp.json
+doc/api_samples/os-quota-class-sets/quota-classes-update-post-resp.xml
 doc/api_samples/os-quota-sets/quotas-show-defaults-get-resp.json
 doc/api_samples/os-quota-sets/quotas-show-defaults-get-resp.xml
 doc/api_samples/os-quota-sets/quotas-show-get-resp.json
@@ -1319,6 +1325,7 @@ nova/api/openstack/compute/contrib/networks_associate.py
 nova/api/openstack/compute/contrib/os_networks.py
 nova/api/openstack/compute/contrib/os_tenant_networks.py
 nova/api/openstack/compute/contrib/preserve_ephemeral_rebuild.py
+nova/api/openstack/compute/contrib/quota_classes.py
 nova/api/openstack/compute/contrib/quotas.py
 nova/api/openstack/compute/contrib/rescue.py
 nova/api/openstack/compute/contrib/scheduler_hints.py
@@ -1555,6 +1562,7 @@ nova/db/sqlalchemy/migrate_repo/versions/230_add_details_column_to_instance_acti
 nova/db/sqlalchemy/migrate_repo/versions/231_add_ephemeral_key_uuid.py
 nova/db/sqlalchemy/migrate_repo/versions/232_drop_dump_tables.py
 nova/db/sqlalchemy/migrate_repo/versions/233_add_stats_in_compute_nodes.py
+nova/db/sqlalchemy/migrate_repo/versions/234_add_expire_reservations_index.py
 nova/db/sqlalchemy/migrate_repo/versions/__init__.py
 nova/hacking/__init__.py
 nova/hacking/checks.py
@@ -1969,6 +1977,7 @@ nova/tests/api/openstack/compute/contrib/test_migrations.py
 nova/tests/api/openstack/compute/contrib/test_multinic_xs.py
 nova/tests/api/openstack/compute/contrib/test_networks.py
 nova/tests/api/openstack/compute/contrib/test_neutron_security_groups.py
+nova/tests/api/openstack/compute/contrib/test_quota_classes.py
 nova/tests/api/openstack/compute/contrib/test_quotas.py
 nova/tests/api/openstack/compute/contrib/test_rescue.py
 nova/tests/api/openstack/compute/contrib/test_scheduler_hints.py
@@ -2122,7 +2131,6 @@ nova/tests/integrated/integrated_helpers.py
 nova/tests/integrated/test_api_samples.py
 nova/tests/integrated/test_extensions.py
 nova/tests/integrated/test_login.py
-nova/tests/integrated/test_multiprocess_api.py
 nova/tests/integrated/test_servers.py
 nova/tests/integrated/test_xml.py
 nova/tests/integrated/api/__init__.py
@@ -2771,6 +2779,12 @@ nova/tests/integrated/api_samples/os-preserve-ephemeral-rebuild/server-post-req.
 nova/tests/integrated/api_samples/os-preserve-ephemeral-rebuild/server-post-req.xml.tpl
 nova/tests/integrated/api_samples/os-preserve-ephemeral-rebuild/server-post-resp.json.tpl
 nova/tests/integrated/api_samples/os-preserve-ephemeral-rebuild/server-post-resp.xml.tpl
+nova/tests/integrated/api_samples/os-quota-class-sets/quota-classes-show-get-resp.json.tpl
+nova/tests/integrated/api_samples/os-quota-class-sets/quota-classes-show-get-resp.xml.tpl
+nova/tests/integrated/api_samples/os-quota-class-sets/quota-classes-update-post-req.json.tpl
+nova/tests/integrated/api_samples/os-quota-class-sets/quota-classes-update-post-req.xml.tpl
+nova/tests/integrated/api_samples/os-quota-class-sets/quota-classes-update-post-resp.json.tpl
+nova/tests/integrated/api_samples/os-quota-class-sets/quota-classes-update-post-resp.xml.tpl
 nova/tests/integrated/api_samples/os-quota-sets/quotas-show-defaults-get-resp.json.tpl
 nova/tests/integrated/api_samples/os-quota-sets/quotas-show-defaults-get-resp.xml.tpl
 nova/tests/integrated/api_samples/os-quota-sets/quotas-show-get-resp.json.tpl
@@ -3348,6 +3362,7 @@ nova/tests/virt/__init__.py
 nova/tests/virt/test_block_device.py
 nova/tests/virt/test_cpu.py
 nova/tests/virt/test_driver.py
+nova/tests/virt/test_events.py
 nova/tests/virt/test_imagecache.py
 nova/tests/virt/test_images.py
 nova/tests/virt/test_virt.py
@@ -3382,13 +3397,19 @@ nova/tests/virt/hyperv/__init__.py
 nova/tests/virt/hyperv/db_fakes.py
 nova/tests/virt/hyperv/fake.py
 nova/tests/virt/hyperv/test_hypervapi.py
+nova/tests/virt/hyperv/test_migrationops.py
 nova/tests/virt/hyperv/test_networkutilsv2.py
+nova/tests/virt/hyperv/test_pathutils.py
 nova/tests/virt/hyperv/test_rdpconsoleutils.py
 nova/tests/virt/hyperv/test_rdpconsoleutilsv2.py
+nova/tests/virt/hyperv/test_utilsfactory.py
 nova/tests/virt/hyperv/test_vhdutils.py
 nova/tests/virt/hyperv/test_vhdutilsv2.py
+nova/tests/virt/hyperv/test_vmops.py
 nova/tests/virt/hyperv/test_vmutils.py
 nova/tests/virt/hyperv/test_vmutilsv2.py
+nova/tests/virt/hyperv/test_volumeutils.py
+nova/tests/virt/hyperv/test_volumeutilsv2.py
 nova/tests/virt/libvirt/__init__.py
 nova/tests/virt/libvirt/fake_imagebackend.py
 nova/tests/virt/libvirt/fake_libvirt_utils.py
@@ -3412,6 +3433,7 @@ nova/tests/virt/vmwareapi/test_driver_api.py
 nova/tests/virt/vmwareapi/test_ds_util.py
 nova/tests/virt/vmwareapi/test_error_util.py
 nova/tests/virt/vmwareapi/test_imagecache.py
+nova/tests/virt/vmwareapi/test_io_util.py
 nova/tests/virt/vmwareapi/test_read_write_util.py
 nova/tests/virt/vmwareapi/test_vif.py
 nova/tests/virt/vmwareapi/test_vim_util.py

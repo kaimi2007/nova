@@ -14,6 +14,7 @@
 #    under the License.
 
 from lxml import etree
+import mock
 import mox
 from oslo.config import cfg
 import webob
@@ -310,6 +311,47 @@ class TestSecurityGroups(test.TestCase):
 
         self.assertEqual(res_dict, expected)
 
+    def test_get_security_group_list_missing_group_id_rule(self):
+        groups = []
+        rule1 = security_group_rule_template(cidr='10.2.3.124/24',
+                                             parent_group_id=1,
+                                             group_id={}, id=88,
+                                             protocol='TCP')
+        rule2 = security_group_rule_template(cidr='10.2.3.125/24',
+                                             parent_group_id=1,
+                                             id=99, protocol=88,
+                                             group_id='HAS_BEEN_DELETED')
+        sg = security_group_template(id=1,
+                                     name='test',
+                                     description='test-desc',
+                                     rules=[rule1, rule2])
+
+        groups.append(sg)
+        # An expected rule here needs to be created as the api returns
+        # different attributes on the rule for a response than what was
+        # passed in. For exmaple:
+        #  "cidr": "0.0.0.0/0" ->"ip_range": {"cidr": "0.0.0.0/0"}
+        expected_rule = security_group_rule_template(
+            ip_range={'cidr': '10.2.3.124/24'}, parent_group_id=1,
+            group={}, id=88, ip_protocol='TCP')
+        expected = security_group_template(id=1,
+                                     name='test',
+                                     description='test-desc',
+                                     rules=[expected_rule])
+
+        expected = {'security_groups': [expected]}
+
+        def return_security_groups(context, project, search_opts):
+            return [security_group_db(sg) for sg in groups]
+
+        self.stubs.Set(self.controller.security_group_api, 'list',
+                       return_security_groups)
+
+        req = fakes.HTTPRequest.blank('/v2/fake/os-security-groups')
+        res_dict = self.controller.index(req)
+
+        self.assertEqual(res_dict, expected)
+
     def test_get_security_group_list_all_tenants(self):
         all_groups = []
         tenant_groups = []
@@ -379,6 +421,24 @@ class TestSecurityGroups(test.TestCase):
         res_dict = self.server_controller.index(req, FAKE_UUID1)
 
         self.assertEqual(res_dict, expected)
+
+    @mock.patch('nova.db.instance_get_by_uuid')
+    @mock.patch('nova.db.security_group_get_by_instance', return_value=[])
+    def test_get_security_group_empty_for_instance(self, mock_sec_group,
+                                                   mock_db_get_ins):
+        expected = {'security_groups': []}
+
+        def return_instance(context, server_id,
+                            columns_to_join=None, use_slave=False):
+            self.assertEqual(server_id, FAKE_UUID1)
+            return return_server_by_uuid(context, server_id)
+        mock_db_get_ins.side_effect = return_instance
+        req = fakes.HTTPRequest.blank('/v2/%s/servers/%s/os-security-groups' %
+                                      ('fake', FAKE_UUID1))
+        res_dict = self.server_controller.index(req, FAKE_UUID1)
+        self.assertEqual(expected, res_dict)
+        mock_sec_group.assert_called_once_with(req.environ['nova.context'],
+                                               FAKE_UUID1)
 
     def test_get_security_group_by_instance_non_existing(self):
         self.stubs.Set(nova.db, 'instance_get', return_server_nonexistent)

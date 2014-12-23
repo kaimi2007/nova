@@ -1759,8 +1759,7 @@ class API(base.Base):
     @check_instance_lock
     @check_instance_host
     @check_instance_cell
-    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.RESCUED,
-                                    vm_states.ERROR],
+    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.ERROR],
                           task_state=[None])
     def stop(self, context, instance, do_cast=True):
         """Stop an instance."""
@@ -2522,7 +2521,7 @@ class API(base.Base):
     @wrap_check_policy
     @check_instance_lock
     @check_instance_cell
-    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.RESCUED])
+    @check_instance_state(vm_state=[vm_states.ACTIVE])
     def pause(self, context, instance):
         """Pause the given instance."""
         instance.task_state = task_states.PAUSING
@@ -2549,7 +2548,7 @@ class API(base.Base):
     @wrap_check_policy
     @check_instance_lock
     @check_instance_cell
-    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.RESCUED])
+    @check_instance_state(vm_state=[vm_states.ACTIVE])
     def suspend(self, context, instance):
         """Suspend the given instance."""
         instance.task_state = task_states.SUSPENDING
@@ -3044,7 +3043,7 @@ class API(base.Base):
         # NOTE(danms): Transitional until evacuate supports objects
         inst_obj = instance_obj.Instance._from_db_object(
             context, instance_obj.Instance(), instance,
-            expected_attrs=['metadata', 'system_metadata'])
+            expected_attrs=['metadata', 'system_metadata', 'info_cache'])
 
         return self.compute_rpcapi.rebuild_instance(context,
                                         instance=inst_obj,
@@ -3105,6 +3104,9 @@ class API(base.Base):
             events_by_host[host] = events_on_host
 
         for host in instances_by_host:
+            # TODO(salv-orlando): Handle exceptions raised by the rpc api layer
+            # in order to ensure that a failure in processing events on a host
+            # will not prevent processing events on other hosts
             self.compute_rpcapi.external_instance_event(
                 context, instances_by_host[host], events_by_host[host])
 
@@ -3918,6 +3920,7 @@ class SecurityGroupAPI(base.Base, security_group_base.SecurityGroupBase):
         groups = instance.get('security_groups')
         if groups:
             return [{'name': group['name']} for group in groups]
+        return []
 
     def populate_security_groups(self, instance, security_groups):
         if not security_groups:

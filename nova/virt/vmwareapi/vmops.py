@@ -29,6 +29,7 @@ from nova.api.metadata import base as instance_metadata
 from nova import compute
 from nova.compute import power_state
 from nova.compute import task_states
+from nova.compute import vm_states
 from nova import context as nova_context
 from nova import exception
 from nova.openstack.common import excutils
@@ -194,8 +195,10 @@ class VMwareVMOps(object):
         """
         ebs_root = False
         if block_device_info:
-            LOG.debug(_("Block device information present: %s")
-                      % block_device_info, instance=instance)
+            msg = "Block device information present: %s" % block_device_info
+            # NOTE(mriedem): block_device_info can contain an auth_password
+            # so we have to scrub the message before logging it.
+            LOG.debug(logging.mask_password(msg), instance=instance)
             block_device_mapping = driver.block_device_info_get_mapping(
                     block_device_info)
             if block_device_mapping:
@@ -564,26 +567,69 @@ class VMwareVMOps(object):
                                                   root_vmdk_path, dc_info.ref)
                 else:
                     upload_folder = '%s/%s' % (self._base_folder, upload_name)
-                    root_vmdk_name = "%s/%s.%s.vmdk" % (upload_folder,
-                                                        upload_name,
-                                                        root_gb)
+                    if root_gb:
+                        root_vmdk_name = "%s/%s.%s.vmdk" % (upload_folder,
+                                                            upload_name,
+                                                            root_gb)
+                    else:
+                        root_vmdk_name = "%s/%s.vmdk" % (upload_folder,
+                                                         upload_name)
                     root_vmdk_path = ds_util.build_datastore_path(
                             data_store_name, root_vmdk_name)
-                    if not self._check_if_folder_file_exists(ds_browser,
-                                        data_store_ref, data_store_name,
-                                        upload_folder,
-                                        upload_name + ".%s.vmdk" % root_gb):
-                        LOG.debug(_("Copying root disk of size %sGb"), root_gb)
-                        try:
-                            _copy_virtual_disk(uploaded_file_path,
-                                               root_vmdk_path)
-                        except Exception as e:
-                            LOG.warning(_("Root disk file creation "
-                                          "failed - %s"), e)
-                        if root_gb_in_kb > vmdk_file_size_in_kb:
-                            self._extend_virtual_disk(instance, root_gb_in_kb,
-                                                      root_vmdk_path,
-                                                      dc_info.ref)
+
+                    # Ensure only a single thread extends the image at once.
+                    # We do this by taking a lock on the name of the extended
+                    # image. This allows multiple threads to create resized
+                    # copies simultaneously, as long as they are different
+                    # sizes. Threads attempting to create the same resized copy
+                    # will be serialized, with only the first actually creating
+                    # the copy.
+                    #
+                    # Note that the object is in a per-nova cache directory,
+                    # so inter-nova locking is not a concern. Consequently we
+                    # can safely use simple thread locks.
+
+                    with lockutils.lock(root_vmdk_path,
+                                        lock_file_prefix='nova-vmware-image'):
+                        if not self._check_if_folder_file_exists(
+                                ds_browser,
+                                data_store_ref, data_store_name,
+                                upload_folder,
+                                upload_name + ".%s.vmdk" % root_gb):
+                            LOG.debug("Copying root disk of size %sGb",
+                                      root_gb)
+
+                            # Create a copy of the base image, ensuring we
+                            # clean up on failure
+                            try:
+                                _copy_virtual_disk(uploaded_file_path,
+                                                   root_vmdk_path)
+                            except Exception as e:
+                                with excutils.save_and_reraise_exception():
+                                    LOG.error(_('Failed to copy cached '
+                                                  'image %(source)s to '
+                                                  '%(dest)s for resize: '
+                                                  '%(error)s'),
+                                              {'source': uploaded_file_path,
+                                               'dest': root_vmdk_path,
+                                               'error': e.message})
+                                    try:
+                                        ds_util.file_delete(self._session,
+                                                            root_vmdk_path,
+                                                            dc_info.ref)
+                                    except error_util.FileNotFoundException:
+                                        # File was never created: cleanup not
+                                        # required
+                                        pass
+
+                            # Resize the copy to the appropriate size. No need
+                            # for cleanup up here, as _extend_virtual_disk
+                            # already does it
+                            if root_gb_in_kb > vmdk_file_size_in_kb:
+                                self._extend_virtual_disk(instance,
+                                                          root_gb_in_kb,
+                                                          root_vmdk_path,
+                                                          dc_info.ref)
 
             # Attach the root disk to the VM.
             if root_vmdk_path:
@@ -807,6 +853,10 @@ class VMwareVMOps(object):
             (vmdk_file_path_before_snapshot, adapter_type,
              disk_type) = vm_util.get_vmdk_path_and_adapter_type(
                                         hw_devices, uuid=instance['uuid'])
+            if not vmdk_file_path_before_snapshot:
+                LOG.debug("No root disk defined. Unable to snapshot.")
+                raise error_util.NoRootDiskDefined()
+
             datastore_name = ds_util.split_datastore_path(
                                         vmdk_file_path_before_snapshot)[0]
             os_type = self._session._call_method(vim_util,
@@ -985,13 +1035,9 @@ class VMwareVMOps(object):
         except Exception as exc:
             LOG.exception(exc, instance=instance)
 
-    def destroy(self, instance, network_info, destroy_disks=True,
-                instance_name=None):
-        """Destroy a VM instance. Steps followed are:
-        1. Power off the VM, if it is in poweredOn state.
-        2. Un-register a VM.
-        3. Delete the contents of the folder holding the VM related data.
-        """
+    def _destroy_instance(self, instance, network_info, destroy_disks=True,
+                          instance_name=None):
+        # Destroy a VM instance
         # Get the instance name. In some cases this may differ from the 'uuid',
         # for example when the spawn of a rescue instance takes place.
         if not instance_name:
@@ -1029,8 +1075,9 @@ class VMwareVMOps(object):
                                            "UnregisterVM", vm_ref)
                 LOG.debug(_("Unregistered the VM"), instance=instance)
             except Exception as excep:
-                LOG.warn(_("In vmwareapi:vmops:destroy, got this exception"
-                           " while un-registering the VM: %s") % str(excep))
+                LOG.warn(_("In vmwareapi:vmops:_destroy_instance, got this "
+                           "exception while un-registering the VM: %s"),
+                         excep)
             # Delete the folder holding the VM related content on
             # the datastore.
             if destroy_disks and datastore_name:
@@ -1053,14 +1100,38 @@ class VMwareVMOps(object):
                                {'datastore_name': datastore_name},
                               instance=instance)
                 except Exception as excep:
-                    LOG.warn(_("In vmwareapi:vmops:destroy, "
-                                 "got this exception while deleting"
-                                 " the VM contents from the disk: %s")
-                                 % str(excep))
+                    LOG.warn(_("In vmwareapi:vmops:_destroy_instance, "
+                                "got this exception while deleting "
+                                "the VM contents from the disk: %s"),
+                             excep)
         except Exception as exc:
             LOG.exception(exc, instance=instance)
         finally:
             vm_util.vm_ref_cache_delete(instance_name)
+
+    def destroy(self, instance, network_info, destroy_disks=True):
+        """Destroy a VM instance.
+
+        Steps followed for each VM are:
+        1. Power off, if it is in poweredOn state.
+        2. Un-register.
+        3. Delete the contents of the folder holding the VM related data.
+        """
+        # If there is a rescue VM then we need to destroy that one too.
+        LOG.debug(_("Destroying instance"), instance=instance)
+        if instance['vm_state'] == vm_states.RESCUED:
+            LOG.debug(_("Rescue VM configured"), instance=instance)
+            try:
+                self.unrescue(instance, power_on=False)
+                LOG.debug(_("Rescue VM destroyed"), instance=instance)
+            except Exception:
+                rescue_name = instance['uuid'] + self._rescue_suffix
+                self._destroy_instance(instance, network_info,
+                                       destroy_disks=destroy_disks,
+                                       instance_name=rescue_name)
+        self._destroy_instance(instance, network_info,
+                               destroy_disks=destroy_disks)
+        LOG.debug(_("Instance destroyed"), instance=instance)
 
     def pause(self, instance):
         msg = _("pause not supported for vmwareapi")
@@ -1139,7 +1210,7 @@ class VMwareVMOps(object):
                                 adapter_type, disk_type, vmdk_path)
         self._power_on(instance, vm_ref=rescue_vm_ref)
 
-    def unrescue(self, instance):
+    def unrescue(self, instance, power_on=True):
         """Unrescue the specified instance."""
         # Get the original vmdk_path
         vm_ref = vm_util.get_vm_ref(self._session, instance)
@@ -1159,12 +1230,27 @@ class VMwareVMOps(object):
                         "get_dynamic_property", vm_rescue_ref,
                         "VirtualMachine", "config.hardware.device")
         device = vm_util.get_vmdk_volume_disk(hardware_devices, path=vmdk_path)
+        self._power_off_vm_ref(vm_rescue_ref)
         self._volumeops.detach_disk_from_vm(vm_rescue_ref, r_instance, device)
-        self.destroy(r_instance, None, instance_name=instance_name)
-        self._power_on(instance)
+        self._destroy_instance(r_instance, None, instance_name=instance_name)
+        if power_on:
+            self._power_on(instance)
+
+    def _power_off_vm_ref(self, vm_ref):
+        """Power off the specifed vm.
+
+        :param vm_ref: a reference object to the VM.
+        """
+        poweroff_task = self._session._call_method(
+                                    self._session._get_vim(),
+                                    "PowerOffVM_Task", vm_ref)
+        self._session._wait_for_task(poweroff_task)
 
     def power_off(self, instance):
-        """Power off the specified instance."""
+        """Power off the specified instance.
+
+        :param instance: nova.objects.instance.Instance
+        """
         vm_ref = vm_util.get_vm_ref(self._session, instance)
 
         pwr_state = self._session._call_method(vim_util,
@@ -1173,10 +1259,7 @@ class VMwareVMOps(object):
         # Only PoweredOn VMs can be powered off.
         if pwr_state == "poweredOn":
             LOG.debug(_("Powering off the VM"), instance=instance)
-            poweroff_task = self._session._call_method(
-                                        self._session._get_vim(),
-                                        "PowerOffVM_Task", vm_ref)
-            self._session._wait_for_task(poweroff_task)
+            self._power_off_vm_ref(vm_ref)
             LOG.debug(_("Powered off the VM"), instance=instance)
         # Raise Exception if VM is suspended
         elif pwr_state == "suspended":
@@ -1372,8 +1455,8 @@ class VMwareVMOps(object):
         vm_props = self._session._call_method(vim_util,
                     "get_object_properties", None, vm_ref, "VirtualMachine",
                     lst_properties)
-        query = {'summary.config.numCpu': None,
-                 'summary.config.memorySizeMB': None,
+        query = {'summary.config.numCpu': 0,
+                 'summary.config.memorySizeMB': 0,
                  'runtime.powerState': None}
         self._get_values_from_object_properties(vm_props, query)
         max_mem = int(query['summary.config.memorySizeMB']) * 1024
@@ -1516,12 +1599,12 @@ class VMwareVMOps(object):
                   instance=instance)
 
     def _get_ds_browser(self, ds_ref):
-        ds_browser = self._datastore_browser_mapping.get(ds_ref)
+        ds_browser = self._datastore_browser_mapping.get(ds_ref.value)
         if not ds_browser:
             ds_browser = self._session._call_method(
                 vim_util, "get_dynamic_property", ds_ref, "Datastore",
                 "browser")
-            self._datastore_browser_mapping[ds_ref] = ds_browser
+            self._datastore_browser_mapping[ds_ref.value] = ds_browser
         return ds_browser
 
     def get_datacenter_ref_and_name(self, ds_ref):
@@ -1669,19 +1752,19 @@ class VMwareVCVMOps(VMwareVMOps):
         while dcs:
             token = vm_util._get_token(dcs)
             for dco in dcs.objects:
-                name = None
-                vmFolder = None
                 dc_ref = dco.obj
                 ds_refs = []
-                for p in dco.propSet:
-                    if p.name == 'name':
-                        name = p.val
-                    if p.name == 'datastore':
-                        datastore_refs = p.val.ManagedObjectReference
-                        for ds in datastore_refs:
-                            ds_refs.append(ds.value)
-                    if p.name == 'vmFolder':
-                        vmFolder = p.val
+                prop_dict = vm_util.propset_dict(dco.propSet)
+                name = prop_dict.get('name')
+                vmFolder = prop_dict.get('vmFolder')
+                datastore_refs = prop_dict.get('datastore')
+                if datastore_refs:
+                    datastore_refs = datastore_refs.ManagedObjectReference
+                    for ds in datastore_refs:
+                        ds_refs.append(ds.value)
+                else:
+                    LOG.debug("Datacenter %s doesn't have any datastore "
+                              "associated with it, ignoring it", name)
                 for ds_ref in ds_refs:
                     self._datastore_dc_mapping[ds_ref] = DcInfo(ref=dc_ref,
                             name=name, vmFolder=vmFolder)

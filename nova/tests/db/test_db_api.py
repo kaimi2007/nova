@@ -4075,7 +4075,9 @@ class FloatingIpTestCase(test.TestCase, ModelsObjectComparatorMixin):
             'interface': 'some_interface',
             'pool': 'some_pool'
         }
-        db.floating_ip_update(self.ctxt, float_ip['address'], values)
+        floating_ref = db.floating_ip_update(self.ctxt, float_ip['address'],
+                                             values)
+        self.assertIsNot(floating_ref, None)
         updated_float_ip = db.floating_ip_get(self.ctxt, float_ip['id'])
         self._assertEqualObjects(updated_float_ip, values,
                                  ignored_keys=['id', 'address', 'updated_at',
@@ -5515,8 +5517,7 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
                                  pci_stats='',
                                  metrics='',
                                  extra_resources='',
-                                 stats='',
-                                 extra_specs='')
+                                 stats='')
         # add some random stats
         self.stats = dict(num_instances=3, num_proj_12345=2,
                      num_proj_23456=2, num_vm_building=3)

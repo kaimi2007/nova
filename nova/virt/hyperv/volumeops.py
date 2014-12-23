@@ -26,7 +26,9 @@ from nova.openstack.common import excutils
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.virt import driver
+from nova.virt.hyperv import constants
 from nova.virt.hyperv import utilsfactory
+from nova.virt.hyperv import vmutils
 
 LOG = logging.getLogger(__name__)
 
@@ -65,8 +67,12 @@ class VolumeOps(object):
         self._default_root_device = 'vda'
 
     def ebs_root_in_block_devices(self, block_device_info):
-        return self._volutils.volume_in_mapping(self._default_root_device,
-                                                block_device_info)
+        if block_device_info:
+            root_device = block_device_info.get('root_device_name')
+            if not root_device:
+                root_device = self._default_root_device
+            return self._volutils.volume_in_mapping(root_device,
+                                                    block_device_info)
 
     def attach_volumes(self, block_device_info, instance_name, ebs_root):
         mapping = driver.block_device_info_get_mapping(block_device_info)
@@ -149,8 +155,13 @@ class VolumeOps(object):
                     self._volutils.logout_storage_target(target_iqn)
 
     def _get_free_controller_slot(self, scsi_controller_path):
-        #Slots starts from 0, so the length of the disks gives us the free slot
-        return self._vmutils.get_attached_disks_count(scsi_controller_path)
+        attached_disks = self._vmutils.get_attached_disks(scsi_controller_path)
+        used_slots = [int(disk.AddressOnParent) for disk in attached_disks]
+
+        for slot in xrange(constants.SCSI_CONTROLLER_SLOTS_NUMBER):
+            if slot not in used_slots:
+                return slot
+        raise vmutils.HyperVException("Exceeded the maximum number of slots")
 
     def detach_volumes(self, block_device_info, instance_name):
         mapping = driver.block_device_info_get_mapping(block_device_info)
@@ -201,8 +212,8 @@ class VolumeOps(object):
         # be avoided by adding a retry.
         for i in xrange(CONF.hyperv.mounted_disk_query_retry_count):
             device_number = self._volutils.get_device_number_for_target(
-                            target_iqn, target_lun)
-            if device_number is None:
+                target_iqn, target_lun)
+            if device_number in (None, -1):
                 attempt = i + 1
                 LOG.debug(_('Attempt %d to get device_number '
                           'from get_device_number_for_target failed. '
@@ -211,7 +222,7 @@ class VolumeOps(object):
             else:
                 break
 
-        if device_number is None:
+        if device_number in (None, -1):
             raise exception.NotFound(_('Unable to find a mounted disk for '
                                        'target_iqn: %s') % target_iqn)
         LOG.debug(_('Device number: %(device_number)s, '

@@ -19,9 +19,9 @@ import time
 
 from neutronclient.common import exceptions as neutron_client_exc
 from oslo.config import cfg
-import six
 
 from nova.compute import flavors
+from nova.compute import utils as compute_utils
 from nova import conductor
 from nova.db import base
 from nova import exception
@@ -32,7 +32,7 @@ from nova.network.neutronv2 import constants
 from nova.network.security_group import openstack_driver
 from nova.openstack.common import excutils
 from nova.openstack.common.gettextutils import _
-from nova.openstack.common import jsonutils
+from nova.openstack.common import lockutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import uuidutils
 
@@ -414,6 +414,15 @@ class API(base.Base):
         requested_networks = kwargs.get('requested_networks') or {}
         ports_to_skip = [port_id for nets, fips, port_id in requested_networks]
         ports = set(ports) - set(ports_to_skip)
+        # Reset device_id and device_owner for the ports that are skipped
+        for port in ports_to_skip:
+            port_req_body = {'port': {'device_id': '', 'device_owner': ''}}
+            try:
+                neutronv2.get_client(context).update_port(port,
+                                                          port_req_body)
+            except Exception:
+                LOG.info(_('Unable to reset device ID for port %s'), port,
+                         instance=instance)
 
         for port in ports:
             try:
@@ -460,7 +469,6 @@ class API(base.Base):
         """Return the port for the client given the port id."""
         return neutronv2.get_client(context).show_port(port_id)
 
-    @refresh_cache
     def get_instance_nw_info(self, context, instance, networks=None,
                              port_ids=None, use_slave=False):
         """Return network information for specified instance
@@ -469,14 +477,20 @@ class API(base.Base):
         # NOTE(geekinutah): It would be nice if use_slave had us call
         #                   special APIs that pummeled slaves instead of
         #                   the master. For now we just ignore this arg.
-        result = self._get_instance_nw_info(context, instance, networks,
-                                            port_ids)
+        with lockutils.lock('refresh_cache-%s' % instance['uuid']):
+            result = self._get_instance_nw_info(context, instance, networks,
+                                                port_ids)
+            update_instance_info_cache(self, context,
+                                       instance,
+                                       nw_info=result,
+                                       update_cells=False)
         return result
 
     def _get_instance_nw_info(self, context, instance, networks=None,
                               port_ids=None):
-        # keep this caching-free version of the get_instance_nw_info method
-        # because it is used by the caching logic itself.
+        # NOTE(danms): This is an inner method intended to be called
+        # by other code that updates instance nwinfo. It *must* be
+        # called with the refresh_cache-%(instance_uuid) lock held!
         LOG.debug(_('get_instance_nw_info() for %s'), instance['display_name'])
         nw_info = self._build_network_info_model(context, instance, networks,
                                                  port_ids)
@@ -493,12 +507,7 @@ class API(base.Base):
                        " networks as not none.")
             raise exception.NovaException(message=message)
 
-        # Unfortunately, this is sometimes in unicode and sometimes not
-        if isinstance(instance['info_cache']['network_info'], six.text_type):
-            ifaces = jsonutils.loads(instance['info_cache']['network_info'])
-        else:
-            ifaces = instance['info_cache']['network_info']
-
+        ifaces = compute_utils.get_nw_info_for_instance(instance)
         # This code path is only done when refreshing the network_cache
         if port_ids is None:
             port_ids = [iface['id'] for iface in ifaces]
@@ -664,7 +673,7 @@ class API(base.Base):
 
         ports = neutron.list_ports(tenant_id=context.project_id)['ports']
         quotas = neutron.show_quota(tenant_id=context.project_id)['quota']
-        if quotas.get('port') == -1:
+        if quotas.get('port', -1) == -1:
             # Unlimited Port Quota
             return num_instances
         else:
@@ -975,9 +984,24 @@ class API(base.Base):
         # since it is not used anywhere in nova code and I could
         # find why this parameter exists.
 
+        self._release_floating_ip(context, address)
+
+    def disassociate_and_release_floating_ip(self, context, instance,
+                                           floating_ip):
+        """Removes (deallocates) and deletes the floating ip.
+
+        This api call was added to allow this to be done in one operation
+        if using neutron.
+        """
+        self._release_floating_ip(context, floating_ip['address'],
+                                  raise_if_associated=False)
+
+    def _release_floating_ip(self, context, address,
+                             raise_if_associated=True):
         client = neutronv2.get_client(context)
         fip = self._get_floating_ip_by_address(client, address)
-        if fip['port_id']:
+
+        if raise_if_associated and fip['port_id']:
             raise exception.FloatingIpAssociated(address=address)
         client.delete_floatingip(fip['id'])
 

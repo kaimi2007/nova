@@ -538,7 +538,7 @@ def ascii_str(s):
 
 class Rbd(Image):
     def __init__(self, instance=None, disk_name=None, path=None, **kwargs):
-        super(Rbd, self).__init__("block", "rbd", is_block_dev=True)
+        super(Rbd, self).__init__("block", "rbd", is_block_dev=False)
         if path:
             try:
                 self.rbd_name = path.split('/')[1]
@@ -655,10 +655,8 @@ class Rbd(Image):
         return False
 
     def _resize(self, volume_name, size):
-        size = int(size) * units.Ki
-
         with RBDVolumeProxy(self, volume_name) as vol:
-            vol.resize(size)
+            vol.resize(int(size))
 
     def create_image(self, prepare_template, base, size, *args, **kwargs):
         if self.rbd is None:

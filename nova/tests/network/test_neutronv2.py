@@ -16,6 +16,7 @@
 import copy
 import uuid
 
+import mock
 import mox
 from neutronclient.common import exceptions
 from neutronclient.v2_0 import client
@@ -30,6 +31,7 @@ from nova.network import model
 from nova.network import neutronv2
 from nova.network.neutronv2 import api as neutronapi
 from nova.network.neutronv2 import constants
+from nova.objects import instance as instance_obj
 from nova.openstack.common import jsonutils
 from nova.openstack.common import local
 from nova import test
@@ -100,7 +102,7 @@ class TestNeutronClient(test.TestCase):
                                             auth_token='token')
         self.mox.StubOutWithMock(client.Client, "__init__")
         client.Client.__init__(
-            auth_strategy=None,
+            auth_strategy=CONF.neutron_auth_strategy,
             endpoint_url=CONF.neutron_url,
             token=my_context.auth_token,
             timeout=CONF.neutron_url_timeout,
@@ -124,7 +126,7 @@ class TestNeutronClient(test.TestCase):
                                             is_admin=True)
         self.mox.StubOutWithMock(client.Client, "__init__")
         client.Client.__init__(
-            auth_strategy=None,
+            auth_strategy=CONF.neutron_auth_strategy,
             endpoint_url=CONF.neutron_url,
             token=my_context.auth_token,
             timeout=CONF.neutron_url_timeout,
@@ -977,12 +979,26 @@ class TestNeutronv2(TestNeutronv2Base):
                           api.allocate_for_instance, self.context,
                           self.instance, requested_networks=requested_networks)
 
-    def _deallocate_for_instance(self, number):
+    def _deallocate_for_instance(self, number, requested_networks=None):
         api = neutronapi.API()
         port_data = number == 1 and self.port_data1 or self.port_data2
+        ret_data = copy.deepcopy(port_data)
+        if requested_networks:
+            for net, fip, port in requested_networks:
+                ret_data.append({'network_id': net,
+                                 'device_id': self.instance['uuid'],
+                                 'device_owner': 'compute:nova',
+                                 'id': port,
+                                 'status': 'DOWN',
+                                 'admin_state_up': True,
+                                 'fixed_ips': [],
+                                 'mac_address': 'fake_mac', })
         self.moxed_client.list_ports(
             device_id=self.instance['uuid']).AndReturn(
-                {'ports': port_data})
+                {'ports': ret_data})
+        if requested_networks:
+            for net, fip, port in requested_networks:
+                self.moxed_client.update_port(port)
         for port in reversed(port_data):
             self.moxed_client.delete_port(port['id'])
 
@@ -993,7 +1009,18 @@ class TestNeutronv2(TestNeutronv2Base):
         self.mox.ReplayAll()
 
         api = neutronapi.API()
-        api.deallocate_for_instance(self.context, self.instance)
+        api.deallocate_for_instance(self.context, self.instance,
+                                    requested_networks=requested_networks)
+
+    def test_deallocate_for_instance_1_with_requested(self):
+        requested = [('fake-net', 'fake-fip', 'fake-port')]
+        # Test to deallocate in one port env.
+        self._deallocate_for_instance(1, requested_networks=requested)
+
+    def test_deallocate_for_instance_2_with_requested(self):
+        requested = [('fake-net', 'fake-fip', 'fake-port')]
+        # Test to deallocate in one port env.
+        self._deallocate_for_instance(2, requested_networks=requested)
 
     def test_deallocate_for_instance_1(self):
         # Test to deallocate in one port env.
@@ -1093,6 +1120,22 @@ class TestNeutronv2(TestNeutronv2Base):
         self.moxed_client.show_quota(
             tenant_id='my_tenantid').AndReturn(
                     {'quota': {'port': 50}})
+        self.mox.ReplayAll()
+        api = neutronapi.API()
+        api.validate_networks(self.context, requested_networks, 1)
+
+    def test_validate_networks_without_port_quota_on_network_side(self):
+        requested_networks = [('my_netid1', None, None),
+                              ('my_netid2', None, None)]
+        ids = ['my_netid1', 'my_netid2']
+        self.moxed_client.list_networks(
+            id=mox.SameElementsAs(ids)).AndReturn(
+                {'networks': self.nets2})
+        self.moxed_client.list_ports(tenant_id='my_tenantid').AndReturn(
+                    {'ports': []})
+        self.moxed_client.show_quota(
+            tenant_id='my_tenantid').AndReturn(
+                    {'quota': {}})
         self.mox.ReplayAll()
         api = neutronapi.API()
         api.validate_networks(self.context, requested_networks, 1)
@@ -1715,6 +1758,19 @@ class TestNeutronv2(TestNeutronv2Base):
         self.mox.ReplayAll()
         api.release_floating_ip(self.context, address)
 
+    def test_disassociate_and_release_floating_ip(self):
+        api = neutronapi.API()
+        address = self.fip_unassociated['floating_ip_address']
+        fip_id = self.fip_unassociated['id']
+        floating_ip = {'address': address}
+
+        self.moxed_client.list_floatingips(floating_ip_address=address).\
+            AndReturn({'floatingips': [self.fip_unassociated]})
+        self.moxed_client.delete_floatingip(fip_id)
+        self.mox.ReplayAll()
+        api.disassociate_and_release_floating_ip(self.context, None,
+                                               floating_ip)
+
     def test_release_floating_ip_associated(self):
         api = neutronapi.API()
         address = self.fip_associated['floating_ip_address']
@@ -2080,6 +2136,26 @@ class TestNeutronv2(TestNeutronv2Base):
         self.assertRaises(NotImplementedError,
                           api.get_floating_ips_by_fixed_address,
                           self.context, fake_fixed)
+
+
+class TestNeutronv2WithMock(test.TestCase):
+    """Used to test Neutron V2 API with mock."""
+
+    def setUp(self):
+        super(TestNeutronv2WithMock, self).setUp()
+        self.api = neutronapi.API()
+        self.context = context.RequestContext(
+            'fake-user', 'fake-project',
+            auth_token='bff4a5a6b9eb4ea2a6efec6eefb77936')
+
+    @mock.patch('nova.openstack.common.lockutils.lock')
+    def test_get_instance_nw_info_locks_per_instance(self, mock_lock):
+        instance = instance_obj.Instance(uuid=uuid.uuid4())
+        api = neutronapi.API()
+        mock_lock.side_effect = test.TestingException
+        self.assertRaises(test.TestingException,
+                          api.get_instance_nw_info, 'context', instance)
+        mock_lock.assert_called_once_with('refresh_cache-%s' % instance.uuid)
 
 
 class TestNeutronv2ModuleMethods(test.TestCase):

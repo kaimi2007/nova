@@ -18,6 +18,7 @@
 import itertools
 import random
 
+import mock
 import mox
 
 from nova.compute import flavors
@@ -29,8 +30,10 @@ from nova.network import api
 from nova.network import floating_ips
 from nova.network import model as network_model
 from nova.network import rpcapi as network_rpcapi
+from nova.objects import fixed_ip as fixed_ip_obj
 from nova import policy
 from nova import test
+from nova.tests.objects import test_fixed_ip
 from nova import utils
 
 FAKE_UUID = 'a47ae74e-ab08-547f-9eee-ffd23fc46c16'
@@ -66,6 +69,30 @@ class ApiTestCase(test.TestCase):
         self.network_api = network.API()
         self.context = context.RequestContext('fake-user',
                                               'fake-project')
+
+    @mock.patch('nova.db.network_get_all')
+    def test_get_all(self, mock_get_all):
+        mock_get_all.return_value = mock.sentinel.get_all
+        self.assertEqual(mock.sentinel.get_all,
+                         self.network_api.get_all(self.context))
+        mock_get_all.assert_called_once_with(self.context,
+                                             project_only=True)
+
+    @mock.patch('nova.db.network_get_all')
+    def test_get_all_liberal(self, mock_get_all):
+        self.flags(network_manager='nova.network.manager.FlatDHCPManaager')
+        mock_get_all.return_value = mock.sentinel.get_all
+        self.assertEqual(mock.sentinel.get_all,
+                         self.network_api.get_all(self.context))
+        mock_get_all.assert_called_once_with(self.context,
+                                             project_only="allow_none")
+
+    @mock.patch('nova.db.network_get_all')
+    def test_get_all_no_networks(self, mock_get_all):
+        mock_get_all.side_effect = exception.NoNetworksFound
+        self.assertEqual([], self.network_api.get_all(self.context))
+        mock_get_all.assert_called_once_with(self.context,
+                                             project_only=True)
 
     def test_allocate_for_instance_handles_macs_passed(self):
         # If a macs argument is supplied to the 'nova-network' API, it is just
@@ -285,6 +312,13 @@ class ApiTestCase(test.TestCase):
         self.stubs.Set(self.network_api, 'get', fake_get)
 
         self.network_api.associate(self.context, FAKE_UUID, project=None)
+
+    @mock.patch('nova.db.fixed_ip_get_by_address')
+    def test_get_fixed_ip_by_address(self, fip_get):
+        fip_get.return_value = test_fixed_ip.fake_fixed_ip
+        fip = self.network_api.get_fixed_ip_by_address(self.context,
+                                                       'fake-addr')
+        self.assertIsInstance(fip, fixed_ip_obj.FixedIP)
 
 
 class TestUpdateInstanceCache(test.TestCase):

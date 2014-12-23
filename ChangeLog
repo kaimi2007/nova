@@ -1,6 +1,141 @@
 CHANGES
 =======
 
+2014.1.3
+--------
+
+* Adds tests for Hyper-V VM Utils
+* Removes unnecessary instructions in test_hypervapi
+* Fixes a Hyper-V list_instances localization issue
+* Adds list_instance_uuids to the Hyper-V driver
+* Add _wrap_db_error() support to Session.commit()
+* Neutron: Atomic update of instance info cache
+* Ensure info cache updates don't overwhelm cells
+* Sync process and str utils from oslo
+* remove test_multiprocess_api
+* Fixes Hyper-V agent force_hyperv_utils_v1 flag issue
+* Fix attaching config drive issue on Hyper-V when migrate instances
+* Fix live-migration failure in FC multipath case
+* libvirt: Save device_path in connection_info when booting from volume
+* Made unassigned networks visible in flat networking
+* Do not fail cell's instance deletion, if it's missing info_cache
+* Fixes Hyper-V boot from volume root device issue
+* Fixes Hyper-V resize down exception
+* db: Add @_retry_on_deadlock to service_update()
+* Add Hyper-V driver in the "compute_driver" option description
+* Block sqlalchemy migrate 0.9.2 as it breaks all of nova
+* Move the error check for "brctl addif"
+* Fix rootwrap for non openstack.org iqn's
+* Fix instance boot when Ceph is used for ephemeral storage
+* Make floatingip-ip-delete atomic with neutron
+* Fix race condition with vif plugging in finish migrate
+* libvirt: Use VIR_DOMAIN_AFFECT_LIVE for paused instances
+* add repr for event objects
+* make lifecycle event logs more clear
+* Catch missing Glance image attrs with None
+* Update block_device_info to contain swap and ephemeral disks
+* Adds get_instance_disk_info to compute drivers
+* Fixes Hyper-V vm state issue
+* Fix expected error details from jsonschema
+* Include next link when default limit is reached
+* Bump stable/icehouse next version to 2014.1.3
+* Fix FloatingIP.save() passing FixedIP object to sqlalchemy
+* Read deleted instances during lifecycle events
+* Add a retry_on_deadlock to reservations_expire
+* Add expire reservations in backport position
+* Fixes Hyper-V SCSI slot selection
+* VMware: do not cache image when root_gb is 0
+
+2014.1.2
+--------
+
+* Mask block_device_info auth_password in virt driver debug logs
+* Fix _parse_datetime in simple tenant usage extension
+* Avoid traceback logs from simple tenant usage extension
+* replace NovaException with VirtualInterfaceCreate when neutron fails
+* libvirt: convert cpu features attribute from list to a set
+* VMware: Add check for datacenter with no datastore
+* Fixes hyper-v volume attach when host is AD member
+* Prevent clean-up of migrating instances on compute init
+* VMware: use default values in get_info() when properties are missing
+* Set python hash seed to 0 in tox.ini
+* Do not pass instances without host to compute API
+* Do not process events for instances without host
+* Delete image when backup operation failed on snapshot step
+* Attach/detach interface to paused instance with affect live flag
+* VM in rescue state must have a restricted set of actions
+* Turn periodic tasks off in all unit tests
+* Updated from global requirements
+* Avoid possible timing attack in metadata api
+* Handle service creation race by service workers
+* shelve doesn't work on nova-cells environment
+* Fixes rbd backend image size
+* VMware: Fix race in spawn() when resizing cached image
+* Avoid re-adding iptables rules for instances that have disappeared
+* VMware: Fix fake raising the wrong exception in _remove_file
+* Fix security group list when not defined for an instance
+* libvirt: Make nwfilter driver use right filterref
+* Make sure domain exists before referencing it
+* Scheduler: enable scheduler hint to pass the group name
+* Instance groups: add method get_by_hint
+* Avoid referencing stale instance/network_info dicts in firewall
+* libvirt: return the correct instance path while cleanup_resize
+* Neutronv2 api does not support neutron without port quota
+* Fix the wrong dest of 'vlan' option and add new 'vlan_start' option
+* Use default rpc_response_timeout in unit tests
+* Bump stable/icehouse next version to 2014.1.2
+* Network: ensure that ports are 'unset' when instance is deleted
+* Save connection info in libvirt after volume connect
+* Cleanup allocating networks when InstanceNotFound is raised
+* Failure during termination should always leave state as error()
+* Use no_timer_check with soft-qemu
+* Use correct project/user for quotas
+* Revert "Remove broken quota-classes API"
+* libvirt: Refresh volume connection_info after volume snapshot
+* Set the volume access mode during volume attach
+* VCDriver - Ignore host in Maintenance mode in stats update
+
+2014.1.1
+--------
+
+* Fix security group race condition while listing and deleting rules
+* VMware: Fix memory leaks caused by caches
+* Include pending task in log message on skip sync_power_state
+* Fixes Hyper-V iSCSI target login method
+* VMware: ensure rescue instance is deleted when instance is deleted
+* VMware: Log additional details of suds faults
+* Add info_cache as expected attribute when evacuate instance
+* Fix nova image-show with queued image
+* _translate_from_glance() can cause an unnecessary HTTP request
+* VMware: uncaught exception during snapshot deletion
+* Catch InstanceNotFound exception if migration fails
+* Do not wait for neutron event if not powering on libvirt domain
+* Reap child processes gracefully if greenlet thread gets killed
+* VMware: prevent image snapshot if no root disk defined
+* Fixes arguments parsing when executing command
+* Use one query instead of two for quota_usages
+* versions API: ignore request with a body
+* VMWare - Check for compute node before triggering destroy
+* Use debug level logging in unit tests, but don't save them
+* support local debug logging
+* Revert "Use debug level logging during unit tests"
+* Loosen import_exceptions to cover all of gettextutils
+* VMWare: add power off vm before detach disk during unrescue
+* Check for None or timestamp in availability zone api sample
+* Pass configured auth strategy to neutronclient
+* remove unneeded call to network_api on rebuild_instance
+* Remove unnecessary call to fetch info_cache
+* Remove metadata's network-api dependence on the database
+* InvalidCPUInfo exception added to except block
+* Moved the registration of lifecycle event handler in init_host()
+* Fix display of server group members
+* Change errors_out_migration decorator to work with RPC
+* Don't explode if we fail to unplug VIFs after a failed boot
+* Remove unneeded call to fetch network info on shutdown
+* Don't overwrite instance object with dict in _init_instance()
+* Fix bug detach volume fails with "KeyError" in EC2
+* Opening stable/icehouse
+
 2014.1
 ------
 
